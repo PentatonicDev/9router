@@ -37,6 +37,34 @@ describe("openrouter claude transport (/v1/messages)", () => {
     expect(body.max_tokens).toBeGreaterThan(body.thinking.budget_tokens);
   });
 
+  // GLM-5.3 reasons unconditionally: OpenRouter forwards "reasoning off" — which is what
+  // both an omitted and a disabled `thinking` mean on the Anthropic wire — and z-ai 400s
+  // with "Reasoning is mandatory for this endpoint and cannot be disabled".
+  it("sends an explicit thinking budget when the client asks for none", () => {
+    const credentials = { apiKey: "test-key", runtimeTransport: resolveTransport("openrouter", "claude") };
+
+    for (const clientThinking of [undefined, { type: "disabled" }]) {
+      const src = claudeBody();
+      if (clientThinking) src.thinking = clientThinking;
+      else delete src.thinking;
+
+      const body = translateRequest("claude", "claude", MODEL, src, true, credentials, "openrouter");
+      expect(body.thinking?.type).toBe("enabled");
+      // Anthropic's wire floor — "minimal" (512) would be rejected too.
+      expect(body.thinking.budget_tokens).toBeGreaterThanOrEqual(1024);
+    }
+  });
+
+  it("leaves a model that can disable reasoning alone", () => {
+    const credentials = { apiKey: "test-key", runtimeTransport: resolveTransport("openrouter", "claude") };
+    const src = claudeBody();
+    src.model = "z-ai/glm-5.2";
+    src.thinking = { type: "disabled" };
+
+    const body = translateRequest("claude", "claude", "z-ai/glm-5.2", src, true, credentials, "openrouter");
+    expect(body.thinking?.type).toBe("disabled");
+  });
+
   it("openai path unchanged: provider thinkingFormat still maps thinking to reasoning_effort", () => {
     const credentials = { apiKey: "test-key" }; // no runtimeTransport → default transport
     const body = translateRequest("claude", "openai", MODEL, claudeBody(), true, credentials, "openrouter");
