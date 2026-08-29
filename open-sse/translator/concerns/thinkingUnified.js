@@ -7,9 +7,6 @@ import { getThinkingLevels } from "../../providers/thinkingLevels.js";
 import { PROVIDERS } from "../../providers/index.js";
 import { LEVEL_TO_BUDGET, budgetToLevel, effortToBudget, effortToThinkingLevel } from "./thinking.js";
 
-// Anthropic's documented floor for thinking.budget_tokens; the wire 400s below it.
-const CLAUDE_MIN_THINKING_BUDGET = 1024;
-
 // Map a target wire-format to its native thinking format (when capability has none).
 const FORMAT_TO_NATIVE = {
   openai: "openai",
@@ -258,9 +255,7 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels) {
     case "claude-budget": {
       if (none && canDisable) { body.thinking = { type: "disabled" }; break; }
       const budget = toBudget(eff, caps.thinkingRange);
-      // The Anthropic wire rejects budget_tokens below 1024 — both the "minimal" level
-      // (512) and a smaller client-supplied budget land there.
-      body.thinking = budget === -1 ? { type: "enabled" } : { type: "enabled", budget_tokens: Math.max(budget || 8192, CLAUDE_MIN_THINKING_BUDGET) };
+      body.thinking = budget === -1 ? { type: "enabled" } : { type: "enabled", budget_tokens: budget || 8192 };
       break;
     }
     case "gemini-level": {
@@ -365,18 +360,11 @@ export function applyThinking(targetFormat, model, body, provider = null, intent
     stripAll(body);
     return body;
   }
-  const fmt = resolveFormat(targetFormat, cleanModel, provider, transportThinkingFormat);
-  // An Anthropic-shaped wire reads a missing `thinking` as "reasoning off" and forwards
-  // that decision upstream, so a model that reasons unconditionally rejects a request
-  // that merely omits it (openrouter/z-ai/glm-5.3-flash: "Reasoning is mandatory for
-  // this endpoint and cannot be disabled"). Send the cheapest explicit level instead of
-  // nothing — "auto" would emit thinking:{type:"enabled"} with no budget_tokens, which
-  // the Anthropic wire itself rejects.
-  const effective = cfg || (caps.thinkingCanDisable === false && fmt.startsWith("claude-") ? { mode: "level", level: "low" } : null);
-  if (!effective) return body;
+  if (!cfg) return body;
 
+  const fmt = resolveFormat(targetFormat, cleanModel, provider, transportThinkingFormat);
   const supportedLevels = getThinkingLevels(provider, cleanModel);
   stripAll(body);
-  applyFormat(fmt, body, effective, caps, supportedLevels);
+  applyFormat(fmt, body, cfg, caps, supportedLevels);
   return body;
 }

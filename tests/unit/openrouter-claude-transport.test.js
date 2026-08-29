@@ -37,22 +37,26 @@ describe("openrouter claude transport (/v1/messages)", () => {
     expect(body.max_tokens).toBeGreaterThan(body.thinking.budget_tokens);
   });
 
-  // GLM-5.3 reasons unconditionally: OpenRouter forwards "reasoning off" — which is what
-  // both an omitted and a disabled `thinking` mean on the Anthropic wire — and z-ai 400s
-  // with "Reasoning is mandatory for this endpoint and cannot be disabled".
-  it("sends an explicit thinking budget when the client asks for none", () => {
+  // GLM-5.3 reasons unconditionally: thinking:{type:"disabled"} 400s with "Reasoning is
+  // mandatory for this endpoint and cannot be disabled" (verified against OpenRouter's
+  // /v1/messages). Omitting thinking is fine — that leaves the model's own default on.
+  it("turns a disabled thinking request into the minimum budget", () => {
     const credentials = { apiKey: "test-key", runtimeTransport: resolveTransport("openrouter", "claude") };
+    const src = claudeBody();
+    src.thinking = { type: "disabled" };
 
-    for (const clientThinking of [undefined, { type: "disabled" }]) {
-      const src = claudeBody();
-      if (clientThinking) src.thinking = clientThinking;
-      else delete src.thinking;
+    const body = translateRequest("claude", "claude", MODEL, src, true, credentials, "openrouter");
+    expect(body.thinking?.type).toBe("enabled");
+    expect(body.thinking.budget_tokens).toBeGreaterThan(0);
+  });
 
-      const body = translateRequest("claude", "claude", MODEL, src, true, credentials, "openrouter");
-      expect(body.thinking?.type).toBe("enabled");
-      // Anthropic's wire floor — "minimal" (512) would be rejected too.
-      expect(body.thinking.budget_tokens).toBeGreaterThanOrEqual(1024);
-    }
+  it("leaves the body alone when the client asks for no thinking at all", () => {
+    const credentials = { apiKey: "test-key", runtimeTransport: resolveTransport("openrouter", "claude") };
+    const src = claudeBody();
+    delete src.thinking;
+
+    const body = translateRequest("claude", "claude", MODEL, src, true, credentials, "openrouter");
+    expect(body.thinking).toBeUndefined();
   });
 
   it("leaves a model that can disable reasoning alone", () => {
