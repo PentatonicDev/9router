@@ -8,6 +8,7 @@ import {
   isValidApiKey,
 } from "../services/auth.js";
 import { handleAntigravityQuotaError } from "../services/antigravityQuota.js";
+import { getExhaustedQuotaResetMs } from "../services/quotaReset.js";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
@@ -311,6 +312,12 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         refreshedCredentials.accessToken, credentials.providerSpecificData
       );
       if (quotaResetMs) resetsAtMs = quotaResetMs;
+    }
+
+    // Providers whose limit error carries no reset (Kiro 402): ask their usage API.
+    if (!resetsAtMs) {
+      resetsAtMs = await getExhaustedQuotaResetMs(provider, result.status, refreshedCredentials);
+      if (resetsAtMs) log.warn("QUOTA", `[${provider}] quota exhausted — locking until ${new Date(resetsAtMs).toISOString()}`);
     }
 
     // Exhausted Antigravity model is blocked only in RAM cache until upstream resetAt.

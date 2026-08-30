@@ -42,6 +42,21 @@ function lockedCodex(overrides = {}) {
   };
 }
 
+function lockedKiro(overrides = {}) {
+  return {
+    id: "kiro-1",
+    provider: "kiro",
+    authType: "oauth",
+    isActive: true,
+    testStatus: "unavailable",
+    lastError: '{"message":"You have reached the limit.","reason":"MONTHLY_REQUEST_COUNT"}',
+    errorCode: 402,
+    backoffLevel: 0,
+    "modelLock___all": new Date(NOW.getTime() + 46 * 3600 * 1000).toISOString(),
+    ...overrides,
+  };
+}
+
 const FREE_QUOTAS = {
   quotas: {
     session: { used: 0, total: 100, remaining: 100, resetAt: "2026-01-01T15:59:00.000Z" },
@@ -115,6 +130,29 @@ describe("quota unlock", () => {
     const expired = lockedCodex({ "modelLock_gpt-5.6-sol": new Date(NOW.getTime() - 1000).toISOString() });
     expect(buildQuotaUnlockUpdate(expired, FREE_QUOTAS)).toBeNull();
     expect(buildQuotaUnlockUpdate(lockedCodex({ "modelLock_gpt-5.6-sol": null }), FREE_QUOTAS)).toBeNull();
+  });
+
+  it("clears a Kiro monthly-limit lock once the credit window refills", () => {
+    const exhausted = { quotas: { credit: { used: 50, total: 50, remaining: 0, resetAt: "2026-01-03T10:56:00.000Z" } } };
+    expect(buildQuotaUnlockUpdate(lockedKiro(), exhausted)).toBeNull();
+
+    const refilled = { quotas: { credit: { used: 0, total: 50, remaining: 50, resetAt: "2026-02-01T10:56:00.000Z" } } };
+    expect(buildQuotaUnlockUpdate(lockedKiro(), refilled)).toMatchObject({
+      "modelLock___all": null,
+      testStatus: "active",
+      errorCode: null,
+    });
+  });
+
+  it("does not let an allowance-less window (expired free trial) pin Kiro down", () => {
+    const usage = {
+      quotas: {
+        credit: { used: 0, total: 50, remaining: 50, resetAt: "2026-02-01T10:56:00.000Z" },
+        credit_freetrial: { used: 0, total: 0, remaining: 0, resetAt: "2026-02-01T10:56:00.000Z" },
+      },
+    };
+
+    expect(buildQuotaUnlockUpdate(lockedKiro(), usage)).not.toBeNull();
   });
 
   it("only spends a usage call on locked connections", async () => {

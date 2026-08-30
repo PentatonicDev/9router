@@ -48,6 +48,9 @@ export const MAX_RATE_LIMIT_COOLDOWN_MS = 8 * 24 * 60 * 60 * 1000;
 const COOLDOWN = {
   long: 2 * 60 * 1000,
   short: 5 * 1000,
+  // Quota window we know is long but whose reset we failed to read. The quota
+  // reconciler re-checks every 10min and unlocks as soon as the window reopens.
+  quotaWindow: 60 * 60 * 1000,
 };
 
 /**
@@ -67,6 +70,9 @@ export const ERROR_RULES = [
   { text: "rate limit",               backoff: true },
   { text: "too many requests",        backoff: true },
   { text: "quota exceeded",           backoff: true },
+  // Kiro 402 monthly limit — no reset in the body, so hold the account instead
+  // of retrying it every 2min for days (chat.js reads the real reset when it can).
+  { text: "monthly_request_count",    cooldownMs: COOLDOWN.quotaWindow },
   { text: "capacity",                 backoff: true },
   { text: "overloaded",               backoff: true },
 

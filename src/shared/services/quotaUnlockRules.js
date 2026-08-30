@@ -4,7 +4,7 @@ import { isQuotaExhausted } from "open-sse/services/usage/quota.js";
 import { buildClearModelLocksUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { QUOTA_UNLOCK_CONFIG } from "@/shared/constants/config";
 
-const QUOTA_ERROR_PATTERN = /usage limit|quota|rate.?limit|too many requests|resource_exhausted/i;
+const QUOTA_ERROR_PATTERN = /usage limit|quota|rate.?limit|too many requests|resource_exhausted|reached the limit|monthly_request_count/i;
 
 function isQuotaLock(connection) {
   return Number(connection.errorCode) === 429 || QUOTA_ERROR_PATTERN.test(connection.lastError || "");
