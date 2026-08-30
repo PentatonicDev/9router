@@ -62,6 +62,12 @@ export const CONSOLE_LOG_CONFIG = {
 // Client-side store TTL: how long fetched data stays fresh before re-fetching
 export const CLIENT_STORE_TTL_MS = 60000;
 
+// Quota unlock: clear quota locks the provider already reset ahead of its own resets_at.
+export const QUOTA_UNLOCK_CONFIG = {
+  tickIntervalMs: 600000,      // scheduler tick (10min) — only locked accounts cost a usage call
+  minLockRemainingMs: 600000,  // ignore short backoff locks; they expire on their own
+};
+
 // Quota auto-ping: keep 5h windows warm by sending a tiny request right after reset.
 export const QUOTA_AUTOPING_CONFIG = {
   tickIntervalMs: 60000,                // scheduler tick

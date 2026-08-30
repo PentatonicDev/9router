@@ -4,6 +4,7 @@ import "open-sse/index.js";
 import { getSettings, getProviderConnections, updateProviderConnection } from "@/lib/localDb";
 import { getClaudeUsage } from "open-sse/services/usage/claude.js";
 import { getCodexUsage } from "open-sse/services/usage/codex.js";
+import { isQuotaExhausted } from "open-sse/services/usage/quota.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { CLAUDE_CLI_SPOOF_HEADERS } from "open-sse/providers/shared.js";
 import { proxyAwareFetch } from "open-sse/utils/proxyFetch.js";
@@ -48,25 +49,6 @@ function getResetDriftMs(previousResetAt, nextResetAt) {
   const nextMs = new Date(nextResetAt).getTime();
   if (!Number.isFinite(previousMs) || !Number.isFinite(nextMs)) return 0;
   return nextMs - previousMs;
-}
-
-function toFiniteNumber(value, fallback = null) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return fallback;
-}
-
-function isQuotaExhausted(quota) {
-  if (!quota || quota.unlimited === true) return false;
-  const remaining = toFiniteNumber(quota.remaining);
-  if (remaining !== null) return remaining <= 0;
-
-  const used = toFiniteNumber(quota.used);
-  const total = toFiniteNumber(quota.total);
-  return total !== null && total > 0 && used !== null && used >= total;
 }
 
 function wasPingedRecently(connection, intervalMs, nowMs = Date.now()) {
