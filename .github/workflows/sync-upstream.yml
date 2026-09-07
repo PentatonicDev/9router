@@ -1,0 +1,82 @@
+name: Sync upstream (decolua/9router)
+
+on:
+  schedule:
+    - cron: "7 3 * * *" # 00:07 BRT
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/decolua/9router.git
+          git fetch upstream master
+
+      - name: Check for new upstream commits
+        id: check
+        run: |
+          COUNT=$(git rev-list --count HEAD..upstream/master)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "$COUNT new upstream commit(s)"
+
+      - name: Merge upstream into master
+        if: steps.check.outputs.count != '0'
+        id: merge
+        run: |
+          git config user.name "Gilson Souza"
+          git config user.email "gilson.souza@wehandle.com.br"
+          if git merge upstream/master --no-edit; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            git diff --name-only --diff-filter=U | tee conflict-files.txt || true
+            git merge --abort
+          fi
+
+      - name: Install deps
+        if: steps.merge.outputs.clean == 'true'
+        run: |
+          npm install
+          cd tests && npm install
+
+      - name: Run test suite + regression gate
+        if: steps.merge.outputs.clean == 'true'
+        id: tests
+        run: |
+          cd tests
+          npx vitest run --reporter=json --outputFile=results.json || true
+          node __baseline__/verify-no-regression.mjs results.json
+
+      - name: Push merge to master
+        if: steps.merge.outputs.clean == 'true' && steps.tests.outcome == 'success'
+        run: git push origin master
+
+      - name: Open PR with conflicted/untested merge
+        if: steps.merge.outputs.clean == 'false' || steps.tests.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REASON: ${{ steps.merge.outputs.clean == 'false' && 'merge conflicts' || 'test regression vs baseline' }}
+        run: |
+          BRANCH="sync/upstream-$(date +%Y%m%d-%H%M)"
+          git checkout -b "$BRANCH"
+          git merge upstream/master -m "Merge upstream decolua/9router (nightly sync)" || true
+          git push origin "$BRANCH"
+          gh pr create \
+            --base master \
+            --head "$BRANCH" \
+            --title "Sync upstream (automated nightly): $REASON" \
+            --body "Upstream had ${{ steps.check.outputs.count }} new commit(s). Automated sync hit $REASON — resolve manually. Conflict files: $(cat conflict-files.txt 2>/dev/null | tr '\n' ' ' || echo 'n/a')"
