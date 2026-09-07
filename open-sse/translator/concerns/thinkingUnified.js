@@ -123,15 +123,6 @@ function resolveFormat(targetFormat, model, provider, transportFmt = null) {
   }
   return FORMAT_TO_NATIVE[targetFormat] || "openai";
 }
-  const providerFmt = provider ? PROVIDERS[provider]?.thinkingFormat : null;
-  if (providerFmt) return providerFmt;
-  const caps = getCapabilitiesForModel(provider, model);
-  const isOpenAIWire = targetFormat === "openai" || targetFormat === "openai-responses";
-  if (caps.thinkingFormat && !(isOpenAIWire && NATIVE_ONLY_FORMATS.has(caps.thinkingFormat))) {
-    return caps.thinkingFormat;
-  }
-  return FORMAT_TO_NATIVE[targetFormat] || "openai";
-}
 
 // Convert unified config to a budget number (for budget-based formats).
 function toBudget(cfg, range) {
