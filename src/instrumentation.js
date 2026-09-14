@@ -10,5 +10,10 @@ export async function register() {
 
     const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
     startModelCatalogSync();
+
+    // Runs on server boot, not on first dashboard render: /v1 traffic alone never
+    // loads layout.js, so OAuth tokens would only refresh once someone opened the UI.
+    const { startBackgroundTokenRefresh } = await import("@/sse/services/backgroundTokenRefresh.js");
+    startBackgroundTokenRefresh();
   }
 }
