@@ -1,4 +1,5 @@
 import { ERROR_RULES, BACKOFF_CONFIG, TRANSIENT_COOLDOWN_MS } from "../config/errorConfig.js";
+import { classifyRoutingReason, publicStatusForReason } from "../utils/error.js";
 
 /**
  * Calculate exponential backoff cooldown for rate limits (429)
@@ -124,12 +125,36 @@ function activeLock(connection, key, metaKey, nowMs) {
   return { retryAtMs, retryAt: new Date(retryAtMs).toISOString(), meta: connection?.[metaKey] || null, lockKey: key, metaKey };
 }
 
+function countActiveLocks(connection, nowMs) {
+  let count = 0;
+  for (const [key, value] of Object.entries(connection || {})) {
+    if (!key.startsWith(MODEL_LOCK_PREFIX) || key.startsWith(MODEL_LOCK_META_PREFIX) || !value) continue;
+    const retryAtMs = new Date(value).getTime();
+    if (Number.isFinite(retryAtMs) && retryAtMs > nowMs) count++;
+  }
+  return count;
+}
+
+/**
+ * Locks written before lock metadata existed classify only through the connection's
+ * flat error fields. Those fields describe the lock solely while it is the only one
+ * active — with a second lock, errorCode belongs to whichever model failed last.
+ */
+function legacyLockMeta(connection, nowMs) {
+  if (countActiveLocks(connection, nowMs) !== 1) return null;
+  const status = Number(connection?.errorCode);
+  const message = connection?.lastError;
+  const reason = classifyRoutingReason(status, message);
+  if (!reason) return null;
+  return { status: publicStatusForReason(Number.isFinite(status) ? status : 503, reason), reason, message };
+}
+
 export function getApplicableModelLock(connection, model, nowMs = Date.now()) {
   const specific = activeLock(connection, getModelLockKey(model), getModelLockMetaKey(model), nowMs);
   const global = activeLock(connection, MODEL_LOCK_ALL, MODEL_LOCK_META_ALL, nowMs);
-  if (!specific) return global;
-  if (!global) return specific;
-  return global.retryAtMs > specific.retryAtMs ? global : specific;
+  const lock = !specific ? global : !global ? specific : global.retryAtMs > specific.retryAtMs ? global : specific;
+  if (lock && !lock.meta) lock.meta = legacyLockMeta(connection, nowMs);
+  return lock;
 }
 
 export function isModelLockActive(connection, model) {

@@ -79,6 +79,28 @@ describe("applicable model lock", () => {
     });
   });
 
+  it("classifies a metadata-less lock from the connection error state", () => {
+    const connection = {
+      modelLock_m: "2026-09-13T00:00:20.000Z",
+      errorCode: 429,
+      lastError: "This request would exceed your account's rate limit",
+    };
+    expect(getApplicableModelLock(connection, "m", Date.parse("2026-09-13T00:00:00Z"))).toMatchObject({
+      retryAtMs: Date.parse("2026-09-13T00:00:20Z"),
+      meta: { status: 429, reason: "quota_exhausted" },
+    });
+  });
+
+  it("leaves a metadata-less lock unclassified when another lock could own the error state", () => {
+    const connection = {
+      modelLock_m: "2026-09-13T00:00:20.000Z",
+      modelLock_other: "2026-09-13T00:00:30.000Z",
+      errorCode: 429,
+      lastError: "This request would exceed your account's rate limit",
+    };
+    expect(getApplicableModelLock(connection, "m", Date.parse("2026-09-13T00:00:00Z")).meta).toBeNull();
+  });
+
   it("ignores expired, invalid, and other-model locks", () => {
     const connection = { modelLock_m: "bad", modelLock_other: "2026-09-13T00:00:30.000Z" };
     expect(getApplicableModelLock(connection, "m", Date.parse("2026-09-13T00:00:00Z"))).toBeNull();
