@@ -6,6 +6,7 @@
 
 import fs from "fs";
 import path from "path";
+import { sanitizePublicMessage } from "../utils/error.js";
 
 // Create log directory for responses (Node.js only)
 export function createResponsesLogger(model, logsDir = null) {
@@ -73,7 +74,8 @@ export function createResponsesApiTransformStream(logger = null) {
     funcArgsDone: {},
     funcItemDone: {},
     buffer: "",
-    completedSent: false
+    completedSent: false,
+    failedSent: false
   };
 
   const encoder = new TextEncoder();
@@ -239,6 +241,30 @@ export function createResponsesApiTransformStream(logger = null) {
     }
   };
 
+  const sendFailed = (controller, error) => {
+    if (state.failedSent || state.completedSent) return;
+    state.failedSent = true;
+    const message = sanitizePublicMessage(
+      typeof error === "string" ? error : error?.message,
+      "Upstream provider stream failed"
+    );
+    emit(controller, "response.failed", {
+      type: "response.failed",
+      response: {
+        id: state.responseId,
+        object: "response",
+        created_at: state.created,
+        status: "failed",
+        background: false,
+        error: {
+          type: "api_error",
+          code: "upstream_error",
+          message
+        }
+      }
+    });
+  };
+
   return new TransformStream({
     transform(chunk, controller) {
       const text = new TextDecoder().decode(chunk);
@@ -264,7 +290,12 @@ export function createResponsesApiTransformStream(logger = null) {
           continue;
         }
 
-        if (!parsed.choices?.length) continue;
+        const streamError = parsed?.error || (parsed?.type === "error" ? parsed : null);
+        if (streamError) {
+          sendFailed(controller, streamError);
+          continue;
+        }
+        if (state.failedSent || !parsed.choices?.length) continue;
         
         const choice = parsed.choices[0];
         const idx = choice.index || 0;
@@ -425,13 +456,15 @@ export function createResponsesApiTransformStream(logger = null) {
     },
 
     flush(controller) {
-      for (const i in state.msgItemAdded) closeMessage(controller, i);
-      closeReasoning(controller);
-      for (const i in state.funcCallIds) closeToolCall(controller, i);
-      sendCompleted(controller);
+      if (!state.failedSent) {
+        for (const i in state.msgItemAdded) closeMessage(controller, i);
+        closeReasoning(controller);
+        for (const i in state.funcCallIds) closeToolCall(controller, i);
+        sendCompleted(controller);
 
-      logger?.logOutput("data: [DONE]");
-      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        logger?.logOutput("data: [DONE]");
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      }
       logger?.flush();
     }
   });

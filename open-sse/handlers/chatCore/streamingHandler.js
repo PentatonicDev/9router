@@ -3,8 +3,9 @@ import { needsTranslation } from "../../translator/index.js";
 import { createSSETransformStreamWithLogger, createPassthroughStreamWithLogger } from "../../utils/stream.js";
 import { pipeWithDisconnect } from "../../utils/streamHandler.js";
 import { PROVIDERS } from "../../config/providers.js";
-import { STREAM_STALL_TIMEOUT_MS } from "../../config/runtimeConfig.js";
+import { HTTP_STATUS, STREAM_STALL_TIMEOUT_MS } from "../../config/runtimeConfig.js";
 import { buildAbortedResponsesTerminalBytes } from "../../utils/responsesStreamHelpers.js";
+import { createErrorResult, sanitizePublicMessage } from "../../utils/error.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { saveRequestDetail } from "@/lib/usageDb.js";
 import { SSE_HEADERS_CORS as SSE_HEADERS } from "../../utils/sseConstants.js";
@@ -43,15 +44,7 @@ function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent,
 /**
  * Handle streaming response — pipe provider SSE through transform stream to client.
  */
-export async function handleStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, pxpipe, reqTag, log, credentials }) {
-  if (onRequestSuccess) {
-    Promise.resolve()
-      .then(onRequestSuccess)
-      .catch(err => {
-        console.error("[ChatCore] onRequestSuccess failed:", err?.message || err);
-      });
-  }
-
+export async function handleStreamingResponse({ providerResponse, provider, model, errorContext, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, pxpipe, reqTag, log, credentials }) {
   // When upstream returns HTML/text instead of SSE (e.g. Cloudflare 5xx error
   // page), piping it through the SSE transform stream causes Next.js
   // "failed to pipe response" and crashes the chat router. Read the body,
@@ -64,19 +57,39 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
     const bodyText = await providerResponse.text().catch(() => '');
     const titleMatch = bodyText.match(/<title>([^<]+)<\/title>/i);
     const sanitizedTitle = (titleMatch?.[1] || '').replace(/<[^>]*>/g, '').replace(/[\r\n]+/g, ' ').trim().slice(0, 160);
-    const shortMsg = sanitizedTitle
-      || (bodyText.length < 200 ? bodyText.replace(/<[^>]*>/g, '').trim().slice(0, 160) : `Upstream returned non-SSE response (${upstreamContentType})`);
-    const status = providerResponse.status || 502;
+    const shortMsg = sanitizePublicMessage(
+      sanitizedTitle || (bodyText.length < 200 ? bodyText : "Upstream returned an invalid streaming response")
+    );
+    const status = providerResponse.status >= 400 ? providerResponse.status : HTTP_STATUS.BAD_GATEWAY;
     if (log?.errorLine) log.errorLine(reqTag, "✗", `BLOCKED ${status} · ${provider}/${model} · non-SSE (${upstreamContentType})\n    ${shortMsg}`);
     else console.warn(`[STREAM] ${provider} | ${model} | blocked pipe: ${shortMsg} [${status}]`);
     streamController?.handleError?.(new Error(`upstream non-SSE: ${status}`));
-    return {
-      success: false,
-      response: new Response(JSON.stringify({ error: { message: `[${status}]: ${shortMsg}` } }), {
-        status,
-        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-      }),
-    };
+    return createErrorResult(status, shortMsg, undefined, { ...errorContext, provider, model });
+  }
+
+  // A 200 with a JSON body on a streaming request is an error envelope often enough
+  // that piping it blind would both leak it as content and mark the account healthy.
+  // Read it once, fail on `error`, and hand the bytes back to the pipe otherwise.
+  let streamSource = providerResponse;
+  if (upstreamContentType.includes('application/json')) {
+    const bodyText = await providerResponse.text().catch(() => '');
+    let upstreamError = null;
+    try { upstreamError = JSON.parse(bodyText)?.error; } catch {}
+    if (upstreamError) {
+      const shortMsg = sanitizePublicMessage(upstreamError.message || upstreamError, "Upstream returned an error instead of a stream");
+      if (log?.errorLine) log.errorLine(reqTag, "✗", `BLOCKED ${HTTP_STATUS.BAD_GATEWAY} · ${provider}/${model} · JSON error on streaming request\n    ${shortMsg}`);
+      streamController?.handleError?.(new Error(`upstream JSON error: ${shortMsg}`));
+      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, shortMsg, undefined, { ...errorContext, provider, model });
+    }
+    streamSource = new Response(bodyText, { status: providerResponse.status, headers: providerResponse.headers });
+  }
+
+  if (onRequestSuccess) {
+    Promise.resolve()
+      .then(onRequestSuccess)
+      .catch(err => {
+        console.error("[ChatCore] onRequestSuccess failed:", err?.message || err);
+      });
   }
 
   const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, customToolNames, model, connectionId, body, onStreamComplete, apiKey, credentials });
@@ -85,7 +98,7 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
   const isResponsesPassthrough = sourceFormat === FORMATS.OPENAI_RESPONSES && targetFormat === FORMATS.OPENAI_RESPONSES;
   const onAbortTerminal = isResponsesPassthrough ? buildAbortedResponsesTerminalBytes : null;
   const stallTimeoutMs = PROVIDERS[provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
-  const transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
+  const transformedBody = pipeWithDisconnect(streamSource, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
 
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId,

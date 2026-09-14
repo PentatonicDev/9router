@@ -41,6 +41,51 @@ beforeEach(() => {
 });
 
 describe("Antigravity quota-aware routing", () => {
+  it("classifies zero active credentials without retry", async () => {
+    mocks.getProviderConnections.mockResolvedValue([]);
+
+    await expect(getProviderCredentials("antigravity", null, MODEL)).resolves.toMatchObject({
+      noActiveCredentials: true,
+      candidate: {
+        reason: "no_active_credentials",
+        provider: "antigravity",
+        model: MODEL,
+        status: 503,
+        retryAtMs: null,
+      },
+    });
+  });
+
+  it("keeps reset and metadata from the same earliest account", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-26T00:00:00.000Z"));
+    mocks.getProviderConnections.mockResolvedValue([
+      {
+        id: "ag-a",
+        modelLock___all: "2026-08-26T00:20:00.000Z",
+        modelLockMeta___all: { status: 503, reason: "temporarily_unavailable", message: "later" },
+      },
+      {
+        id: "ag-b",
+        [`modelLock_${MODEL}`]: "2026-08-26T00:10:00.000Z",
+        [`modelLockMeta_${MODEL}`]: { status: 429, reason: "quota_exhausted", message: "earlier quota" },
+      },
+    ]);
+
+    try {
+      await expect(getProviderCredentials("antigravity", null, MODEL)).resolves.toMatchObject({
+        allRateLimited: true,
+        candidate: {
+          status: 429,
+          message: "earlier quota",
+          retryAtMs: Date.parse("2026-08-26T00:10:00.000Z"),
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records exhausted upstream quota after 429 and returns its exact reset time", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-26T00:00:00.000Z"));

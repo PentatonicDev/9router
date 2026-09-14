@@ -2,7 +2,8 @@ import { translateResponse, initState } from "../translator/index.js";
 import { FORMATS } from "../translator/formats.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, mergeUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
-import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
+import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE, extractStreamError } from "./streamHelpers.js";
+import { errorStreamChunk } from "./error.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
@@ -76,6 +77,7 @@ export function createSSEStream(options = {}) {
   let openAIResponsesTerminalSeen = false;
   let openAIResponsesDoneSent = false;
   let streamDoneSent = false;  // track duplicate [DONE] across transform + flush
+  let streamErrored = false;   // an upstream error was emitted: no success terminal may follow
   let finalized = false;
 
   // Usage/logging tail, callable from transform() as well as flush(): a client that
@@ -117,6 +119,7 @@ export function createSSEStream(options = {}) {
       buffer = lines.pop() || "";
 
       for (const line of lines) {
+        if (streamErrored) break; // nothing may follow an error terminal
         const trimmed = line.trim();
         if (isDebugEnabled && trimmed) {
           sseLineCount++;
@@ -177,6 +180,8 @@ export function createSSEStream(options = {}) {
                   }
                 }
               }
+
+              if (extractStreamError(parsed)) streamErrored = true;
 
               if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
                 continue;
@@ -260,6 +265,8 @@ export function createSSEStream(options = {}) {
         // For Ollama: done=true is the final chunk with finish_reason/usage, must translate
         // For other formats: done=true is the [DONE] sentinel, skip
         if (parsed && parsed.done && targetFormat !== FORMATS.OLLAMA) {
+          if (streamErrored) { finalizeStream(); continue; }
+
           // Synthesize response.failed if the Responses stream never sent a terminal event
           if (keepsOpenAIResponsesFormat && !openAIResponsesTerminalSeen) {
             const failedOutput = formatIncompleteOpenAIResponsesStreamFailure();
@@ -327,12 +334,28 @@ export function createSSEStream(options = {}) {
           controller.enqueue(sharedEncoder.encode(output));
           currentOpenAIResponsesEvent = null;
           sseEmittedCount++;
+          // A native error terminal is already in client format, so it passes through
+          // untouched — but the [DONE] that upstream sends after it must not.
+          if (openAIResponsesEventName === "error" || openAIResponsesEventName === "response.failed") streamErrored = true;
           // Responses clients (codex) close on response.completed instead of [DONE]
           if (openAIResponsesTerminalSeen) finalizeStream();
           continue;
         }
 
         currentOpenAIResponsesEvent = null;
+
+        // An upstream error must reach the client in its own format: the translators
+        // pivot through OpenAI chunks and drop anything without `choices`.
+        const upstreamError = extractStreamError(parsed);
+        if (upstreamError) {
+          streamErrored = true;
+          const output = formatSSE(errorStreamChunk(sourceFormat, upstreamError), sourceFormat);
+          reqLogger?.appendConvertedChunk?.(output);
+          controller.enqueue(sharedEncoder.encode(output));
+          sseEmittedCount++;
+          finalizeStream();
+          continue;
+        }
 
         // Translate: targetFormat -> openai -> sourceFormat
         const translated = translateResponse(targetFormat, sourceFormat, parsed, state);
@@ -383,6 +406,8 @@ export function createSSEStream(options = {}) {
         if (remaining) buffer += remaining;
 
         if (mode === STREAM_MODE.PASSTHROUGH) {
+          if (streamErrored) { finalizeStream(); return; }
+
           if (buffer) {
             let output = buffer;
             if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
@@ -407,6 +432,8 @@ export function createSSEStream(options = {}) {
           finalizeStream();
           return;
         }
+
+        if (streamErrored) { finalizeStream(); return; }
 
         if (buffer.trim()) {
           // Same parse as the transform loop: without targetFormat this only

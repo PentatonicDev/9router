@@ -209,7 +209,12 @@ describe("Gemini native v1beta endpoint", () => {
     const body = await response.json();
 
     expect(response.status).toBe(502);
-    expect(body.error.message).toContain("ECONNRESET");
+    expect(body.error).toEqual({
+      code: 502,
+      message: "Bad gateway - upstream provider error",
+      status: "UNAVAILABLE",
+    });
+    expect(body.error.message).not.toContain("ECONNRESET");
     expect(mocks.markAccountUnavailable).toHaveBeenCalledWith(
       "gemini-conn",
       502,

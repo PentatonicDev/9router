@@ -109,7 +109,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log, errorContext }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
@@ -130,6 +130,14 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
   if (isCodexResponsesApi) {
     try {
       const jsonResponse = await convertResponsesStreamToJson(providerResponse.body);
+      if (jsonResponse.status === "failed") {
+        return createErrorResult(
+          HTTP_STATUS.BAD_GATEWAY,
+          jsonResponse.error?.message || "Upstream SSE stream failed",
+          undefined,
+          errorContext
+        );
+      }
       if (onRequestSuccess) await onRequestSuccess();
 
       const usage = jsonResponse.usage || {};
@@ -219,7 +227,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       return { success: true, response: new Response(JSON.stringify(finalResp), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
     } catch (err) {
       console.error("[ChatCore] Responses API SSE→JSON failed:", err);
-      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to convert streaming response to JSON");
+      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to convert streaming response to JSON", undefined, errorContext);
     }
   }
 
@@ -227,11 +235,13 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
   try {
     const sseText = await providerResponse.text();
     const parsed = parseSSEToOpenAIResponse(sseText, model);
-    if (!parsed) return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
+    if (!parsed) return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request", undefined, errorContext);
     if (parsed.error) {
       return createErrorResult(
         HTTP_STATUS.BAD_GATEWAY,
-        parsed.error.message || "Upstream SSE stream failed"
+        parsed.error.message || "Upstream SSE stream failed",
+        undefined,
+        errorContext
       );
     }
 
@@ -288,6 +298,6 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
     return { success: true, response: new Response(JSON.stringify(finalBody), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
   } catch (err) {
     console.error("[ChatCore] Chat Completions SSE→JSON failed:", err);
-    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to convert streaming response to JSON");
+    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to convert streaming response to JSON", undefined, errorContext);
   }
 }

@@ -584,12 +584,9 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
       state.error = error;
       state.finishReasonSent = true;
 
-      // Surface the error as an OpenAI-compatible error chunk
-      return buildChunk(
-        { id: state.chatId || `chatcmpl-${Date.now()}`, created: state.created || Math.floor(Date.now() / 1000), model: state.model || MODEL_FALLBACK },
-        { content: `[Error] ${error.message || JSON.stringify(error)}` },
-        OPENAI_FINISH.STOP
-      );
+      // An OpenAI error frame, not a completion: a finish_reason here would tell
+      // the client the turn ended normally.
+      return { error: { type: error.type || "api_error", message: error.message || "Upstream stream error" } };
     }
     return null;
   }

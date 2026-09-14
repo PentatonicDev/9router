@@ -2,8 +2,8 @@
  * Shared combo (model combo) handling with fallback support
  */
 
-import { checkFallbackError, formatRetryAfter } from "./accountFallback.js";
-import { unavailableResponse } from "../utils/error.js";
+import { checkFallbackError } from "./accountFallback.js";
+import { errorResponse } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
 
@@ -277,11 +277,9 @@ export function getComboModelsFromData(modelStr, combosData) {
  * @param {number|string} [options.comboStickyLimit=1] - Requests per combo model before switching
  * @returns {Promise<Response>}
  */
-export async function handleComboChat({ body, models, handleSingleModel, log, comboName, comboStrategy, comboStickyLimit = 1, autoSwitch = true }) {
-  // Apply rotation strategy if enabled
+export async function handleComboChat({ body, models, handleSingleModel, log, comboName, comboStrategy, comboStickyLimit = 1, autoSwitch = true, errorContext = {} }) {
   let rotatedModels = getRotatedModels(models, comboName, comboStrategy, comboStickyLimit);
 
-  // Auto-switch: float models that satisfy the request's required capabilities to the front.
   if (autoSwitch) {
     const required = detectRequiredCapabilities(body);
     if (required.size > 0) {
@@ -292,10 +290,10 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       rotatedModels = reordered;
     }
   }
-  
-  let lastError = null;
-  let earliestRetryAfter = null;
-  let lastStatus = null;
+
+  let bestRetry = null;
+  let firstFallbackError = null;
+  let noCredentialsCount = 0;
 
   for (let i = 0; i < rotatedModels.length; i++) {
     const modelStr = rotatedModels[i];
@@ -303,84 +301,61 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
 
     try {
       const result = await handleSingleModel(body, modelStr);
-      
-      // Success (2xx) - return response
       if (result.ok) {
         log.info("COMBO", `Model ${modelStr} succeeded`);
         return result;
       }
 
-      // Extract error info from response
+      const reason = result.headers.get("X-9Router-Reason");
+      if (reason === "no_active_credentials") {
+        noCredentialsCount++;
+        log.warn("COMBO", `Model ${modelStr} skipped: no active credentials`);
+        continue;
+      }
+
+      const retryAtMs = Date.parse(result.headers.get("X-9Router-Retry-At") || "");
+      if (Number.isFinite(retryAtMs) && retryAtMs > Date.now() && (!bestRetry || retryAtMs < bestRetry.retryAtMs)) {
+        bestRetry = { retryAtMs, response: result, index: i };
+      }
+
       let errorText = result.statusText || "";
-      let retryAfter = null;
       try {
         const errorBody = await result.clone().json();
         errorText = errorBody?.error?.message || errorBody?.error || errorBody?.message || errorText;
-        retryAfter = errorBody?.retryAfter || null;
-      } catch {
-        // Ignore JSON parse errors
-      }
-
-      // Track earliest retryAfter across all combo models
-      if (retryAfter && (!earliestRetryAfter || new Date(retryAfter) < new Date(earliestRetryAfter))) {
-        earliestRetryAfter = retryAfter;
-      }
-
-      // Normalize error text to string (Worker-safe)
+      } catch {}
       if (typeof errorText !== "string") {
         try { errorText = JSON.stringify(errorText); } catch { errorText = String(errorText); }
       }
 
-      // Check if should fallback to next model
       const { shouldFallback, cooldownMs } = checkFallbackError(result.status, errorText);
-
       if (!shouldFallback) {
         log.warn("COMBO", `Model ${modelStr} failed (no fallback)`, { status: result.status });
         return result;
       }
+      if (!firstFallbackError) firstFallbackError = result;
 
-      // For transient errors (503/502/504), wait for cooldown before falling through
-      // so a briefly-overloaded provider gets a chance to recover rather than being
-      // skipped immediately (fixes: combo falls through on transient 503)
-      if (cooldownMs && cooldownMs > 0 && cooldownMs <= 5000 &&
-          (result.status === 503 || result.status === 502 || result.status === 504)) {
+      if (cooldownMs > 0 && cooldownMs <= 5000 && [502, 503, 504].includes(result.status)) {
         log.info("COMBO", `Model ${modelStr} transient ${result.status}, waiting ${cooldownMs}ms before next`);
-        await new Promise(r => setTimeout(r, cooldownMs));
+        await new Promise(resolve => setTimeout(resolve, cooldownMs));
       }
-
-      // Fallback to next model
-      lastError = errorText || String(result.status);
-      if (!lastStatus) lastStatus = result.status;
       log.warn("COMBO", `Model ${modelStr} failed, trying next`, { status: result.status });
     } catch (error) {
-      // Catch unexpected exceptions to ensure fallback continues
-      lastError = error.message || String(error);
-      if (!lastStatus) lastStatus = 500;
-      log.warn("COMBO", `Model ${modelStr} threw error, trying next`, { error: lastError });
+      log.warn("COMBO", `Model ${modelStr} threw error, trying next`, { error: error.message || String(error) });
     }
   }
 
-  // All models failed
-  // Use 503 (Service Unavailable) rather than 406 (Not Acceptable) — 406 implies
-  // the request itself is invalid, but here the providers are simply unavailable
-  // or have no active credentials. 503 is more accurate and retryable by clients.
-  const allDisabled = lastError && lastError.toLowerCase().includes("no credentials");
-  const status = allDisabled ? 503 : (lastStatus || 503);
-  const msg = lastError || "All combo models unavailable";
+  if (bestRetry) return bestRetry.response;
+  if (firstFallbackError) return firstFallbackError;
 
-  if (earliestRetryAfter) {
-    const retryHuman = formatRetryAfter(earliestRetryAfter);
-    log.warn("COMBO", `All models failed | ${msg} (${retryHuman})`);
-    return unavailableResponse(status, msg, earliestRetryAfter, retryHuman);
-  }
-
-  log.warn("COMBO", `All models failed | ${msg}`);
-  return new Response(
-    JSON.stringify({ error: { message: msg } }),
-    { status, headers: { "Content-Type": "application/json" } }
-  );
+  const allMissing = rotatedModels.length > 0 && noCredentialsCount === rotatedModels.length;
+  const message = allMissing ? `No active credentials for combo: ${comboName || "unknown"}` : "All combo models unavailable";
+  log.warn("COMBO", `All models failed | ${message}`);
+  return errorResponse(503, message, {
+    ...errorContext,
+    reason: allMissing ? "no_active_credentials" : "temporarily_unavailable",
+    retryable: !allMissing,
+  });
 }
-
 /**
  * Extract assistant text from a non-stream completion across formats
  * (OpenAI chat, Claude messages, Gemini, OpenAI Responses). Returns "" if none.
@@ -521,6 +496,29 @@ function collectPanel(calls, { minPanel, stragglerGraceMs, panelHardTimeoutMs })
   });
 }
 
+function bestRetryResponse(responses) {
+  let best = null;
+  let firstError = null;
+  let noCredentialsCount = 0;
+  let responseCount = 0;
+  for (let index = 0; index < responses.length; index++) {
+    const response = responses[index];
+    if (!(response instanceof Response) || response.ok) continue;
+    responseCount++;
+    const reason = response.headers.get("X-9Router-Reason");
+    if (reason === "no_active_credentials") {
+      noCredentialsCount++;
+      continue;
+    }
+    if (!firstError) firstError = response;
+    const retryAtMs = Date.parse(response.headers.get("X-9Router-Retry-At") || "");
+    if (Number.isFinite(retryAtMs) && retryAtMs > Date.now() && (!best || retryAtMs < best.retryAtMs)) {
+      best = { retryAtMs, response, index };
+    }
+  }
+  return { response: best?.response || firstError, allMissing: responseCount > 0 && noCredentialsCount === responseCount };
+}
+
 /**
  * Handle a fusion combo: fan the prompt out to every panel model in parallel,
  * then a judge model synthesizes one final answer from all panel responses.
@@ -544,13 +542,10 @@ function collectPanel(calls, { minPanel, stragglerGraceMs, panelHardTimeoutMs })
  * @param {Object} [options.tuning] - Override FUSION_DEFAULTS (minPanel, grace, timeout)
  * @returns {Promise<Response>}
  */
-export async function handleFusionChat({ body, models, handleSingleModel, log, comboName, judgeModel, tuning }) {
+export async function handleFusionChat({ body, models, handleSingleModel, log, comboName, judgeModel, tuning, errorContext = {} }) {
   const panel = Array.isArray(models) ? models.filter(Boolean) : [];
   if (panel.length === 0) {
-    return new Response(
-      JSON.stringify({ error: { message: "Fusion combo has no models" } }),
-      { status: 400, headers: { "Content-Type": "application/json" } }
-    );
+    return errorResponse(400, "Fusion combo has no models", errorContext);
   }
 
   // A single-model fusion has nothing to fuse — just answer directly.
@@ -584,13 +579,18 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
 
   // 2. Collect successful answers.
   const answers = [];
+  const failedResponses = [];
   for (let i = 0; i < settled.length; i++) {
     const res = settled[i];
     const model = panel[i];
     if (!res) { log.warn("FUSION", `Panel ${model} dropped (straggler/timeout)`); continue; }
     if (res.__timeout) { log.warn("FUSION", `Panel ${model} timed out`); continue; }
     if (res.__error) { log.warn("FUSION", `Panel ${model} threw`, { error: res.__error?.message || String(res.__error) }); continue; }
-    if (!res.ok) { log.warn("FUSION", `Panel ${model} failed`, { status: res.status }); continue; }
+    if (!res.ok) {
+      failedResponses.push(res);
+      log.warn("FUSION", `Panel ${model} failed`, { status: res.status });
+      continue;
+    }
     try {
       const json = await res.clone().json();
       const text = extractPanelText(json);
@@ -608,10 +608,13 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   // 3. Degrade gracefully when the panel is too thin to fuse.
   if (answers.length === 0) {
     log.warn("FUSION", "All panel models failed");
-    return new Response(
-      JSON.stringify({ error: { message: "All fusion panel models failed" } }),
-      { status: 503, headers: { "Content-Type": "application/json" } }
-    );
+    const failure = bestRetryResponse(failedResponses);
+    if (failure.response) return failure.response;
+    return errorResponse(503, "All fusion panel models failed", {
+      ...errorContext,
+      reason: failure.allMissing ? "no_active_credentials" : "temporarily_unavailable",
+      retryable: !failure.allMissing,
+    });
   }
   if (answers.length === 1) {
     log.info("FUSION", `Only ${answers[0].model} succeeded — answering directly (no fusion)`);

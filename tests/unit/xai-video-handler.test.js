@@ -179,11 +179,24 @@ describe("handleVideoCreate", () => {
     expect(init.headers["Content-Type"]).toContain(boundary);
   });
 
-  it("returns 400 when no credentials are connected", async () => {
-    authMocks.getProviderCredentials.mockResolvedValueOnce(null);
+  it("returns 503 without Retry-After when no credentials are connected", async () => {
+    authMocks.getProviderCredentials.mockResolvedValueOnce({
+      noActiveCredentials: true,
+      candidate: {
+        reason: "no_active_credentials",
+        provider: "xai",
+        model: "grok-imagine-video",
+        status: 503,
+        errorType: "api_error",
+        message: "No active credentials for provider: xai",
+        retryable: false,
+        retryAtMs: null,
+      },
+    });
     const res = await handleVideoCreate(makeRequest({ prompt: "x" }), "generations");
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain("No credentials for provider: xai");
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBeNull();
+    expect(await res.text()).toContain("No active credentials for provider: xai");
   });
 
   it("returns 400 on invalid JSON", async () => {

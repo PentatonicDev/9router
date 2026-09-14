@@ -100,6 +100,16 @@ function cleanUsagePayload(payload) {
   return cleaned;
 }
 
+// Upstream stream error, in any provider shape: OpenAI/Gemini/Ollama put it in
+// `error`, Responses `response.failed` nests it under `response.error`.
+export function extractStreamError(chunk) {
+  if (!chunk || typeof chunk !== "object") return null;
+  const error = chunk.error ?? chunk.response?.error;
+  if (!error) return null;
+  if (typeof error === "string") return error;
+  return error.message || error.status || error.code || "Upstream stream error";
+}
+
 // Format output as SSE
 export function formatSSE(data, sourceFormat) {
   if (data === null || data === undefined) return "data: null\n\n";

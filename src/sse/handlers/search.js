@@ -8,7 +8,7 @@ import {
 import { getSettings, getCombos } from "@/lib/localDb";
 import { AI_PROVIDERS, resolveProviderId } from "@/shared/constants/providers.js";
 import { handleSearchCore } from "open-sse/handlers/search/index.js";
-import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
+import { errorResponse, responseFromRoutingCandidate } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
@@ -145,8 +145,6 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
 
   // Credential + fallback loop
   const excludeConnectionIds = new Set();
-  let lastError = null;
-  let lastStatus = null;
 
   // Credential fallback: some search providers reuse the API key of a related
   // chat provider (e.g. ollama-search reuses the `ollama` chat key, zai-search
@@ -168,27 +166,16 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
 
     // Fall back to the related chat provider's credentials when this search
     // provider has none of its own (one key, chat + search).
-    if (!credentials && fallbackProviderId) {
+    if (credentials?.noActiveCredentials && fallbackProviderId) {
       credentials = await getProviderCredentials(fallbackProviderId, excludeConnectionIds, searchLockKey);
-      if (credentials) {
-        credentialProviderId = fallbackProviderId;
+      credentialProviderId = fallbackProviderId;
+      if (!credentials?.noActiveCredentials) {
         log.info("AUTH", `\x1b[32m${providerId} reusing ${fallbackProviderId} credentials\x1b[0m`);
       }
     }
 
-    if (!credentials || credentials.allRateLimited) {
-      if (credentials?.allRateLimited) {
-        const errorMsg = lastError || credentials.lastError || "Unavailable";
-        const status = lastStatus || Number(credentials.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE;
-        log.warn("SEARCH", `[${providerId}] ${errorMsg} (${credentials.retryAfterHuman})`);
-        return unavailableResponse(status, `[${providerId}] ${errorMsg}`, credentials.retryAfter, credentials.retryAfterHuman);
-      }
-      if (excludeConnectionIds.size === 0) {
-        log.error("AUTH", `No credentials for provider: ${providerId}`);
-        return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${providerId}`);
-      }
-      log.warn("SEARCH", "No more accounts available", { provider: providerId });
-      return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable");
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+      return responseFromRoutingCandidate(credentials.candidate);
     }
 
     log.info("AUTH", `\x1b[32mUsing ${providerId} account: ${credentials.connectionName}\x1b[0m`);
@@ -221,8 +208,6 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
     if (shouldFallback) {
       log.warn("AUTH", `Account ${credentials.connectionName} unavailable (${result.status}), trying fallback`);
       excludeConnectionIds.add(credentials.connectionId);
-      lastError = result.error;
-      lastStatus = result.status;
       continue;
     }
 

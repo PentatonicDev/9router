@@ -8,7 +8,7 @@ import {
 import { getSettings, getProviderConnectionById } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { handleVideoProxyCore, getVideoConfig, sanitizeSecrets } from "open-sse/handlers/videoCore.js";
-import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
+import { errorResponse, responseFromRoutingCandidate } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import * as log from "../utils/logger.js";
@@ -128,22 +128,12 @@ export async function handleVideoCreate(request, action) {
   const idempotencyKey = request.headers.get("idempotency-key") || null;
 
   const excludeConnectionIds = new Set();
-  let lastError = null;
-  let lastStatus = null;
 
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId });
 
-    if (!credentials || credentials.allRateLimited) {
-      if (credentials?.allRateLimited) {
-        const errorMsg = lastError || credentials.lastError || "Unavailable";
-        const status = lastStatus || Number(credentials.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE;
-        return unavailableResponse(status, `[${provider}/${model || "video"}] ${errorMsg}`, credentials.retryAfter, credentials.retryAfterHuman);
-      }
-      if (excludeConnectionIds.size === 0) {
-        return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
-      }
-      return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable");
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+      return responseFromRoutingCandidate(credentials.candidate);
     }
 
     const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
@@ -180,8 +170,6 @@ export async function handleVideoCreate(request, action) {
 
     if (shouldFallback && CREATE_ROTATION_STATUSES.has(result.status)) {
       excludeConnectionIds.add(credentials.connectionId);
-      lastError = result.error;
-      lastStatus = result.status;
       continue;
     }
 
@@ -204,8 +192,8 @@ export async function handleVideoGet(request, requestId) {
   const provider = await resolveGetProvider(request, preferredConnectionId);
 
   const credentials = await getProviderCredentials(provider, null, null, { preferredConnectionId });
-  if (!credentials || credentials.allRateLimited) {
-    return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
+  if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+    return responseFromRoutingCandidate(credentials.candidate);
   }
 
   const refreshedCredentials = await checkAndRefreshToken(provider, credentials);

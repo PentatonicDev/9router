@@ -558,7 +558,8 @@ describe("handleEmbeddingsCore — provider error handling", () => {
 
     expect(result.success).toBe(false);
     expect(result.status).toBe(502);
-    expect(result.error).toMatch(/ECONNREFUSED/);
+    expect(result.error).not.toMatch(/ECONNREFUSED/);
+    expect(result.error).toBe("[502]: Upstream provider request failed");
   });
 
   it("invalid JSON from provider → returns 502", async () => {

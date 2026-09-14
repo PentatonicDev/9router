@@ -1,3 +1,6 @@
+import { createErrorContext, errorResponse, withRequestId } from "open-sse/utils/error.js";
+import { FORMATS } from "open-sse/translator/formats.js";
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -73,22 +76,20 @@ export function estimateAnthropicInputTokens(body = {}) {
  * POST /v1/messages/count_tokens - Mock token count response
  */
 export async function POST(request) {
+  const errorContext = createErrorContext(request, FORMATS.CLAUDE);
   let body;
   try {
     body = await request.json();
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json", ...CORS_HEADERS }
-    });
+    return errorResponse(400, "Invalid JSON body", errorContext);
   }
 
   const inputTokens = estimateAnthropicInputTokens(body);
 
-  return new Response(JSON.stringify({
+  return withRequestId(new Response(JSON.stringify({
     input_tokens: inputTokens
   }), {
     headers: { "Content-Type": "application/json", ...CORS_HEADERS }
-  });
+  }), errorContext);
 }
 

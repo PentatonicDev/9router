@@ -9,6 +9,13 @@ import { getSettings } from "@/lib/localDb";
 import { PROVIDER_MODELS } from "@/shared/constants/models";
 import { GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS } from "open-sse/config/runtimeConfig.js";
 import { initTranslators } from "open-sse/translator/index.js";
+import {
+  createErrorContext,
+  errorResponse,
+  parseUpstreamError,
+  responseFromRoutingCandidate,
+} from "open-sse/utils/error.js";
+import { FORMATS } from "open-sse/translator/formats.js";
 
 let initialized = false;
 const GEMINI_NATIVE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -52,6 +59,7 @@ export async function OPTIONS() {
  */
 export async function POST(request, { params }) {
   await ensureInitialized();
+  const errorContext = createErrorContext(request, FORMATS.GEMINI);
 
   try {
     const { path } = await params;
@@ -82,10 +90,15 @@ export async function POST(request, { params }) {
         .replace(":generateContent", "");
     }
 
-    const body = await request.json();
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return errorResponse(400, "Invalid JSON body", errorContext);
+    }
 
     if (isGeminiNativeTtsRequest(model, body)) {
-      return await forwardGeminiNativeRequest(request, body, model, action);
+      return await forwardGeminiNativeRequest(request, body, model, action, errorContext);
     }
 
     // Streaming is determined by URL action suffix:
@@ -103,7 +116,7 @@ export async function POST(request, { params }) {
       body: JSON.stringify(convertedBody),
     });
 
-    const response = await handleChat(newRequest);
+    const response = await handleChat(newRequest, null, errorContext);
 
     if (stream) {
       // Transform OpenAI SSE => Gemini SSE on the fly.
@@ -116,10 +129,7 @@ export async function POST(request, { params }) {
     }
   } catch (error) {
     console.log("Error handling Gemini request:", error);
-    return Response.json(
-      { error: { message: error.message, code: 500 } },
-      { status: 500 }
-    );
+    return errorResponse(500, error?.message || "Internal server error", errorContext);
   }
 }
 
@@ -177,18 +187,18 @@ function buildGeminiNativeUrl(requestUrl, model, action) {
   return upstreamUrl.toString();
 }
 
-async function validateGeminiNativeClientKey(request) {
+async function validateGeminiNativeClientKey(request, errorContext) {
   const settings = await getSettings();
   if (!settings.requireApiKey) return null;
 
   const apiKey = extractGeminiClientApiKey(request);
   if (!apiKey) {
-    return Response.json({ error: { message: "Missing API key" } }, { status: 401 });
+    return errorResponse(401, "Missing API key", errorContext);
   }
 
   const valid = await isValidApiKey(apiKey);
   if (!valid) {
-    return Response.json({ error: { message: "Invalid API key" } }, { status: 401 });
+    return errorResponse(401, "Invalid API key", errorContext);
   }
 
   return null;
@@ -235,35 +245,32 @@ function getSafeGeminiNativeErrorText(error) {
   return `${message} (${code})`;
 }
 
-async function forwardGeminiNativeRequest(request, body, model, action) {
-  const authError = await validateGeminiNativeClientKey(request);
+async function forwardGeminiNativeRequest(request, body, model, action, errorContext) {
+  const authError = await validateGeminiNativeClientKey(request, errorContext);
   if (authError) return authError;
 
   const modelId = normalizeGeminiNativeModel(model);
   if (!GEMINI_NATIVE_MODEL_PATTERN.test(modelId)) {
-    return Response.json({ error: { message: "Invalid model" } }, { status: 400 });
+    return errorResponse(400, "Invalid model", errorContext);
   }
   const excludeConnectionIds = new Set();
   const bodyText = JSON.stringify(body);
-  let lastError = null;
-  let lastStatus = null;
-
   while (true) {
     const credentials = await getProviderCredentials("gemini", excludeConnectionIds, modelId);
-    if (!credentials || credentials.allRateLimited) {
-      console.log(`[GEMINI_NATIVE] exhausted model=${modelId} status=${lastStatus || Number(credentials?.lastErrorCode) || 503} error=${lastError || credentials?.lastError || "No active credentials for provider: gemini"}`);
-      return Response.json(
-        { error: { message: lastError || credentials?.lastError || "No active credentials for provider: gemini" } },
-        { status: lastStatus || Number(credentials?.lastErrorCode) || 503 }
-      );
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+      console.log(`[GEMINI_NATIVE] exhausted model=${modelId} status=${credentials.candidate.status} error=${credentials.candidate.message}`);
+      return responseFromRoutingCandidate(credentials.candidate, errorContext);
     }
 
     const authHeaders = buildGeminiNativeAuthHeaders(credentials);
     if (!authHeaders) {
-      return Response.json(
-        { error: { message: "No Gemini API key configured" } },
-        { status: 404 }
-      );
+      return errorResponse(503, "No active credentials for provider: gemini", {
+        ...errorContext,
+        reason: "no_active_credentials",
+        provider: "gemini",
+        model: modelId,
+        retryable: false,
+      });
     }
 
     const safeConnection = getSafeGeminiConnectionLabel(credentials);
@@ -279,7 +286,7 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
 
     if (request.signal?.aborted) {
       console.log(`[GEMINI_NATIVE] client aborted model=${modelId} ms=0 conn=${safeConnection}`);
-      return Response.json({ error: { message: "Client closed request" } }, { status: 499 });
+      return errorResponse(499, "Client closed request", errorContext);
     }
 
     request.signal?.addEventListener("abort", abortAttempt, { once: true });
@@ -300,7 +307,7 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
       const durationMs = Date.now() - startedAt;
       if (request.signal?.aborted && !timedOut) {
         console.log(`[GEMINI_NATIVE] client aborted model=${modelId} ms=${durationMs} conn=${safeConnection}`);
-        return Response.json({ error: { message: "Client closed request" } }, { status: 499 });
+        return errorResponse(499, "Client closed request", errorContext);
       }
 
       const status = isGeminiNativeTimeoutError(error, timedOut) ? 504 : 502;
@@ -317,13 +324,15 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
 
       if (shouldFallback) {
         excludeConnectionIds.add(credentials.connectionId);
-        lastError = errorText;
-        lastStatus = status;
         console.log(`[GEMINI_NATIVE] fallback model=${modelId} status=${status} conn=${safeConnection} exclude=${excludeConnectionIds.size}`);
         continue;
       }
 
-      return Response.json({ error: { message: errorText } }, { status });
+      return errorResponse(status, errorText, {
+        ...errorContext,
+        provider: "gemini",
+        model: modelId,
+      });
     } finally {
       clearTimeout(timeout);
       request.signal?.removeEventListener("abort", abortAttempt);
@@ -340,26 +349,27 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
       });
     }
 
-    const errorText = await upstreamResponse.text();
+    const parsedError = await parseUpstreamError(upstreamResponse.clone());
+    const errorText = parsedError.message;
     const { shouldFallback } = await markAccountUnavailable(
       credentials.connectionId,
-      upstreamResponse.status,
+      parsedError.statusCode,
       errorText,
       "gemini",
-      modelId
+      modelId,
+      parsedError.resetsAtMs
     );
 
     if (shouldFallback) {
       excludeConnectionIds.add(credentials.connectionId);
-      lastError = errorText;
-      lastStatus = upstreamResponse.status;
       continue;
     }
 
-    return new Response(errorText, {
-      status: upstreamResponse.status,
-      statusText: upstreamResponse.statusText,
-      headers: corsHeadersFrom(upstreamResponse),
+    return errorResponse(parsedError.statusCode, errorText, {
+      ...errorContext,
+      provider: "gemini",
+      model: modelId,
+      retryAtMs: parsedError.resetsAtMs,
     });
   }
 }

@@ -5,7 +5,7 @@ import {
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { handleSttCore } from "open-sse/handlers/sttCore.js";
-import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
+import { errorResponse, responseFromRoutingCandidate } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import * as log from "../utils/logger.js";
@@ -60,14 +60,8 @@ export async function handleStt(request) {
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
 
-    if (!credentials || credentials.allRateLimited) {
-      if (credentials?.allRateLimited) {
-        const msg = lastError || credentials.lastError || "Unavailable";
-        const status = lastStatus || Number(credentials.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE;
-        return unavailableResponse(status, `[${provider}/${model}] ${msg}`, credentials.retryAfter, credentials.retryAfterHuman);
-      }
-      if (excludeConnectionIds.size === 0) return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
-      return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable");
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+      return responseFromRoutingCandidate(credentials.candidate);
     }
 
     log.info("AUTH", `\x1b[32mUsing ${provider} account: ${credentials.connectionName}\x1b[0m`);

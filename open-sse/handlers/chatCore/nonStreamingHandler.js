@@ -160,7 +160,7 @@ function toOpenAICompletion(responseBody, targetFormat) {
 /**
  * Handle non-streaming response from provider.
  */
-export async function handleNonStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log }) {
+export async function handleNonStreamingResponse({ providerResponse, provider, errorContext, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log }) {
   trackDone();
   const contentType = providerResponse.headers.get("content-type") || "";
   let responseBody;
@@ -170,7 +170,7 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
     const parsed = parseSSEToOpenAIResponse(sseText, model);
     if (!parsed) {
       appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
-      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
+      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request", undefined, errorContext);
     }
     responseBody = parsed;
   } else {
@@ -179,7 +179,7 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
     } catch (err) {
       appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
       console.error(`[ChatCore] Failed to parse JSON from ${provider}:`, err.message);
-      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, `Invalid JSON response from ${provider}`);
+      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, `Invalid JSON response from ${provider}`, undefined, errorContext);
     }
   }
 

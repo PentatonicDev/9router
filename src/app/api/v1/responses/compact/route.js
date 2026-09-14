@@ -1,5 +1,7 @@
 import { handleChat } from "@/sse/handlers/chat.js";
 import { initTranslators } from "open-sse/translator/index.js";
+import { createErrorContext, errorResponse } from "open-sse/utils/error.js";
+import { FORMATS } from "open-sse/translator/formats.js";
 
 let initialized = false;
 
@@ -26,12 +28,18 @@ export async function OPTIONS() {
  */
 export async function POST(request) {
   await ensureInitialized();
-  const body = await request.json();
+  const errorContext = createErrorContext(request, FORMATS.OPENAI_RESPONSES);
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse(400, "Invalid JSON body", errorContext);
+  }
   body._compact = true;
   const newRequest = new Request(request.url, {
     method: "POST",
     headers: request.headers,
     body: JSON.stringify(body)
   });
-  return await handleChat(newRequest);
+  return await handleChat(newRequest, null, errorContext);
 }

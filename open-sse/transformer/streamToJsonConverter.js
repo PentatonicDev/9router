@@ -34,8 +34,9 @@ function processSSEMessage(msg, state) {
       state.usage.output_tokens = parsed.response.usage.output_tokens || 0;
       state.usage.total_tokens = parsed.response.usage.total_tokens || 0;
     }
-  } else if (eventType === "response.failed") {
+  } else if (eventType === "response.failed" || eventType === "error") {
     state.status = "failed";
+    state.error = state.error || parsed.response?.error || parsed.error || parsed;
   }
 }
 
@@ -48,7 +49,7 @@ const EMPTY_RESPONSE = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
  */
 export async function convertResponsesStreamToJson(stream) {
   if (!stream || typeof stream.getReader !== "function") {
-    return { id: `resp_${Date.now()}`, object: "response", created_at: Math.floor(Date.now() / 1000), status: "failed", output: [], usage: { ...EMPTY_RESPONSE } };
+    return { id: `resp_${Date.now()}`, object: "response", created_at: Math.floor(Date.now() / 1000), status: "failed", error: { message: "Upstream returned no stream body" }, output: [], usage: { ...EMPTY_RESPONSE } };
   }
 
   const reader = stream.getReader();
@@ -59,6 +60,7 @@ export async function convertResponsesStreamToJson(stream) {
     responseId: "",
     created: Math.floor(Date.now() / 1000),
     status: "in_progress",
+    error: null,
     usage: { ...EMPTY_RESPONSE },
     items: new Map()
   };
@@ -97,6 +99,7 @@ export async function convertResponsesStreamToJson(stream) {
     object: "response",
     created_at: state.created,
     status: state.status || "completed",
+    ...(state.error ? { error: state.error } : {}),
     output,
     usage: state.usage
   };

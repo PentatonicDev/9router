@@ -82,3 +82,19 @@ describe("Anthropic count_tokens estimator", () => {
     expect(result.input_tokens).toBeGreaterThan(0);
   });
 });
+
+it("returns the Anthropic error envelope and matching request id for invalid JSON", async () => {
+  const response = await POST(new Request("https://9router.local/v1/messages/count_tokens", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{",
+  }));
+  const body = await response.json();
+
+  expect(response.status).toBe(400);
+  expect(body).toMatchObject({
+    type: "error",
+    error: { type: "invalid_request_error", message: "Invalid JSON body" },
+  });
+  expect(response.headers.get("request-id")).toBe(body.request_id);
+});

@@ -11,6 +11,7 @@ const OPTIONAL_FIELDS = [
 ];
 
 const MODEL_LOCK_PREFIX = "modelLock_";
+const MODEL_LOCK_META_PREFIX = "modelLockMeta_";
 
 function resetHealthStateOnActivation(existing, patch) {
   if (patch?.testStatus !== "active") return patch;
@@ -26,7 +27,7 @@ function resetHealthStateOnActivation(existing, patch) {
   };
 
   for (const key of Object.keys(existing || {})) {
-    if (key.startsWith(MODEL_LOCK_PREFIX)) normalized[key] = null;
+    if (key.startsWith(MODEL_LOCK_PREFIX) || key.startsWith(MODEL_LOCK_META_PREFIX)) normalized[key] = null;
   }
 
   return normalized;

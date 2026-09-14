@@ -188,6 +188,7 @@ export class GithubExecutor extends BaseExecutor {
 
     const decoder = new TextDecoder();
     let buffer = "";
+    let errored = false; // an error frame was emitted: no success terminal may follow
 
     const transformStream = new TransformStream({
       async transform(chunk, controller) {
@@ -197,6 +198,7 @@ export class GithubExecutor extends BaseExecutor {
         buffer = lines.pop() || "";
 
         for (const line of lines) {
+          if (errored) break;
           const trimmed = line.trim();
           if (!trimmed) continue;
 
@@ -210,12 +212,14 @@ export class GithubExecutor extends BaseExecutor {
 
           const converted = openaiResponsesToOpenAIResponse(parsed, state);
           if (converted) {
+            if (converted.error) errored = true;
             const sseString = formatSSE(converted, "openai");
             controller.enqueue(new TextEncoder().encode(sseString));
           }
         }
       },
       flush(controller) {
+        if (errored) return;
         if (buffer.trim()) {
           const parsed = parseSSELine(buffer.trim());
           if (parsed && !parsed.done) {
@@ -314,6 +318,7 @@ export class GithubExecutor extends BaseExecutor {
         }
       },
       flush(controller) {
+        if (errored) return;
         if (buffer.trim()) {
           const parsed = parseSSELine(buffer.trim());
           if (parsed && !parsed.done) {

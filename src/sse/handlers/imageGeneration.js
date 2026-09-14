@@ -8,7 +8,7 @@ import {
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleImageGenerationCore } from "open-sse/handlers/imageGenerationCore.js";
-import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
+import { errorResponse, responseFromRoutingCandidate } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat } from "open-sse/services/combo.js";
@@ -93,16 +93,8 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId });
 
-    if (!credentials || credentials.allRateLimited) {
-      if (credentials?.allRateLimited) {
-        const errorMsg = lastError || credentials.lastError || "Unavailable";
-        const status = lastStatus || Number(credentials.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE;
-        return unavailableResponse(status, `[${provider}/${model}] ${errorMsg}`, credentials.retryAfter, credentials.retryAfterHuman);
-      }
-      if (excludeConnectionIds.size === 0) {
-        return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
-      }
-      return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable");
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+      return responseFromRoutingCandidate(credentials.candidate);
     }
 
     const refreshedCredentials = await checkAndRefreshToken(provider, credentials);

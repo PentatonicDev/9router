@@ -80,16 +80,10 @@ function convertProviderEvent(provider, event, state) {
   return event;
 }
 
-function createErrorChunk(model, message) {
-  return {
-    id: `chatcmpl-zed-error-${Date.now()}`,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [
-      { index: 0, delta: { content: `[Zed error] ${message}` }, finish_reason: "stop" },
-    ],
-  };
+// An OpenAI error frame, not a completion delta: stream.js picks `error` up and
+// reframes it for the client format. A finish_reason here would claim the turn ended.
+function createErrorChunk(message) {
+  return { error: { type: "api_error", message } };
 }
 
 function enqueueSseObject(controller, encoder, chunk) {
@@ -161,8 +155,8 @@ function wrapZedCompletionStream(response, provider, model) {
       if (status?.type === "failed" || status?.failed) {
         const failed = status.failed || status;
         const message = String(failed.message || failed.error || failed.code || "request failed");
-        enqueueSseObject(controller, encoder, createErrorChunk(model, message));
-        finish(controller);
+        enqueueSseObject(controller, encoder, createErrorChunk(message));
+        done = true; // nothing may follow an error frame
       } else if (status?.type === "stream_ended" || status === "stream_ended") {
         finish(controller);
       }
