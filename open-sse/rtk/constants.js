@@ -39,6 +39,11 @@ export const SEARCH_LIST_TOTAL_DIR_MAX = 20;
 export const SMART_TRUNCATE_HEAD = 120;        // lines kept from top
 export const SMART_TRUNCATE_TAIL = 60;         // lines kept from bottom
 export const SMART_TRUNCATE_MIN_LINES = 250;   // only kick in above this
+// Line count alone never fires on minified JSON or a wall of prose: they are one
+// line however many KB they carry. Size is the cost that matters, so a big blob
+// qualifies on bytes too.
+export const SMART_TRUNCATE_MIN_BYTES = 24 * 1024;
+export const SMART_TRUNCATE_MAX_BYTES = 16 * 1024;  // kept when truncating by size
 
 // readNumbered (files with "  N|content" lines, e.g. Cursor read_file)
 export const READ_NUMBERED_MIN_HIT_RATIO = 0.7;

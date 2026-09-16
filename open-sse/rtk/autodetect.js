@@ -1,7 +1,7 @@
 // Port of auto_detect_filter (rtk/src/cmds/system/pipe_cmd.rs:132-188) + JS extras
 // Detection order: git-log → git-diff → git-status → build-output → grep → find → tree → ls → search-list
 //                  → read-numbered → dedup-log → smart-truncate → null
-import { DETECT_WINDOW, READ_NUMBERED_MIN_HIT_RATIO, SMART_TRUNCATE_MIN_LINES } from "./constants.js";
+import { DETECT_WINDOW, READ_NUMBERED_MIN_HIT_RATIO, SMART_TRUNCATE_MIN_LINES, SMART_TRUNCATE_MIN_BYTES } from "./constants.js";
 import { gitDiff } from "./filters/gitDiff.js";
 import { gitStatus } from "./filters/gitStatus.js";
 import { gitLog } from "./filters/gitLog.js";
@@ -65,8 +65,10 @@ export function autoDetectFilter(text) {
   // Fallback: dedupLog for generic multi-line noise with duplicates
   if (nonEmpty.length >= 5) return dedupLog;
 
-  // Last resort: big blob with no structure — smart truncate
+  // Last resort: big blob with no structure — smart truncate. Size counts as well
+  // as line count, or minified JSON and long prose (one line, many KB) slip past.
   if (text.split("\n").length >= SMART_TRUNCATE_MIN_LINES) return smartTruncate;
+  if (text.length >= SMART_TRUNCATE_MIN_BYTES) return smartTruncate;
 
   return null;
 }

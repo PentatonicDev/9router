@@ -16,6 +16,8 @@
 - **Auth**: designated admin e-mails only apply while SSO is the only login. Switching back to password or both makes the password the admin again and leaves the list dormant rather than clearing it, so returning to SSO-only restores it
 
 ## Fixes
+- **Token saver**: RTK's last-resort truncation only fired above 250 *lines*, so a minified JSON payload or a wall of prose — one line however many KB — went upstream untouched. It now also triggers on size, which is what actually costs tokens
+- **Token saver**: RTK and Headroom are coordinated instead of stacked. Both targeted tool output, RTK ran first, and whatever it rewrote reached Headroom already small, so the second pass paid latency for little gain. Each block now goes to one of them: RTK reshapes structured output (git, grep, ls, tree, logs) losslessly in-process, Headroom takes the unstructured text RTK cannot read. If Headroom does not deliver — timeout, proxy down — the deferred blocks are compressed by RTK rather than sent at full size, so coordination is never worse than either alone
 - **Usage**: record the API key on request details — the Details tab showed "Local (no key)" for every request because the four `saveRequestDetail` call sites never passed it, while the usage history recorded it correctly
 - **Usage**: keys issued by one instance share a machineId-derived prefix, so masking on the prefix alone collapsed them into one label and attributed requests to the wrong key; the masked form now keeps a distinguishing tail
 - **Settings**: `PATCH /api/settings` requires admin while scoping is on — any logged-in user could otherwise turn off their own restriction, or change auth mode, SSO config and `requireApiKey`

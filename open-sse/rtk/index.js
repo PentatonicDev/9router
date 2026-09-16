@@ -3,11 +3,17 @@
 import { RAW_CAP, MIN_COMPRESS_SIZE } from "./constants.js";
 import { autoDetectFilter } from "./autodetect.js";
 import { safeApply } from "./applyFilter.js";
+import { routeBlock } from "./route.js";
+
+// Set per call so compressText can route without threading an argument through
+// every shape branch. Single-threaded request handling, reset on entry.
+let routingContext = { rtkEnabled: true, headroomEnabled: false };
 
 // Compress tool_result content in-place. Returns stats or null if disabled/failed.
-export function compressMessages(body, enabled) {
+export function compressMessages(body, enabled, { headroomEnabled = false } = {}) {
   if (!enabled) return null;
   if (!body) return null;
+  routingContext = { rtkEnabled: true, headroomEnabled };
 
   // Kiro format: conversationState.history + conversationState.currentMessage
   if (body.conversationState) {
@@ -126,6 +132,14 @@ function compressText(text, stats, shape) {
     return text;
   }
 
+  // Structured output is RTK's; unstructured text is left for Headroom, which
+  // reads it semantically instead of cutting it by line.
+  if (routeBlock(text, routingContext) !== "rtk") {
+    stats.bytesAfter += bytesIn;
+    stats.deferred = (stats.deferred || 0) + 1;
+    return text;
+  }
+
   const fn = autoDetectFilter(text);
   if (!fn) {
     stats.bytesAfter += bytesIn;
@@ -143,6 +157,19 @@ function compressText(text, stats, shape) {
   stats.bytesAfter += out.length;
   stats.hits.push({ shape, filter: fn.filterName || fn.name, saved: bytesIn - out.length });
   return out;
+}
+
+/**
+ * Compress what was deferred to Headroom when Headroom did not deliver.
+ *
+ * Coordination only pays off if the second pass actually runs: a timeout or a
+ * proxy that is down would otherwise send the deferred blocks upstream at full
+ * size — worse than never having coordinated. Runs RTK over the body with no
+ * deferral, so every block gets its best available compressor.
+ */
+export function compressDeferred(body, enabled) {
+  if (!enabled || !body) return null;
+  return compressMessages(body, true, { headroomEnabled: false });
 }
 
 // Convenience: format a log line from stats
