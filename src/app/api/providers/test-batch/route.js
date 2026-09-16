@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
 import { getProviderConnections } from "@/models";
 import {
   FREE_PROVIDERS,
@@ -49,7 +50,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "mode is required" }, { status: 400 });
     }
 
-    const allConnections = await getProviderConnections({ isActive: true });
+    const allConnections = scopeVisible(await getProviderConnections({ isActive: true }), await getScopeFilter());
 
     let connectionsToTest = [];
     if (mode === "provider" && providerId) {

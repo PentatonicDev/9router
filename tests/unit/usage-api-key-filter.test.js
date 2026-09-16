@@ -38,8 +38,8 @@ describe("usage stats — API key filter", () => {
   it("narrows totals and rows to one key", async () => {
     const stats = await usageRepo.getUsageStats("today", { apiKey: KEY_A });
     expect(stats.totalPromptTokens).toBe(300);
-    expect(keyNames(stats)).toEqual(["sk-aaaaa***"]);
-    expect(stats.recentRequests.every((r) => r.apiKeyMasked === "sk-aaaaa***")).toBe(true);
+    expect(keyNames(stats)).toEqual(["sk-aaaaa***aaaa"]);
+    expect(stats.recentRequests.every((r) => r.apiKeyMasked === "sk-aaaaa***aaaa")).toBe(true);
   });
 
   // A longer period would normally read the key-less daily rollups; with a key
@@ -47,7 +47,7 @@ describe("usage stats — API key filter", () => {
   it("still filters on a period that would use daily rollups", async () => {
     const stats = await usageRepo.getUsageStats("7d", { apiKey: KEY_B });
     expect(stats.totalPromptTokens).toBe(400);
-    expect(keyNames(stats)).toEqual(["sk-bbbbb***"]);
+    expect(keyNames(stats)).toEqual(["sk-bbbbb***bbbb"]);
   });
 
   it("never returns the raw key", async () => {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
 import { getProviderConnections } from "@/lib/localDb";
 
 const MINIMAX_VOICE_ENDPOINTS = {
@@ -69,7 +70,7 @@ export async function GET(request) {
     const voiceType = searchParams.get("voice_type") || "all";
     const langFilter = searchParams.get("lang");
 
-    const connections = await getProviderConnections({ provider, isActive: true });
+    const connections = scopeVisible(await getProviderConnections({ provider, isActive: true }), await getScopeFilter());
     const apiKey = connections[0]?.apiKey;
     if (!apiKey) {
       return NextResponse.json({ error: `No ${provider} connection found` }, { status: 400 });

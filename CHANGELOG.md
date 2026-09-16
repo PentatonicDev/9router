@@ -1,3 +1,18 @@
+# v0.5.76 (2026-09-16)
+
+## Features
+- **Auth**: per-user resource scoping, toggled from the SSO settings ("Restrict accounts and API keys per user"). Each account, API key and combo carries an `owner` — unowned resources stay shared with everyone, `@admin` keeps one to the password login, and an SSO user only sees, manages and routes through their own plus the shared ones. Admins see everything with the owner shown, and can reassign it. Turning the toggle off preserves every assignment: it only stops enforcing them
+- **Auth**: designated admin e-mails (`ssoAdminEmails`) for SSO-only instances, where password login is unavailable and there would otherwise be no administrator. Admin is a session privilege, not an identity — an SSO admin keeps their own resources when the privilege is removed. Recovery stays with the CLI's "Reset Auth Mode to Password"
+- **Combos**: combo names are now unique per owner, so two users can each keep a combo of the same name; a shared combo is usable by everyone but only an admin can edit it
+- **Login**: SSO-only instances redirect straight to the identity provider instead of showing a single button (an `?error=` in the URL still shows the failure rather than looping)
+
+## Fixes
+- **Usage**: record the API key on request details — the Details tab showed "Local (no key)" for every request because the four `saveRequestDetail` call sites never passed it, while the usage history recorded it correctly
+- **Usage**: keys issued by one instance share a machineId-derived prefix, so masking on the prefix alone collapsed them into one label and attributed requests to the wrong key; the masked form now keeps a distinguishing tail
+- **Settings**: `PATCH /api/settings` requires admin while scoping is on — any logged-in user could otherwise turn off their own restriction, or change auth mode, SSO config and `requireApiKey`
+- **Headroom**: open the panel on remote instances. `/api/headroom/proxy` was grouped with the process-spawning `start`/`stop` routes as local-only, so it answered "Local only: CLI token required" wherever the peer was not loopback; it only forwards HTTP and already drops cookies and credentials for non-loopback targets
+- **Dashboard**: fix the API key list running its name, creation date and bindings together (the date is now a small label beside the name), and drop the 9Remote and 9English sidebar entries
+
 # v0.5.75 (2026-09-10)
 
 ## Features

@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { normalizeOwnerInput, resolveDefaultOwner } from "@/lib/auth/resourceScope";
 
 function rowToCombo(row) {
   if (!row) return null;
@@ -9,6 +10,7 @@ function rowToCombo(row) {
     name: row.name,
     kind: row.kind,
     models: parseJson(row.models, []),
+    owner: row.owner ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -26,9 +28,20 @@ export async function getComboById(id) {
   return rowToCombo(row);
 }
 
-export async function getComboByName(name) {
+/**
+ * Resolve a combo by name. With an owner given, that user's own combo wins over
+ * the shared one of the same name — which is what lets two users each keep a
+ * combo called "fast". Without an owner, only shared combos resolve.
+ */
+export async function getComboByName(name, owner = undefined) {
   const db = await getAdapter();
-  const row = db.get(`SELECT * FROM combos WHERE name = ?`, [name]);
+  if (owner === undefined) {
+    const row = db.get(`SELECT * FROM combos WHERE name = ?`, [name]);
+    return rowToCombo(row);
+  }
+  const row = owner === null
+    ? db.get(`SELECT * FROM combos WHERE name = ? AND owner IS NULL`, [name])
+    : db.get(`SELECT * FROM combos WHERE name = ? AND (owner = ? OR owner IS NULL) ORDER BY owner IS NULL LIMIT 1`, [name, owner]);
   return rowToCombo(row);
 }
 
@@ -40,12 +53,13 @@ export async function createCombo(data) {
     name: data.name,
     kind: data.kind || null,
     models: data.models || [],
+    owner: data.owner === undefined ? await resolveDefaultOwner() : normalizeOwnerInput(data.owner),
     createdAt: now,
     updatedAt: now,
   };
   db.run(
-    `INSERT INTO combos(id, name, kind, models, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)`,
-    [combo.id, combo.name, combo.kind, stringifyJson(combo.models), combo.createdAt, combo.updatedAt]
+    `INSERT INTO combos(id, name, kind, models, owner, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+    [combo.id, combo.name, combo.kind, stringifyJson(combo.models), combo.owner, combo.createdAt, combo.updatedAt]
   );
   return combo;
 }
@@ -58,8 +72,8 @@ export async function updateCombo(id, data) {
     if (!row) return;
     const merged = { ...rowToCombo(row), ...data, updatedAt: new Date().toISOString() };
     db.run(
-      `UPDATE combos SET name = ?, kind = ?, models = ?, updatedAt = ? WHERE id = ?`,
-      [merged.name, merged.kind, stringifyJson(merged.models || []), merged.updatedAt, id]
+      `UPDATE combos SET name = ?, kind = ?, models = ?, owner = ?, updatedAt = ? WHERE id = ?`,
+      [merged.name, merged.kind, stringifyJson(merged.models || []), merged.owner ?? null, merged.updatedAt, id]
     );
     result = merged;
   });

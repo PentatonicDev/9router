@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../../src/lib/localDb.js", () => ({
   getProviderConnections: vi.fn(),
+  // The route resolves the caller's resource scope, which reads settings.
+  getSettings: vi.fn(async () => ({ scopeResourcesByUser: false })),
+  getApiKeys: vi.fn(async () => []),
 }));
 
 import { getProviderConnections } from "../../src/lib/localDb.js";

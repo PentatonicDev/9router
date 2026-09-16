@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { normalizeOwnerInput, resolveDefaultOwner } from "@/lib/auth/resourceScope";
 
 const OPTIONAL_FIELDS = [
   "displayName", "email", "globalPriority", "defaultModel",
@@ -45,13 +46,14 @@ function rowToConn(row) {
     email: row.email,
     priority: row.priority,
     isActive: row.isActive === 1 || row.isActive === true,
+    owner: row.owner ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
 function connToRow(c) {
-  const { id, provider, authType, name, email, priority, isActive, createdAt, updatedAt, ...rest } = c;
+  const { id, provider, authType, name, email, priority, isActive, owner, createdAt, updatedAt, ...rest } = c;
   return {
     id,
     provider,
@@ -60,6 +62,7 @@ function connToRow(c) {
     email: email ?? null,
     priority: priority ?? null,
     isActive: isActive === false ? 0 : 1,
+    owner: owner ?? null,
     data: stringifyJson(rest),
     createdAt,
     updatedAt,
@@ -69,13 +72,13 @@ function connToRow(c) {
 function upsert(db, c) {
   const r = connToRow(c);
   db.run(
-    `INSERT INTO providerConnections(id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO providerConnections(id, provider, authType, name, email, priority, isActive, owner, data, createdAt, updatedAt)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        provider=excluded.provider, authType=excluded.authType, name=excluded.name,
        email=excluded.email, priority=excluded.priority, isActive=excluded.isActive,
-       data=excluded.data, updatedAt=excluded.updatedAt`,
-    [r.id, r.provider, r.authType, r.name, r.email, r.priority, r.isActive, r.data, r.createdAt, r.updatedAt]
+       owner=excluded.owner, data=excluded.data, updatedAt=excluded.updatedAt`,
+    [r.id, r.provider, r.authType, r.name, r.email, r.priority, r.isActive, r.owner, r.data, r.createdAt, r.updatedAt]
   );
 }
 
@@ -96,6 +99,8 @@ export async function getProviderConnections(filter = {}) {
   const params = [];
   if (filter.provider) { where.push("provider = ?"); params.push(filter.provider); }
   if (filter.isActive !== undefined) { where.push("isActive = ?"); params.push(filter.isActive ? 1 : 0); }
+  // Shared accounts (owner IS NULL) stay in everyone's pool.
+  if (filter.owner !== undefined) { where.push("(owner IS NULL OR owner = ?)"); params.push(filter.owner); }
   const sql = `SELECT * FROM providerConnections${where.length ? ` WHERE ${where.join(" AND ")}` : ""}`;
   const rows = db.all(sql, params);
   const list = rows.map(rowToConn);
@@ -125,6 +130,9 @@ function reorderInTx(db, providerId) {
 export async function createProviderConnection(data) {
   const db = await getAdapter();
   const now = new Date().toISOString();
+  // Resolved here rather than at the ~23 call sites that create connections
+  // (OAuth flows, bulk imports): a new one would otherwise be world-visible.
+  const owner = data.owner === undefined ? await resolveDefaultOwner() : normalizeOwnerInput(data.owner);
   let result;
 
   db.transaction(() => {
@@ -171,7 +179,8 @@ export async function createProviderConnection(data) {
 
     if (existing) {
       const normalized = resetHealthStateOnActivation(existing, data);
-      const merged = { ...existing, ...normalized, updatedAt: now };
+      // Re-login / re-import must not silently reassign an existing account.
+      const merged = { ...existing, ...normalized, owner: existing.owner ?? null, updatedAt: now };
       upsert(db, merged);
       result = merged;
       return;
@@ -193,6 +202,7 @@ export async function createProviderConnection(data) {
       name: connectionName,
       priority: connectionPriority,
       isActive: data.isActive !== undefined ? data.isActive : true,
+      owner,
       createdAt: now,
       updatedAt: now,
     };

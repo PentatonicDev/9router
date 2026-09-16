@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/localDb", () => ({
   getProviderConnectionById: mocks.getProviderConnectionById,
   getApiKeys: mocks.getApiKeys,
+  getProviderConnections: vi.fn(async () => []),
+  getSettings: vi.fn(async () => ({ scopeResourcesByUser: false })),
 }));
 
 vi.mock("@/shared/utils/machineId", () => ({

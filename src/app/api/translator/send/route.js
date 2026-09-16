@@ -1,4 +1,5 @@
 import { getProviderConnections, updateProviderConnection } from "@/lib/localDb.js";
+import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
 import { getExecutor } from "open-sse/index.js";
 
 async function persistRefreshedCredentials(connection, newCredentials) {
@@ -40,7 +41,7 @@ export async function POST(request) {
       return Response.json({ success: false, error: "provider, model, and body required" }, { status: 400 });
     }
 
-    const connections = await getProviderConnections({ provider });
+    const connections = scopeVisible(await getProviderConnections({ provider }), await getScopeFilter());
     const connection = connections.find(c => c.isActive !== false);
     if (!connection) {
       return Response.json({ success: false, error: `No active connection for provider: ${provider}` }, { status: 400 });

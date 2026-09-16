@@ -31,6 +31,7 @@ export {
 export {
   getApiKeys, getApiKeyById, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
   getApiKeyAllowedConnectionIds,
+  getApiKeyOwner,
 } from "./repos/apiKeysRepo.js";
 
 // Combos
@@ -75,11 +76,11 @@ export async function exportDb() {
 
   const out = {
     settings: await exportSettings(),
-    providerConnections: db.all(`SELECT * FROM providerConnections`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, provider: r.provider, authType: r.authType, name: r.name, email: r.email, priority: r.priority, isActive: r.isActive === 1, createdAt: r.createdAt, updatedAt: r.updatedAt })),
+    providerConnections: db.all(`SELECT * FROM providerConnections`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, provider: r.provider, authType: r.authType, name: r.name, email: r.email, priority: r.priority, isActive: r.isActive === 1, owner: r.owner ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     providerNodes: db.all(`SELECT * FROM providerNodes`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, type: r.type, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     proxyPools: db.all(`SELECT * FROM proxyPools`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, isActive: r.isActive === 1, testStatus: r.testStatus, createdAt: r.createdAt, updatedAt: r.updatedAt })),
-    apiKeys: db.all(`SELECT * FROM apiKeys`).map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1, allowedConnectionIds: parseJson(r.allowedConnectionIds, null), tags: parseJson(r.tags, null), createdAt: r.createdAt })),
-    combos: db.all(`SELECT * FROM combos`).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), createdAt: r.createdAt, updatedAt: r.updatedAt })),
+    apiKeys: db.all(`SELECT * FROM apiKeys`).map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1, allowedConnectionIds: parseJson(r.allowedConnectionIds, null), tags: parseJson(r.tags, null), owner: r.owner ?? null, createdAt: r.createdAt })),
+    combos: db.all(`SELECT * FROM combos`).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), owner: r.owner ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     modelAliases: {},
     customModels: [],
     mitmAlias: {},
@@ -116,10 +117,10 @@ export async function importDb(payload) {
     }
 
     for (const c of payload.providerConnections || []) {
-      const { id, provider, authType, name, email, priority, isActive, createdAt, updatedAt, ...rest } = c;
+      const { id, provider, authType, name, email, priority, isActive, owner, createdAt, updatedAt, ...rest } = c;
       db.run(
-        `INSERT OR REPLACE INTO providerConnections(id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, provider, authType || "oauth", name || null, email || null, priority || null, isActive === false ? 0 : 1, stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]
+        `INSERT OR REPLACE INTO providerConnections(id, provider, authType, name, email, priority, isActive, owner, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, provider, authType || "oauth", name || null, email || null, priority || null, isActive === false ? 0 : 1, owner ?? null, stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]
       );
     }
     for (const n of payload.providerNodes || []) {
@@ -138,17 +139,18 @@ export async function importDb(payload) {
     }
     for (const k of payload.apiKeys || []) {
       db.run(
-        `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, allowedConnectionIds, tags, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, allowedConnectionIds, tags, owner, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [k.id, k.key, k.name || null, k.machineId || null, k.isActive === false ? 0 : 1,
          Array.isArray(k.allowedConnectionIds) && k.allowedConnectionIds.length ? stringifyJson(k.allowedConnectionIds) : null,
          Array.isArray(k.tags) && k.tags.length ? stringifyJson(k.tags) : null,
+         k.owner ?? null,
          k.createdAt || new Date().toISOString()]
       );
     }
     for (const c of payload.combos || []) {
       db.run(
-        `INSERT OR REPLACE INTO combos(id, name, kind, models, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)`,
-        [c.id, c.name, c.kind || null, stringifyJson(c.models || []), c.createdAt || new Date().toISOString(), c.updatedAt || new Date().toISOString()]
+        `INSERT OR REPLACE INTO combos(id, name, kind, models, owner, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+        [c.id, c.name, c.kind || null, stringifyJson(c.models || []), c.owner ?? null, c.createdAt || new Date().toISOString(), c.updatedAt || new Date().toISOString()]
       );
     }
     for (const [a, m] of Object.entries(payload.modelAliases || {})) {

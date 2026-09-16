@@ -10,7 +10,6 @@ import { MEDIA_PROVIDER_KINDS } from "@/shared/constants/providers";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import Button from "./Button";
 import { ConfirmModal } from "./Modal";
-import NineRemotePromoModal from "./NineRemotePromoModal";
 
 // const VISIBLE_MEDIA_KINDS = ["embedding", "image", "imageToText", "tts", "stt", "webSearch", "webFetch", "video", "music"];
 const VISIBLE_MEDIA_KINDS = ["embedding", "image", "video", "tts", "stt"];
@@ -42,13 +41,16 @@ const systemItems = [
 export default function Sidebar({ onClose }) {
   const pathname = usePathname();
   const [mediaOpen, setMediaOpen] = useState(false);
-  const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [isDisconnected, setIsDisconnected] = useState(false);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [shutdownCountdown, setShutdownCountdown] = useState(0);
   const [enableTranslator, setEnableTranslator] = useState(false);
+  // While resource scoping is on, shared-infrastructure entries are admin-only.
+  // The proxy enforces the same list; hiding them here only avoids dead links.
+  // Settings lives in the same section and stays visible to everyone.
+  const [showAdminItems, setShowAdminItems] = useState(true);
   const { copied, copy } = useCopyToClipboard(2000);
 
   const INSTALL_CMD = UPDATER_CONFIG.installCmdLatest;
@@ -61,6 +63,13 @@ export default function Sidebar({ onClose }) {
   }, []);
 
   // Lazy check for new npm version on mount
+  useEffect(() => {
+    fetch("/api/auth/status")
+      .then(res => res.json())
+      .then(data => setShowAdminItems(!data?.scopeResourcesByUser || !!data?.isAdmin))
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     fetch("/api/version")
       .then(res => res.json())
@@ -127,7 +136,9 @@ export default function Sidebar({ onClose }) {
               <h1 className="text-lg font-semibold tracking-tight text-text-main">
                 {APP_CONFIG.name}
               </h1>
-              <span className="text-xs text-text-muted">v{APP_CONFIG.version}</span>
+              <span className="text-xs text-text-muted">
+                v{APP_CONFIG.version} <span aria-hidden="true">·</span> by GSouza Tecnologia
+              </span>
             </div>
           </Link>
           {updateInfo && (
@@ -189,6 +200,7 @@ export default function Sidebar({ onClose }) {
             </p>
 
             {/* Media Providers accordion */}
+            {showAdminItems && (<>
             <button
               onClick={() => setMediaOpen((v) => !v)}
               className={cn(
@@ -238,8 +250,9 @@ export default function Sidebar({ onClose }) {
                 </Link>
               </div>
             )}
+            </>)}
 
-            {systemItems.map((item) => (
+            {(showAdminItems ? systemItems : []).map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
@@ -264,7 +277,7 @@ export default function Sidebar({ onClose }) {
             ))}
 
             {/* Debug items (inside System section, before Settings) */}
-            {debugItems.map((item) => {
+            {(showAdminItems ? debugItems : []).map((item) => {
               const show = item.href !== "/dashboard/translator" || enableTranslator;
               return show ? (
                 <Link
@@ -290,37 +303,6 @@ export default function Sidebar({ onClose }) {
                 </Link>
               ) : null;
             })}
-
-            {/* Remote */}
-            <button
-              onClick={() => setShowRemoteModal(true)}
-              className={cn(
-                "flex items-center gap-3 px-3 py-1 rounded-lg transition-all group w-full",
-                "text-text-muted hover:bg-surface-2 hover:text-text-main"
-              )}
-            >
-              <span className="material-symbols-outlined text-[18px] group-hover:text-primary transition-colors">
-                computer
-              </span>
-              <span className="text-[13px] font-medium">9Remote</span>
-            </button>
-
-            {/* 9English */}
-            <a
-              href="https://9english.net/"
-              target="_blank"
-              rel="noreferrer"
-              onClick={onClose}
-              className={cn(
-                "flex items-center gap-3 px-3 py-1 rounded-lg transition-all group w-full",
-                "text-text-muted hover:bg-surface-2 hover:text-text-main"
-              )}
-            >
-              <span className="material-symbols-outlined text-[18px] group-hover:text-primary transition-colors">
-                translate
-              </span>
-              <span className="text-[13px] font-medium">9English</span>
-            </a>
 
             {/* Settings */}
             <Link
@@ -349,7 +331,6 @@ export default function Sidebar({ onClose }) {
       </aside>
 
       {/* Remote Promo Modal */}
-      <NineRemotePromoModal isOpen={showRemoteModal} onClose={() => setShowRemoteModal(false)} />
 
       {/* Update Confirmation Modal */}
       <ConfirmModal

@@ -5,7 +5,7 @@ import {
   isAnthropicCompatibleProvider,
   isOpenAICompatibleProvider,
 } from "@/shared/constants/providers";
-import { getProviderConnections, getCombos, getCustomModels, getModelAliases, getApiKeyAllowedConnectionIds } from "@/lib/localDb";
+import { getProviderConnections, getCombos, getCustomModels, getModelAliases, getApiKeyAllowedConnectionIds, getApiKeyOwner, getSettings } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
@@ -273,9 +273,21 @@ export async function buildModelsList(kindFilter, options = {}) {
   const allowedConnectionIds = await getApiKeyAllowedConnectionIds(options.apiKey || null);
   if (allowedConnectionIds) connections = connections.filter((c) => allowedConnectionIds.includes(c.id));
 
+  // Ownership: the catalog must not reveal accounts or combos of other users.
+  let keyOwner = null;
+  let scoped = false;
+  try {
+    scoped = (await getSettings())?.scopeResourcesByUser === true;
+    if (scoped) {
+      keyOwner = await getApiKeyOwner(options.apiKey || null);
+      connections = connections.filter((c) => !c.owner || c.owner === keyOwner);
+    }
+  } catch { }
+
   let combos = [];
   try {
     combos = await getCombos();
+    if (scoped) combos = combos.filter((c) => !c.owner || c.owner === keyOwner);
   } catch (e) {
     console.log("Could not fetch combos");
   }

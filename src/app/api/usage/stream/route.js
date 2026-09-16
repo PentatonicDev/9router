@@ -1,9 +1,24 @@
 import { getUsageStats, statsEmitter, getActiveRequests } from "@/lib/usageDb";
+import { getApiKeys } from "@/lib/localDb";
+import { getScopeFilter, canSee } from "@/lib/auth/resourceScope";
+import { getUsageVisibility, canSeeUsageRow, scopeUsageStats } from "@/lib/auth/usageScope";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request) {
   const encoder = new TextEncoder();
+  // The dashboard's "All API keys" selector must narrow the live graph too.
+  const apiKeyId = new URL(request.url).searchParams.get("apiKeyId");
+  const visibility = await getUsageVisibility();
+  let selectedKey = null;
+  if (apiKeyId && apiKeyId !== "all") {
+    const scopeFilter = await getScopeFilter();
+    selectedKey = (await getApiKeys()).find((k) => k.id === apiKeyId && canSee(k, scopeFilter)) || null;
+  }
+  const liveFilter = {
+    visible: (row) => canSeeUsageRow(row, visibility),
+    apiKey: selectedKey?.key || null,
+  };
   const state = { closed: false, keepalive: null, send: null, sendPending: null, cachedStats: null };
 
   const stream = new ReadableStream({
@@ -14,12 +29,12 @@ export async function GET() {
         try {
           // Push lightweight update immediately so UI reflects changes fast
           if (state.cachedStats) {
-            const { activeRequests, recentRequests, errorProvider } = await getActiveRequests();
+            const { activeRequests, recentRequests, errorProvider } = await getActiveRequests(liveFilter);
             const quickStats = { ...state.cachedStats, activeRequests, recentRequests, errorProvider };
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(quickStats)}\n\n`));
           }
           // Then do full recalc and update cache
-          const stats = await getUsageStats();
+          const stats = scopeUsageStats(await getUsageStats(), visibility);
           state.cachedStats = stats;
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(stats)}\n\n`));
         } catch {
@@ -34,7 +49,7 @@ export async function GET() {
       state.sendPending = async () => {
         if (state.closed || !state.cachedStats) return;
         try {
-          const { activeRequests, recentRequests, errorProvider } = await getActiveRequests();
+          const { activeRequests, recentRequests, errorProvider } = await getActiveRequests(liveFilter);
           const stats = { ...state.cachedStats, activeRequests, recentRequests, errorProvider };
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(stats)}\n\n`));
         } catch {

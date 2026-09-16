@@ -9,6 +9,7 @@ import {
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
 import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/providerNormalization";
+import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +50,7 @@ async function normalizeProxyPoolId(proxyPoolId) {
 // GET /api/providers - List all connections
 export async function GET() {
   try {
-    const connections = await getProviderConnections();
+    const connections = scopeVisible(await getProviderConnections(), await getScopeFilter());
 
     // Build nodeNameMap for compatible providers (id → name)
     let nodeNameMap = {};

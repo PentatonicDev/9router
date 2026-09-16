@@ -1,6 +1,17 @@
 import { NextResponse } from "next/server";
 import { getComboById, updateCombo, deleteCombo, getComboByName } from "@/lib/localDb";
 import { resetComboRotation } from "open-sse/services/combo.js";
+import { canSee, getRequestIdentity, getScopeFilter, normalizeOwnerInput } from "@/lib/auth/resourceScope";
+
+// A shared combo (no owner) is usable by everyone but only an admin may change it.
+async function denyWrite(combo) {
+  const filter = await getScopeFilter();
+  if (!combo || !canSee(combo, filter)) return { error: "Combo not found", status: 404 };
+  if ((combo.owner ?? null) === null && !(await getRequestIdentity()).isAdmin) {
+    return { error: "Shared combos are read-only", status: 403 };
+  }
+  return null;
+}
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -10,11 +21,11 @@ export async function GET(request, { params }) {
   try {
     const { id } = await params;
     const combo = await getComboById(id);
-    
-    if (!combo) {
+
+    if (!combo || !canSee(combo, await getScopeFilter())) {
       return NextResponse.json({ error: "Combo not found" }, { status: 404 });
     }
-    
+
     return NextResponse.json(combo);
   } catch (error) {
     console.log("Error fetching combo:", error);
@@ -27,23 +38,31 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    
+
+    // Capture previous name to invalidate rotation state on rename
+    const prev = await getComboById(id);
+    const denied = await denyWrite(prev);
+    if (denied) return NextResponse.json({ error: denied.error }, { status: denied.status });
+
     // Validate name format if provided
     if (body.name) {
       if (!VALID_NAME_REGEX.test(body.name)) {
         return NextResponse.json({ error: "Name can only contain letters, numbers, -, _ and ." }, { status: 400 });
       }
-      
-      // Check if name already exists (exclude current combo)
-      const existing = await getComboByName(body.name);
-      if (existing && existing.id !== id) {
+
+      // Names clash only within the same owner's scope.
+      const existing = await getComboByName(body.name, prev.owner ?? null);
+      if (existing && existing.id !== id && (existing.owner ?? null) === (prev.owner ?? null)) {
         return NextResponse.json({ error: "Combo name already exists" }, { status: 400 });
       }
     }
-    
-    // Capture previous name to invalidate rotation state on rename
-    const prev = await getComboById(id);
-    const combo = await updateCombo(id, body);
+
+    const patch = { ...body };
+    delete patch.owner;
+    if (body.owner !== undefined && (await getRequestIdentity()).isAdmin) {
+      patch.owner = normalizeOwnerInput(body.owner);
+    }
+    const combo = await updateCombo(id, patch);
     
     if (!combo) {
       return NextResponse.json({ error: "Combo not found" }, { status: 404 });
@@ -65,6 +84,9 @@ export async function DELETE(request, { params }) {
   try {
     const { id } = await params;
     const prev = await getComboById(id);
+    const denied = await denyWrite(prev);
+    if (denied) return NextResponse.json({ error: denied.error }, { status: denied.status });
+
     const success = await deleteCombo(id);
     
     if (!success) {

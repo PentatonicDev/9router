@@ -51,6 +51,24 @@ export default function LoginPage() {
           setOidcLoginLabel(data.oidcLoginLabel || "Sign in with OIDC");
           setSamlConfigured(data.samlConfigured === true);
           setSamlLoginLabel(data.samlLoginLabel || "Sign in with SAML SSO");
+
+          // SSO-only leaves nothing to choose, so skip the button and start the
+          // flow. An ?error= in the URL means we just came back from a failed
+          // attempt — redirecting again would loop and hide the message.
+          const ssoOnly = ["sso", "oidc", "saml"].includes(data.authMode);
+          const hasError = typeof window !== "undefined"
+            && new URLSearchParams(window.location.search).has("error");
+          if (ssoOnly && !hasError) {
+            const type = data.ssoType || (data.authMode === "saml" ? "saml" : "oidc");
+            if (type === "saml" && data.samlConfigured === true) {
+              window.location.assign("/api/auth/saml/start");
+              return;
+            }
+            if (type === "oidc" && data.oidcConfigured === true) {
+              window.location.assign("/api/auth/oidc/start");
+              return;
+            }
+          }
         } else {
           // Safe fallback on non-OK response to avoid infinite loading state.
           setHasPassword(true);

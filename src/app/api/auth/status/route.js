@@ -4,6 +4,7 @@ import { getSettings } from "@/lib/localDb";
 import { isOidcConfigured } from "@/lib/auth/oidc";
 import { isSamlConfigured } from "@/lib/auth/saml.js";
 import { getDashboardAuthSession } from "@/lib/auth/dashboardSession";
+import { getRequestIdentity, isScopeEnabled } from "@/lib/auth/resourceScope";
 
 export async function GET() {
   try {
@@ -26,8 +27,13 @@ export async function GET() {
       (session?.saml ? "SAML user" : session?.oidc ? "OIDC user" : "Password user");
 
     const loginMethod = session?.saml ? "SAML" : session?.oidc ? "OIDC" : "Password";
+    const identity = await getRequestIdentity();
 
     return NextResponse.json({
+      isAdmin: identity.isAdmin,
+      owner: identity.owner,
+      scopeResourcesByUser: isScopeEnabled(settings),
+      ssoAdminEmails: settings.ssoAdminEmails || [],
       requireLogin,
       authMode,
       ssoType,
@@ -48,6 +54,10 @@ export async function GET() {
     });
   } catch {
     return NextResponse.json({
+      isAdmin: false,
+      owner: null,
+      scopeResourcesByUser: false,
+      ssoAdminEmails: [],
       requireLogin: true,
       authMode: "password",
       ssoType: "oidc",

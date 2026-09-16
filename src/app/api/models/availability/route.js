@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
 import {
   getProviderConnections,
   updateProviderConnection,
@@ -21,7 +22,7 @@ function getActiveModelLocks(connection) {
 
 export async function GET() {
   try {
-    const connections = await getProviderConnections();
+    const connections = scopeVisible(await getProviderConnections(), await getScopeFilter());
     const models = [];
 
     for (const connection of connections) {
@@ -71,7 +72,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     }
 
-    const connections = await getProviderConnections({ provider });
+    const connections = scopeVisible(await getProviderConnections({ provider }), await getScopeFilter());
     const lockKey = `${MODEL_LOCK_PREFIX}${model}`;
 
     await Promise.all(

@@ -46,6 +46,9 @@ export default function APIPageClient({ machineId }) {
   const [confirmState, setConfirmState] = useState(null);
 
   const [requireApiKey, setRequireApiKey] = useState(false);
+  // Assume admin until /api/auth/status answers, so the default (scope off) UI
+  // is unchanged and nothing flickers out for a real admin.
+  const [isAdmin, setIsAdmin] = useState(true);
   const [requireLogin, setRequireLogin] = useState(true);
   const [hasPassword, setHasPassword] = useState(true);
  const [tunnelDashboardAccess, setTunnelDashboardAccess] = useState(false);
@@ -120,6 +123,10 @@ export default function APIPageClient({ machineId }) {
   useEffect(() => {
     fetchData();
     loadSettings();
+    fetch("/api/auth/status")
+      .then((res) => res.json())
+      .then((data) => setIsAdmin(!data?.scopeResourcesByUser || !!data?.isAdmin))
+      .catch(() => {});
   }, []);
 
   // Status poll: only while degraded (not yet reachable). Stop once healthy to avoid spam.
@@ -790,7 +797,8 @@ export default function APIPageClient({ machineId }) {
             copied={copied}
             onCopy={copy}
           />
-          {/* Cloudflare Tunnel */}
+          {/* Cloudflare Tunnel — exposing the instance publicly is an admin action */}
+          {isAdmin && (<>
           <div className="flex items-center gap-2">
             <span className={`text-xs font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[88px] text-center ${
               tunnelEnabled ? "bg-primary/10 text-primary" : "bg-surface-2 text-text-muted"
@@ -966,6 +974,7 @@ export default function APIPageClient({ machineId }) {
               </Button>
             )}
           </div>
+          </>)}
         </div>
 
         {/* Pre-enable security gate banner */}
@@ -1091,6 +1100,12 @@ export default function APIPageClient({ machineId }) {
                 <div className="flex-1 min-w-0">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <p className="text-sm font-medium">{key.name}</p>
+                    <span className="text-[11px] text-text-muted">{`Created ${new Date(key.createdAt).toLocaleDateString()}`}</span>
+                    {key.owner ? (
+                      <span className="rounded-full bg-black/5 px-2 py-0.5 text-[11px] text-text-muted dark:bg-white/10">
+                        {key.owner === "@admin" ? "Admin only" : key.owner}
+                      </span>
+                    ) : null}
                     {(key.tags || []).map((tag) => (
                       <button
                         key={tag}
@@ -1103,7 +1118,7 @@ export default function APIPageClient({ machineId }) {
                       </button>
                     ))}
                   </div>
-                  <div className="flex items-center gap-2 mt-1">
+                  <div className="flex items-center gap-2 mt-1.5">
                     <code className="text-xs text-text-muted font-mono">
                       {visibleKeys.has(key.id) ? key.key : maskKey(key.key)}
                     </code>
@@ -1125,14 +1140,11 @@ export default function APIPageClient({ machineId }) {
                       </span>
                     </button>
                   </div>
-                  <p className="text-xs text-text-muted mt-1">
-                    Created {new Date(key.createdAt).toLocaleDateString()}
-                  </p>
                   {key.isActive === false && (
-                    <p className="text-xs text-orange-500 mt-1">Paused</p>
+                    <p className="text-xs text-orange-500 mt-1.5">Paused</p>
                   )}
                   {key.allowedConnectionIds?.length > 0 && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       {key.allowedConnectionIds.map((connId) => (
                         <span
                           key={connId}

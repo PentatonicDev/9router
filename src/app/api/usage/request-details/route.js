@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getRequestDetails } from "@/lib/usageDb";
 import { getApiKeys } from "@/lib/localDb";
 import { maskApiKey } from "@/lib/db/helpers/maskKey.js";
+import { getScopeFilter, canSee } from "@/lib/auth/resourceScope";
+import { getUsageVisibility, canSeeUsageRow } from "@/lib/auth/usageScope";
 
 /**
  * GET /api/usage/request-details
@@ -42,12 +44,22 @@ export async function GET(request) {
       pageSize
     };
     
+    const scopeFilter = await getScopeFilter();
+    const visibility = await getUsageVisibility();
+
     if (provider) filter.provider = provider;
     if (model) filter.model = model;
-    if (connectionId) filter.connectionId = connectionId;
+    // connectionId and apiKeyId come from the client, so both are checked
+    // against what the caller may see before they reach the query.
+    if (connectionId) {
+      if (!canSeeUsageRow({ connectionId }, visibility)) {
+        return NextResponse.json({ error: "Unknown connection" }, { status: 400 });
+      }
+      filter.connectionId = connectionId;
+    }
     // Resolve the key id server-side; the secret never travels to the client.
     if (apiKeyId && apiKeyId !== "all") {
-      const selectedKey = (await getApiKeys()).find((k) => k.id === apiKeyId);
+      const selectedKey = (await getApiKeys()).find((k) => k.id === apiKeyId && canSee(k, scopeFilter));
       if (!selectedKey) {
         return NextResponse.json({ error: "Unknown API key" }, { status: 400 });
       }
@@ -65,10 +77,12 @@ export async function GET(request) {
     // disabled, anyone) read every user's conversation history. Keep the
     // metadata (model, tokens, latency, status) but drop message content.
     const keyNameByMasked = new Map(
-      (await getApiKeys()).map((k) => [maskApiKey(k.key), k.name])
+      (await getApiKeys()).filter((k) => canSee(k, scopeFilter)).map((k) => [maskApiKey(k.key), k.name])
     );
 
-    const redactedDetails = (result.details || []).map((d) => {
+    const redactedDetails = (result.details || [])
+      .filter((d) => canSeeUsageRow(d, visibility))
+      .map((d) => {
       const redacted = { ...d };
       for (const key of ["request", "providerRequest", "providerResponse", "response"]) {
         if (redacted[key] !== undefined) {

@@ -188,11 +188,21 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
   scheduleStatsEvent("pending");
 }
 
-export async function getActiveRequests() {
+/**
+ * Live traffic for the topology graph.
+ * `filter` narrows it to what the viewer may see and, when a key is selected in
+ * the UI, to that key's traffic: `{ visible(row), apiKey }`.
+ */
+export async function getActiveRequests(filter = null) {
   const activeRequests = [];
   const connectionMap = await getConnectionMapCached();
+  const isVisible = (row) => !filter?.visible || filter.visible(row);
+  // In-flight counters are tracked per account only — no key is recorded — so a
+  // key selection can only narrow the recent list, not the live bars.
+  const matchesKey = (row) => !filter?.apiKey || row.apiKey === filter.apiKey;
 
   for (const [connectionId, models] of Object.entries(pendingRequests.byAccount)) {
+    if (!isVisible({ connectionId, apiKey: null })) continue;
     for (const [modelKey, count] of Object.entries(models)) {
       if (count > 0) {
         const accountName = connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`;
@@ -209,6 +219,7 @@ export async function getActiveRequests() {
   await ensureRingInitialized();
   const seen = new Set();
   const recentRequests = [...recentRing.items]
+    .filter((e) => isVisible(e) && matchesKey(e))
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
     .map((e) => {
       const t = e.tokens || {};
@@ -749,11 +760,13 @@ function formatLogDate(date = new Date()) {
 // No-op: request log is now derived from usageHistory table on read.
 export async function appendRequestLog() {}
 
-export async function getRecentLogs(limit = 200) {
+// `visible` (from getUsageVisibility) drops rows whose account or key the caller
+// cannot see; rows are formatted here, so the filter has to happen before that.
+export async function getRecentLogs(limit = 200, visible = null) {
   try {
     const db = await getAdapter();
     const rows = db.all(
-      `SELECT timestamp, provider, model, connectionId, promptTokens, completionTokens, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`,
+      `SELECT timestamp, provider, model, connectionId, apiKey, promptTokens, completionTokens, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`,
       [limit],
     );
     if (!rows.length) return [];
@@ -765,7 +778,7 @@ export async function getRecentLogs(limit = 200) {
       for (const c of connections) connMap[c.id] = c.name || c.email || "";
     } catch {}
 
-    return rows.map((r) => {
+    return rows.filter((r) => !visible || visible(r)).map((r) => {
       const ts = formatLogDate(new Date(r.timestamp));
       const p = r.provider?.toUpperCase() || "-";
       const m = r.model || "-";

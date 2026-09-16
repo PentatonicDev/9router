@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
 import { getProviderConnections } from "@/lib/localDb";
 
 const langNames = new Intl.DisplayNames(["en"], { type: "language" });
@@ -12,7 +13,7 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const langFilter = searchParams.get("lang");
 
-    const connections = await getProviderConnections({ provider: "inworld", isActive: true });
+    const connections = scopeVisible(await getProviderConnections({ provider: "inworld", isActive: true }), await getScopeFilter());
     const apiKey = connections[0]?.apiKey;
     if (!apiKey) return NextResponse.json({ error: "No Inworld connection found" }, { status: 400 });
 

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
 import { getProviderConnections } from "@/lib/localDb";
 import { fetchElevenLabsVoices } from "open-sse/handlers/ttsCore.js";
 
@@ -15,7 +16,7 @@ export async function GET(request) {
     const langFilter = searchParams.get("lang");
 
     // Direct DB read - bypass auth mutex used for TTS inference
-    const connections = await getProviderConnections({ provider: "elevenlabs", isActive: true });
+    const connections = scopeVisible(await getProviderConnections({ provider: "elevenlabs", isActive: true }), await getScopeFilter());
     const apiKey = connections[0]?.apiKey;
     if (!apiKey) {
       return NextResponse.json({ error: "No ElevenLabs connection found" }, { status: 400 });

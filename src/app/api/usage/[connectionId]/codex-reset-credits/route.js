@@ -2,6 +2,7 @@
 import "open-sse/index.js";
 
 import { getProviderConnectionById } from "@/lib/localDb";
+import { canSee, getScopeFilter } from "@/lib/auth/resourceScope";
 import { consumeCodexRateLimitResetCredit, getCodexRateLimitResetCredits } from "open-sse/services/usage.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { refreshAndUpdateCredentials } from "../route.js";
@@ -49,7 +50,7 @@ function getResponseForConsumeResult(result, redeemRequestId) {
 
 async function getCodexConnection(connectionId) {
   const connection = await getProviderConnectionById(connectionId);
-  if (!connection) {
+  if (!connection || !canSee(connection, await getScopeFilter())) {
     return { response: Response.json({ error: "Connection not found" }, { status: 404 }) };
   }
 

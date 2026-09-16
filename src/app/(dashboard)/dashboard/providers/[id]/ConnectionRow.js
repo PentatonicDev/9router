@@ -170,6 +170,11 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
             <Badge variant="default" size="sm">
               {authLabel}
             </Badge>
+            {connection.owner && (
+              <Badge variant="default" size="sm">
+                {connection.owner === "@admin" ? "Admin only" : connection.owner}
+              </Badge>
+            )}
             {hasAnyProxy && (
               <Badge variant={proxyBadgeVariant} size="sm">
                 Proxy
@@ -283,6 +288,7 @@ ConnectionRow.propTypes = {
     name: PropTypes.string,
     email: PropTypes.string,
     displayName: PropTypes.string,
+    owner: PropTypes.string,
     modelLockUntil: PropTypes.string,
     testStatus: PropTypes.string,
     isActive: PropTypes.bool,

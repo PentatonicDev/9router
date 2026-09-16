@@ -1,4 +1,4 @@
-import { getProviderConnections, validateApiKey, getApiKeyAllowedConnectionIds, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
+import { getProviderConnections, validateApiKey, getApiKeyAllowedConnectionIds, getApiKeyOwner, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getApplicableModelLock, getModelLockMetaKey } from "open-sse/services/accountFallback.js";
 import { classifyRoutingReason, publicStatusForReason, sanitizePublicMessage } from "open-sse/utils/error.js";
@@ -72,6 +72,16 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     }
 
     let connections = await getProviderConnections({ provider: providerId, isActive: true });
+
+    // Ownership: there is no session here, so the key itself carries the identity.
+    // A key owned by someone only reaches that owner's accounts plus the shared
+    // ones; an unowned key keeps reaching everything.
+    const settings0 = await getSettings();
+    if (settings0?.scopeResourcesByUser === true) {
+      const keyOwner = await getApiKeyOwner(options?.apiKey || null);
+      if (keyOwner) connections = connections.filter(c => !c.owner || c.owner === keyOwner);
+      else connections = connections.filter(c => !c.owner);
+    }
 
     // Account binding: a key with `allowedConnectionIds` only routes to those
     // accounts. No binding (or no key) leaves the pool untouched.

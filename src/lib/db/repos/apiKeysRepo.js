@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { normalizeOwnerInput, resolveDefaultOwner } from "@/lib/auth/resourceScope";
 
 // An empty binding list means "no restriction": the key reaches every account.
 // Callers rely on null (not []) to express that, so normalize both ways here.
@@ -42,6 +43,7 @@ function rowToKey(row) {
     isActive: row.isActive === 1 || row.isActive === true,
     allowedConnectionIds: normalizeAllowed(parseJson(row.allowedConnectionIds, null)),
     tags: normalizeTags(parseJson(row.tags, null)) || [],
+    owner: row.owner ?? null,
     createdAt: row.createdAt,
   };
 }
@@ -58,7 +60,7 @@ export async function getApiKeyById(id) {
   return rowToKey(row);
 }
 
-export async function createApiKey(name, machineId, tags = null) {
+export async function createApiKey(name, machineId, tags = null, owner = undefined) {
   if (!machineId) throw new Error("machineId is required");
   const db = await getAdapter();
   const { generateApiKeyWithMachine } = await import("@/shared/utils/apiKey");
@@ -71,12 +73,13 @@ export async function createApiKey(name, machineId, tags = null) {
     isActive: true,
     allowedConnectionIds: null,
     tags: normalizeTags(tags) || [],
+    owner: owner === undefined ? await resolveDefaultOwner() : normalizeOwnerInput(owner),
     createdAt: new Date().toISOString(),
   };
   db.run(
-    `INSERT INTO apiKeys(id, key, name, machineId, isActive, allowedConnectionIds, tags, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO apiKeys(id, key, name, machineId, isActive, allowedConnectionIds, tags, owner, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, null,
-     apiKey.tags.length ? stringifyJson(apiKey.tags) : null, apiKey.createdAt]
+     apiKey.tags.length ? stringifyJson(apiKey.tags) : null, apiKey.owner, apiKey.createdAt]
   );
   return apiKey;
 }
@@ -92,10 +95,10 @@ export async function updateApiKey(id, data) {
     const tags = normalizeTags(merged.tags);
     merged.tags = tags || [];
     db.run(
-      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, allowedConnectionIds = ?, tags = ? WHERE id = ?`,
+      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, allowedConnectionIds = ?, tags = ?, owner = ? WHERE id = ?`,
       [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0,
        merged.allowedConnectionIds ? stringifyJson(merged.allowedConnectionIds) : null,
-       tags ? stringifyJson(tags) : null, id]
+       tags ? stringifyJson(tags) : null, merged.owner ?? null, id]
     );
     result = merged;
   });
@@ -119,6 +122,18 @@ export async function getApiKeyAllowedConnectionIds(key) {
   const row = db.get(`SELECT allowedConnectionIds FROM apiKeys WHERE key = ?`, [key]);
   if (!row) return null;
   return normalizeAllowed(parseJson(row.allowedConnectionIds, null));
+}
+
+/**
+ * The owner of a key, as stored. Used by the router, where there is no session:
+ * the key itself carries the identity that caps which accounts it may reach.
+ * An unknown key has no owner, matching validateApiKey being a separate check.
+ */
+export async function getApiKeyOwner(key) {
+  if (!key) return null;
+  const db = await getAdapter();
+  const row = db.get(`SELECT owner FROM apiKeys WHERE key = ?`, [key]);
+  return row?.owner ?? null;
 }
 
 export async function validateApiKey(key) {

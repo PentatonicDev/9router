@@ -17,6 +17,9 @@ vi.mock("open-sse/index.js", () => ({}));
 
 vi.mock("@/lib/localDb", () => ({
   getProviderConnectionById: mocks.getProviderConnectionById,
+  getProviderConnections: vi.fn(async () => []),
+  getSettings: vi.fn(async () => ({ scopeResourcesByUser: false })),
+  getApiKeys: vi.fn(async () => []),
 }));
 
 vi.mock("@/lib/network/connectionProxy", () => ({

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { canSee, getRequestIdentity, getScopeFilter, normalizeOwnerInput } from "@/lib/auth/resourceScope";
 import {
   getProviderConnectionById,
   getProxyPoolById,
@@ -65,7 +66,7 @@ export async function GET(request, { params }) {
     const { id } = await params;
     const connection = await getProviderConnectionById(id);
 
-    if (!connection) {
+    if (!connection || !canSee(connection, await getScopeFilter())) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
@@ -98,11 +99,12 @@ export async function PUT(request, { params }) {
       testStatus,
       lastError,
       lastErrorAt,
-      providerSpecificData
+      providerSpecificData,
+      owner
     } = body;
 
     const existing = await getProviderConnectionById(id);
-    if (!existing) {
+    if (!existing || !canSee(existing, await getScopeFilter())) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
@@ -126,6 +128,10 @@ export async function PUT(request, { params }) {
     if (testStatus !== undefined) updateData.testStatus = testStatus;
     if (lastError !== undefined) updateData.lastError = lastError;
     if (lastErrorAt !== undefined) updateData.lastErrorAt = lastErrorAt;
+    // Reassigning an owner is an admin action; other callers keep the current one.
+    if (owner !== undefined && (await getRequestIdentity()).isAdmin) {
+      updateData.owner = normalizeOwnerInput(owner);
+    }
 
     if (
       shouldMergeProviderSpecificData(
@@ -175,6 +181,11 @@ export async function PUT(request, { params }) {
 export async function DELETE(request, { params }) {
   try {
     const { id } = await params;
+
+    const existing = await getProviderConnectionById(id);
+    if (!existing || !canSee(existing, await getScopeFilter())) {
+      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+    }
 
     const deleted = await deleteProviderConnection(id);
     if (!deleted) {

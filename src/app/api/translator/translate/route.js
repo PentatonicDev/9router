@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
 import { detectFormat, getTargetFormat } from "open-sse/services/provider.js";
 import { translateRequest } from "open-sse/translator/index.js";
 import { FORMATS } from "open-sse/translator/formats.js";
@@ -57,7 +58,7 @@ export async function POST(request) {
         delete translated._toolNameMap;
 
         // Build URL + headers via executor (same as chatCore → executor.execute)
-        const connections = await getProviderConnections({ provider });
+        const connections = scopeVisible(await getProviderConnections({ provider }), await getScopeFilter());
         const connection = connections.find(c => c.isActive !== false);
         if (!connection) {
           return NextResponse.json({ success: false, error: `No active connection for provider: ${provider}` }, { status: 400 });

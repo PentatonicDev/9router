@@ -28,6 +28,11 @@ const DEFAULT_SETTINGS = {
   tunnelDashboardAccess: true,
   authMode: "password",
   ssoType: "oidc",
+  // Off: every resource stays visible to anyone who can log in (legacy behaviour).
+  // Turning it off later never drops ownership, it only stops enforcing it.
+  scopeResourcesByUser: false,
+  // E-mails that act as admin when password login is unavailable (SSO-only).
+  ssoAdminEmails: [],
   oidcIssuerUrl: "",
   oidcClientId: "",
   oidcClientSecret: "",

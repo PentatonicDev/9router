@@ -2,6 +2,7 @@
 import "open-sse/index.js";
 
 import { getProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
+import { canSee, getScopeFilter } from "@/lib/auth/resourceScope";
 import { getUsageForProvider } from "open-sse/services/usage.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
@@ -129,7 +130,7 @@ export async function GET(request, { params }) {
 
     // Get connection from database
     connection = await getProviderConnectionById(connectionId);
-    if (!connection) {
+    if (!connection || !canSee(connection, await getScopeFilter())) {
       return Response.json({ error: "Connection not found" }, { status: 404 });
     }
 

@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -40,11 +40,15 @@ export const TABLES = {
       email: "TEXT",
       priority: "INTEGER",
       isActive: "INTEGER DEFAULT 1",
+      // Owning dashboard user: NULL = shared, "@admin" = password login only,
+      // otherwise the SSO e-mail. Only enforced while scopeResourcesByUser is on.
+      owner: "TEXT",
       data: "TEXT NOT NULL",
       createdAt: "TEXT NOT NULL",
       updatedAt: "TEXT NOT NULL",
     },
     indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_pc_owner ON providerConnections(owner)",
       "CREATE INDEX IF NOT EXISTS idx_pc_provider ON providerConnections(provider)",
       "CREATE INDEX IF NOT EXISTS idx_pc_provider_active ON providerConnections(provider, isActive)",
       "CREATE INDEX IF NOT EXISTS idx_pc_priority ON providerConnections(provider, priority)",
@@ -87,20 +91,34 @@ export const TABLES = {
       allowedConnectionIds: "TEXT",
       // JSON array of free-form labels, for grouping/filtering keys only.
       tags: "TEXT",
+      // See providerConnections.owner. A key's owner also caps which accounts it
+      // may route to at runtime.
+      owner: "TEXT",
       createdAt: "TEXT NOT NULL",
     },
-    indexes: ["CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)"],
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)",
+      "CREATE INDEX IF NOT EXISTS idx_ak_owner ON apiKeys(owner)",
+    ],
   },
   combos: {
     columns: {
       id: "TEXT PRIMARY KEY",
-      name: "TEXT UNIQUE NOT NULL",
+      // Unique per owner, not globally: two users may each own a "fast" combo.
+      // The uniqueness lives in idx_combo_owner_name below, since NULL owners
+      // would escape a table-level UNIQUE(name, owner).
+      name: "TEXT NOT NULL",
       kind: "TEXT",
       models: "TEXT NOT NULL",
+      // See providerConnections.owner.
+      owner: "TEXT",
       createdAt: "TEXT NOT NULL",
       updatedAt: "TEXT NOT NULL",
     },
-    indexes: ["CREATE INDEX IF NOT EXISTS idx_combo_name ON combos(name)"],
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_combo_name ON combos(name)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_combo_owner_name ON combos(name, IFNULL(owner, ''))",
+    ],
   },
   kv: {
     columns: {

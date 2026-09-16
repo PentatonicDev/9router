@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getProviderConnectionById } from "@/lib/localDb";
+import { canSee, getScopeFilter } from "@/lib/auth/resourceScope";
 import { getProviderModels, PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
@@ -14,7 +15,7 @@ export async function POST(request, { params }) {
   try {
     const { id } = await params;
     const connection = await getProviderConnectionById(id);
-    if (!connection) {
+    if (!connection || !canSee(connection, await getScopeFilter())) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 

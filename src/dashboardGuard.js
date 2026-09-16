@@ -3,6 +3,8 @@ import { getSettings, validateApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
 import { hasTrustedPeerHeaders } from "@/lib/auth/trustedPeer";
+import { getDashboardAuthSession } from "@/lib/auth/dashboardSession";
+import { isScopeEnabled, normalizeOwner, parseAdminEmails } from "@/lib/auth/resourceScope";
 
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
 const CLI_TOKEN_SALT = "9r-cli-auth";
@@ -49,6 +51,7 @@ const ALWAYS_PROTECTED = [
 
 // Require auth, but allow through if requireLogin is disabled
 const PROTECTED_API_PATHS = [
+  "/api/headroom",
   "/api/settings",
   "/api/keys",
   "/api/providers",
@@ -84,7 +87,22 @@ const LOCAL_ONLY_PATHS = [
   "/api/auth/reset-password",
   "/api/headroom/start",
   "/api/headroom/stop",
-  "/api/headroom/proxy",
+];
+
+// Shared infrastructure and host-level surfaces. While resource scoping is on,
+// these stay with the admin: they expose or affect every user's traffic, so a
+// hidden menu entry alone would not keep a scoped user out.
+const ADMIN_ONLY_PATHS = [
+  "/api/proxy-pools",
+  "/api/tunnel",
+  "/api/media-providers",
+  "/api/translator",
+  "/api/mcp",
+  "/dashboard/proxy-pools",
+  "/dashboard/skills",
+  "/dashboard/console-log",
+  "/dashboard/translator",
+  "/dashboard/media-providers",
 ];
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
@@ -165,6 +183,17 @@ async function canAccessLocalOnlyRoute(request) {
   return false;
 }
 
+// Mirrors resourceScope.getRequestIdentity for the proxy, which has the request
+// in hand rather than the request-scoped cookies()/headers() helpers.
+async function isAdminRequest(request, settings) {
+  if (await hasValidCliToken(request)) return true;
+  const session = await getDashboardAuthSession(request.cookies.get("auth_token")?.value);
+  if (!session) return false;
+  const owner = normalizeOwner(session.oidcEmail || session.samlEmail);
+  if (!owner) return true; // password login
+  return parseAdminEmails(settings?.ssoAdminEmails).includes(owner);
+}
+
 async function hasValidToken(request) {
   const token = request.cookies.get("auth_token")?.value;
   return await verifyDashboardAuthToken(token);
@@ -206,6 +235,15 @@ export async function proxy(request) {
   if (LOCAL_ONLY_PATHS.some((p) => pathname.startsWith(p))) {
     if (!(await canAccessLocalOnlyRoute(request))) {
       return NextResponse.json({ error: "Local only: CLI token required" }, { status: 403 });
+    }
+  }
+
+  if (ADMIN_ONLY_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+    const settings = await loadSettings();
+    if (isScopeEnabled(settings) && !(await isAdminRequest(request, settings))) {
+      return pathname.startsWith("/dashboard")
+        ? NextResponse.redirect(new URL("/dashboard", request.url))
+        : NextResponse.json({ error: "Admin access required" }, { status: 403 });
     }
   }
 

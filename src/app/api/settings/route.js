@@ -3,6 +3,7 @@ import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import bcrypt from "bcryptjs";
+import { getRequestIdentity, isScopeEnabled, parseAdminEmails } from "@/lib/auth/resourceScope";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -42,10 +43,44 @@ export async function PATCH(request) {
     // Strip protected secrets before any internal handling sets them
     for (const key of PROTECTED_SETTING_KEYS) delete body[key];
 
+    // Settings are global: without this gate a scoped user could PATCH
+    // scopeResourcesByUser:false and lift their own restriction — along with
+    // auth mode, SSO config and requireApiKey.
+    const current = await getSettings();
+    if (isScopeEnabled(current)) {
+      const identity = await getRequestIdentity();
+      if (!identity.isAdmin) {
+        const ownAdapter = body.capacityAdapter;
+        const onlyAdapter = Object.keys(body).length === 1 && ownAdapter !== undefined;
+        // Narrow exception: a scoped user still owns their own vision adapter,
+        // which lives inside this global blob rather than in its own table.
+        if (!onlyAdapter || !identity.owner) {
+          return NextResponse.json({ error: "Admin access required" }, { status: 403 });
+        }
+        const next = { ...(current.capacityAdapterByOwner || {}), [identity.owner]: ownAdapter };
+        delete body.capacityAdapter;
+        body.capacityAdapterByOwner = next;
+      }
+    }
+
+    // SSO-only leaves no password login, so an instance without a designated
+    // admin would have nobody able to administer it.
+    const nextAuthMode = body.authMode ?? current.authMode;
+    const ssoOnly = ["sso", "oidc", "saml"].includes(nextAuthMode);
+    if (ssoOnly && isScopeEnabled({ ...current, ...body })) {
+      const admins = parseAdminEmails(body.ssoAdminEmails ?? current.ssoAdminEmails);
+      if (!admins.length) {
+        return NextResponse.json(
+          { error: "At least one admin e-mail is required when SSO is the only login method" },
+          { status: 400 }
+        );
+      }
+    }
+    if (body.ssoAdminEmails !== undefined) body.ssoAdminEmails = parseAdminEmails(body.ssoAdminEmails);
+
     // If updating password, hash it
     if (body.newPassword) {
-      const settings = await getSettings();
-      const currentHash = settings.password;
+      const currentHash = current.password;
 
       // Verify current password if it exists
       if (currentHash) {

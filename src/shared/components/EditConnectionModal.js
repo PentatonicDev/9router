@@ -28,9 +28,21 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
   const [saving, setSaving] = useState(false);
+  // "" = shared, "@admin" = password login only, otherwise the owner's e-mail.
+  const [owner, setOwner] = useState("");
+  const [canAssignOwner, setCanAssignOwner] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch("/api/auth/status")
+      .then((res) => res.json())
+      .then((data) => setCanAssignOwner(!!data?.scopeResourcesByUser && !!data?.isAdmin))
+      .catch(() => {});
+  }, [isOpen]);
 
   useEffect(() => {
     if (connection) {
+      setOwner(connection.owner || "");
       setFormData({
         name: connection.name || "",
         priority: connection.priority || 1,
@@ -172,6 +184,8 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
         updates.providerSpecificData = buildRegionSpecificData();
       }
       
+      if (canAssignOwner) updates.owner = owner || null;
+
       await onSave(updates);
     } finally {
       setSaving(false);
@@ -201,6 +215,16 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
           value={formData.priority}
           onChange={(e) => setFormData({ ...formData, priority: Number.parseInt(e.target.value, 10) || 1 })}
         />
+
+        {canAssignOwner && (
+          <Input
+            label="Owner"
+            value={owner}
+            onChange={(e) => setOwner(e.target.value)}
+            placeholder="user@company.com"
+            hint={'Leave blank to share with everyone, or use "@admin" to keep it to the password login.'}
+          />
+        )}
 
         {!isOAuth && (
           <>
@@ -302,6 +326,7 @@ EditConnectionModal.propTypes = {
     name: PropTypes.string,
     email: PropTypes.string,
     priority: PropTypes.number,
+    owner: PropTypes.string,
     authType: PropTypes.string,
     provider: PropTypes.string,
     providerSpecificData: PropTypes.object,

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getApiKeys, createApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
+import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +10,7 @@ const MAX_NAME_LENGTH = 100;
 // GET /api/keys - List API keys
 export async function GET() {
   try {
-    const keys = await getApiKeys();
+    const keys = scopeVisible(await getApiKeys(), await getScopeFilter());
     return NextResponse.json({ keys });
   } catch (error) {
     console.log("Error fetching keys:", error);
@@ -40,6 +41,7 @@ export async function POST(request) {
       id: apiKey.id,
       machineId: apiKey.machineId,
       tags: apiKey.tags,
+      owner: apiKey.owner,
     }, { status: 201 });
   } catch (error) {
     console.log("Error creating key:", error);
