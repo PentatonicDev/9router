@@ -41,6 +41,9 @@ export default function ProviderDetailPage() {
   const providerId = params.id;
   const { getCaps } = useModelCaps();
   const [connections, setConnections] = useState([]);
+  const [ownerFilter, setOwnerFilter] = useState("all");
+  // Only an admin sees owners at all, so only they get the filter.
+  const [canAssignOwner, setCanAssignOwner] = useState(false);
   const [loading, setLoading] = useState(true);
   const [providerNode, setProviderNode] = useState(null);
   const [proxyPools, setProxyPools] = useState([]);
@@ -291,6 +294,13 @@ export default function ProviderDetailPage() {
   }, []);
 
   // Fetch free models from Kilo API for kilocode provider
+  useEffect(() => {
+    fetch("/api/auth/status")
+      .then((res) => res.json())
+      .then((data) => setCanAssignOwner(!!data?.scopeResourcesByUser && !!data?.isAdmin))
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (providerId !== "kilocode") return;
     fetch("/api/providers/kilo/free-models")
@@ -996,9 +1006,36 @@ export default function ProviderDetailPage() {
 
   const isSelected = (connectionId) => selectedConnectionIds.includes(connectionId);
 
+  // Owners come from the accounts themselves, so the filter cannot offer a value
+  // that would show nothing.
+  const accountOwners = Array.from(new Set(connections.map((c) => c.owner).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const activeOwnerFilter = accountOwners.includes(ownerFilter) || ownerFilter === "__shared__" ? ownerFilter : "all";
+  const visibleConnections = activeOwnerFilter === "all"
+    ? connections
+    : connections.filter((c) => (activeOwnerFilter === "__shared__" ? !c.owner : c.owner === activeOwnerFilter));
+
+  const ownerFilterControl = canAssignOwner && accountOwners.length > 0 ? (
+    <select
+      value={activeOwnerFilter}
+      onChange={(e) => setOwnerFilter(e.target.value)}
+      aria-label="Filter accounts by owner"
+      className="h-8 rounded-lg border border-border bg-surface px-2 text-xs text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50"
+      style={{ colorScheme: "auto" }}
+    >
+      <option value="all">All owners</option>
+      <option value="__shared__">Shared</option>
+      {accountOwners.map((owner) => (
+        <option key={owner} value={owner}>{owner === "@admin" ? "Admin only" : owner}</option>
+      ))}
+    </select>
+  ) : null;
+
   const connectionsList = (
     <div className="flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
-      {connections
+      {ownerFilterControl && (
+        <div className="flex justify-end pb-2">{ownerFilterControl}</div>
+      )}
+      {visibleConnections
         .map((conn, index) => (
           <div key={conn.id} className="flex min-w-0 items-stretch">
             <div className="flex shrink-0 items-center pl-1 sm:pl-2">
@@ -1015,7 +1052,7 @@ export default function ProviderDetailPage() {
                 proxyPools={proxyPools}
                 isOAuth={isOAuth}
                 isFirst={index === 0}
-                isLast={index === connections.length - 1}
+                isLast={index === visibleConnections.length - 1}
                 onMoveUp={() => handleSwapPriority(index, index - 1)}
                 onMoveDown={() => handleSwapPriority(index, index + 1)}
                 onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}

@@ -233,6 +233,8 @@ export async function updateProviderConnection(id, data) {
     const normalized = resetHealthStateOnActivation(existing, data);
     const merged = { ...existing, ...normalized, updatedAt: new Date().toISOString() };
     upsert(db, merged);
+    const ownerChanged = data.owner !== undefined && (merged.owner ?? null) !== (existing.owner ?? null);
+    if (ownerChanged) unbindUnreachableInTx(db, id, merged.owner ?? null);
     if (data.priority !== undefined) reorderInTx(db, existing.provider);
     result = merged;
   });
@@ -252,6 +254,23 @@ function unbindConnectionsInTx(db, ids) {
     if (!Array.isArray(current)) continue;
     const next = current.filter((connId) => !removed.has(connId));
     if (next.length === current.length) continue;
+    db.run(`UPDATE apiKeys SET allowedConnectionIds = ? WHERE id = ?`, [next.length ? stringifyJson(next) : null, row.id]);
+  }
+}
+
+// An account binding must not outlive the visibility that justified it: after an
+// owner change, a key whose owner can no longer see the account keeps routing to
+// it, since the binding list is consulted before ownership at request time.
+// Must be called INSIDE a transaction.
+function unbindUnreachableInTx(db, connectionId, owner) {
+  for (const row of db.all(`SELECT id, owner, allowedConnectionIds FROM apiKeys WHERE allowedConnectionIds IS NOT NULL`)) {
+    const current = parseJson(row.allowedConnectionIds, null);
+    if (!Array.isArray(current) || !current.includes(connectionId)) continue;
+    const keyOwner = row.owner ?? null;
+    // Shared accounts stay reachable by everyone; an admin-owned key reaches
+    // only admin-owned and shared accounts, and a user's key only their own.
+    if (owner === null || keyOwner === owner) continue;
+    const next = current.filter((id) => id !== connectionId);
     db.run(`UPDATE apiKeys SET allowedConnectionIds = ? WHERE id = ?`, [next.length ? stringifyJson(next) : null, row.id]);
   }
 }

@@ -37,6 +37,7 @@ export default function APIPageClient({ machineId }) {
   const [keys, setKeys] = useState([]);
   const [connections, setConnections] = useState([]);
   const [tagFilter, setTagFilter] = useState("all");
+  const [ownerFilter, setOwnerFilter] = useState("all");
   const [editKeyState, setEditKeyState] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -49,6 +50,8 @@ export default function APIPageClient({ machineId }) {
   // Assume admin until /api/auth/status answers, so the default (scope off) UI
   // is unchanged and nothing flickers out for a real admin.
   const [isAdmin, setIsAdmin] = useState(true);
+  // Owner only means anything while scoping is on, so the field appears only then.
+  const [canAssignOwner, setCanAssignOwner] = useState(false);
   const [requireLogin, setRequireLogin] = useState(true);
   const [hasPassword, setHasPassword] = useState(true);
  const [tunnelDashboardAccess, setTunnelDashboardAccess] = useState(false);
@@ -125,7 +128,10 @@ export default function APIPageClient({ machineId }) {
     loadSettings();
     fetch("/api/auth/status")
       .then((res) => res.json())
-      .then((data) => setIsAdmin(!data?.scopeResourcesByUser || !!data?.isAdmin))
+      .then((data) => {
+        setIsAdmin(!data?.scopeResourcesByUser || !!data?.isAdmin);
+        setCanAssignOwner(!!data?.scopeResourcesByUser && !!data?.isAdmin);
+      })
       .catch(() => {});
   }, []);
 
@@ -719,12 +725,16 @@ export default function APIPageClient({ machineId }) {
 
   const handleSaveKeyEdit = async () => {
     if (!editKeyState || !editKeyState.name.trim()) return;
-    const { id, name, tags } = editKeyState;
+    const { id, name, tags, owner } = editKeyState;
     try {
+      const payload = { name: name.trim(), tags: parseTagInput(tags) };
+      // Reassigning drops bindings to accounts the new owner cannot reach, so
+      // only send it when it is actually editable here.
+      if (canAssignOwner) payload.owner = owner?.trim() || null;
       const res = await fetch(`/api/keys/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), tags: parseTagInput(tags) }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (res.ok) {
@@ -742,7 +752,16 @@ export default function APIPageClient({ machineId }) {
   // Renaming or deleting the last key with a tag would leave the filter stuck
   // on a tag nothing carries, showing an empty list with no way back.
   const activeTagFilter = tagFilter !== "all" && allTags.includes(tagFilter) ? tagFilter : "all";
-  const visibleKeyList = activeTagFilter === "all" ? keys : keys.filter((k) => (k.tags || []).includes(activeTagFilter));
+  // Owners come from the keys themselves, so the list cannot offer a value that
+  // would filter to nothing.
+  const allOwners = Array.from(new Set(keys.map((k) => k.owner).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const activeOwnerFilter = allOwners.includes(ownerFilter) || ownerFilter === "__shared__" ? ownerFilter : "all";
+  const visibleKeyList = keys.filter((k) => {
+    if (activeTagFilter !== "all" && !(k.tags || []).includes(activeTagFilter)) return false;
+    if (activeOwnerFilter === "__shared__") return !k.owner;
+    if (activeOwnerFilter !== "all" && k.owner !== activeOwnerFilter) return false;
+    return true;
+  });
 
   const maskKey = (fullKey) => {
     if (!fullKey || fullKey.length <= 10) return fullKey || "";
@@ -1049,6 +1068,21 @@ export default function APIPageClient({ machineId }) {
                 ))}
               </select>
             )}
+            {canAssignOwner && allOwners.length > 0 && (
+              <select
+                value={activeOwnerFilter}
+                onChange={(e) => setOwnerFilter(e.target.value)}
+                aria-label="Filter keys by owner"
+                className="h-9 rounded-lg border border-border bg-surface px-2 text-xs text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50"
+                style={{ colorScheme: "auto" }}
+              >
+                <option value="all">All owners</option>
+                <option value="__shared__">Shared</option>
+                {allOwners.map((owner) => (
+                  <option key={owner} value={owner}>{owner === "@admin" ? "Admin only" : owner}</option>
+                ))}
+              </select>
+            )}
             <Button icon="add" onClick={() => setShowAddModal(true)}>
               Create Key
             </Button>
@@ -1160,7 +1194,7 @@ export default function APIPageClient({ machineId }) {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setEditKeyState({ id: key.id, name: key.name || "", tags: (key.tags || []).join(", "), error: null })}
+                    onClick={() => setEditKeyState({ id: key.id, name: key.name || "", tags: (key.tags || []).join(", "), owner: key.owner || "", error: null })}
                     className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
                     title="Rename and edit tags"
                   >
@@ -1267,6 +1301,20 @@ export default function APIPageClient({ machineId }) {
             placeholder="prod, backend"
           />
           <p className="-mt-2 text-xs text-text-muted">Comma-separated. Leave empty to remove all tags.</p>
+          {canAssignOwner && (
+            <>
+              <Input
+                label="Owner"
+                value={editKeyState?.owner || ""}
+                onChange={(e) => setEditKeyState((prev) => ({ ...prev, owner: e.target.value }))}
+                placeholder="user@company.com"
+              />
+              <p className="-mt-2 text-xs text-text-muted">
+                Leave empty to share with everyone, or use &ldquo;@admin&rdquo; to keep it to the password
+                login. Accounts the new owner cannot reach are unbound from this key.
+              </p>
+            </>
+          )}
           {editKeyState?.error && <p className="text-sm text-red-500">{editKeyState.error}</p>}
           <div className="flex gap-2">
             <Button onClick={handleSaveKeyEdit} fullWidth disabled={!editKeyState?.name?.trim()}>

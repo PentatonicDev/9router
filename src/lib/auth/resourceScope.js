@@ -30,6 +30,18 @@ export function parseAdminEmails(value) {
   return list.map(normalizeOwner).filter(Boolean);
 }
 
+// The designated admins exist because SSO-only leaves no password login to
+// administer the instance. Once password login is back (password / both), it is
+// the admin again and the list goes dormant — kept, not cleared, so switching
+// back to SSO-only restores it.
+export function isSsoOnly(settings) {
+  return ["sso", "oidc", "saml"].includes(settings?.authMode);
+}
+
+export function ssoAdminsFor(settings) {
+  return isSsoOnly(settings) ? parseAdminEmails(settings?.ssoAdminEmails) : [];
+}
+
 export function isScopeEnabled(settings) {
   return settings?.scopeResourcesByUser === true;
 }
@@ -77,7 +89,7 @@ export async function getRequestIdentity() {
   if (!owner) return { isAdmin: true, owner: ADMIN_OWNER };
 
   const settings = await getSettings();
-  return { isAdmin: parseAdminEmails(settings?.ssoAdminEmails).includes(owner), owner };
+  return { isAdmin: ssoAdminsFor(settings).includes(owner), owner };
 }
 
 /**
@@ -110,6 +122,19 @@ export async function resolveDefaultOwner() {
   } catch {
     return null;
   }
+}
+
+/**
+ * The owner a create request may set. Only an admin chooses one; for everyone
+ * else the field is ignored (not rejected) and the repo default stamps their
+ * own identity, so a forged body cannot plant a resource on someone else.
+ * `undefined` means "let the repo decide".
+ */
+export async function ownerForCreate(requestedOwner) {
+  if (requestedOwner === undefined) return undefined;
+  const { isAdmin } = await getRequestIdentity();
+  if (!isAdmin) return undefined;
+  return normalizeOwnerInput(requestedOwner);
 }
 
 export function canSee(resource, filter) {

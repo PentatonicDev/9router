@@ -22,14 +22,14 @@ vi.mock("next/headers", () => ({
 const {
   ADMIN_OWNER, canSee, canEdit, normalizeOwner, normalizeOwnerInput,
   parseAdminEmails, getScopeFilter, getRequestIdentity, scopeVisible,
-  resolveDefaultOwner,
+  resolveDefaultOwner, ownerForCreate,
 } = await import("@/lib/auth/resourceScope");
 
 const ALICE = "alice@corp.com";
 const BOB = "bob@corp.com";
 
-function session({ scope = true, email = null, admins = [], cliToken = null } = {}) {
-  settingsMock.mockResolvedValue({ scopeResourcesByUser: scope, ssoAdminEmails: admins });
+function session({ scope = true, email = null, admins = [], cliToken = null, authMode = "sso" } = {}) {
+  settingsMock.mockResolvedValue({ scopeResourcesByUser: scope, ssoAdminEmails: admins, authMode });
   sessionMock.mockResolvedValue(email ? { oidcEmail: email } : { authenticated: true });
   cookieMock.mockReturnValue({ value: "token" });
   headerMock.mockReturnValue(cliToken);
@@ -167,5 +167,57 @@ describe("resolveDefaultOwner", () => {
   it("shares what the password login creates — @admin is opt-in, never a default", async () => {
     session({ email: null });
     expect(await resolveDefaultOwner()).toBeNull();
+  });
+});
+
+describe("designated admins are tied to SSO-only", () => {
+  it("grant admin while SSO is the only login", async () => {
+    session({ email: ALICE, admins: [ALICE], authMode: "sso" });
+    expect((await getRequestIdentity()).isAdmin).toBe(true);
+  });
+
+  it("go dormant once password login is back — the password is the admin again", async () => {
+    for (const authMode of ["both", "password"]) {
+      session({ email: ALICE, admins: [ALICE], authMode });
+      expect((await getRequestIdentity()).isAdmin).toBe(false);
+    }
+  });
+
+  it("are kept, not cleared, so switching back to SSO-only restores them", async () => {
+    session({ email: ALICE, admins: [ALICE], authMode: "both" });
+    expect((await getRequestIdentity()).isAdmin).toBe(false);
+    session({ email: ALICE, admins: [ALICE], authMode: "oidc" });
+    expect((await getRequestIdentity()).isAdmin).toBe(true);
+  });
+
+  it("never take the password login's own admin away", async () => {
+    session({ email: null, admins: [], authMode: "password" });
+    expect((await getRequestIdentity()).isAdmin).toBe(true);
+  });
+});
+
+describe("ownerForCreate", () => {
+  it("lets an admin choose any owner, including the sentinel", async () => {
+    session({ email: null });
+    expect(await ownerForCreate(BOB)).toBe(BOB);
+    expect(await ownerForCreate("@admin")).toBe(ADMIN_OWNER);
+    expect(await ownerForCreate("")).toBeNull();
+  });
+
+  it("ignores an owner sent by a scoped user, so one cannot be planted on someone else", async () => {
+    session({ email: ALICE });
+    // undefined defers to the repo, which stamps the caller's own identity.
+    expect(await ownerForCreate(BOB)).toBeUndefined();
+    expect(await ownerForCreate("@admin")).toBeUndefined();
+  });
+
+  it("defers to the repo when the field is absent", async () => {
+    session({ email: null });
+    expect(await ownerForCreate(undefined)).toBeUndefined();
+  });
+
+  it("lets an SSO admin choose, since the privilege is what matters", async () => {
+    session({ email: ALICE, admins: [ALICE] });
+    expect(await ownerForCreate(BOB)).toBe(BOB);
   });
 });

@@ -5,6 +5,15 @@
 - **Auth**: designated admin e-mails (`ssoAdminEmails`) for SSO-only instances, where password login is unavailable and there would otherwise be no administrator. Admin is a session privilege, not an identity — an SSO admin keeps their own resources when the privilege is removed. Recovery stays with the CLI's "Reset Auth Mode to Password"
 - **Combos**: combo names are now unique per owner, so two users can each keep a combo of the same name; a shared combo is usable by everyone but only an admin can edit it
 - **Login**: SSO-only instances redirect straight to the identity provider instead of showing a single button (an `?error=` in the URL still shows the failure rather than looping)
+- **Auth**: reassigning an owner reconciles API key bindings in both directions — a key whose owner can no longer reach an account is unbound from it, since bindings are consulted before ownership at request time. Only the unreachable bindings go: clearing the list entirely would read as "unrestricted" and widen the key instead
+- **Auth**: an owner can be chosen when creating an account, API key or combo, and changed afterwards from the Edit dialog. The field is admin-only — for everyone else it is hidden and the server stamps their own identity, so an owner cannot be planted on someone else through the request body
+- **Auth**: designated admin e-mails only apply while SSO is the only login. Switching back to password or both makes the password the admin again and leaves the list dormant rather than clearing it, so returning to SSO-only restores it
+- **Auth**: filter accounts and API keys by owner on their dashboards (admins)
+- **Combos**: the combo page separates a user's own combos from the shared ones. A user cannot take a shared combo's name, but may hide that combo to free the name for their own; restoring it requires deleting theirs of the same name first
+- **Headroom**: optionally send each API key's traffic to its own Headroom project (`/p/<key name>`), so per-project stats separate callers instead of pooling them; the key name is slugified and its value never reaches the proxy URL. Also exposes the existing `compress_user_messages` option in the dashboard
+- **Auth**: reassigning an owner reconciles API key bindings in both directions — a key whose owner can no longer reach an account is unbound from it, since bindings are consulted before ownership at request time. Only the unreachable bindings go: clearing the list entirely would read as "unrestricted" and widen the key instead
+- **Auth**: the owner of an API key is editable from its Edit dialog (admins, while scoping is on)
+- **Auth**: designated admin e-mails only apply while SSO is the only login. Switching back to password or both makes the password the admin again and leaves the list dormant rather than clearing it, so returning to SSO-only restores it
 
 ## Fixes
 - **Usage**: record the API key on request details — the Details tab showed "Local (no key)" for every request because the four `saveRequestDetail` call sites never passed it, while the usage history recorded it correctly

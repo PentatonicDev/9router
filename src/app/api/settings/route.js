@@ -3,7 +3,7 @@ import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import bcrypt from "bcryptjs";
-import { getRequestIdentity, isScopeEnabled, parseAdminEmails } from "@/lib/auth/resourceScope";
+import { getRequestIdentity, isScopeEnabled, isSsoOnly, parseAdminEmails } from "@/lib/auth/resourceScope";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -65,8 +65,7 @@ export async function PATCH(request) {
 
     // SSO-only leaves no password login, so an instance without a designated
     // admin would have nobody able to administer it.
-    const nextAuthMode = body.authMode ?? current.authMode;
-    const ssoOnly = ["sso", "oidc", "saml"].includes(nextAuthMode);
+    const ssoOnly = isSsoOnly({ ...current, ...body });
     if (ssoOnly && isScopeEnabled({ ...current, ...body })) {
       const admins = parseAdminEmails(body.ssoAdminEmails ?? current.ssoAdminEmails);
       if (!admins.length) {

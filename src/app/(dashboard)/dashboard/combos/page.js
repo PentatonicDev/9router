@@ -55,6 +55,8 @@ export default function CombosPage() {
   const { getCaps } = useModelCaps();
   const [confirmState, setConfirmState] = useState(null);
   const { copied, copy } = useCopyToClipboard();
+  const [identity, setIdentity] = useState({ isAdmin: true, scoped: false });
+  const [hiddenShared, setHiddenShared] = useState([]);
 
   useEffect(() => {
     fetchData();
@@ -62,17 +64,25 @@ export default function CombosPage() {
 
   const fetchData = async () => {
     try {
-      const [combosRes, providersRes, settingsRes] = await Promise.all([
+      const [combosRes, providersRes, settingsRes, statusRes] = await Promise.all([
         fetch("/api/combos"),
         fetch("/api/providers"),
         fetch("/api/settings"),
+        fetch("/api/auth/status"),
       ]);
+      if (statusRes.ok) {
+        const st = await statusRes.json();
+        setIdentity({ isAdmin: !st.scopeResourcesByUser || !!st.isAdmin, scoped: !!st.scopeResourcesByUser });
+      }
       const combosData = await combosRes.json();
       const providersData = await providersRes.json();
       const settingsData = settingsRes.ok ? await settingsRes.json() : {};
       
       // Only LLM combos here - webSearch/webFetch combos belong to media-providers/web
-      if (combosRes.ok) setCombos((combosData.combos || []).filter(c => !c.kind || c.kind === "llm"));
+      if (combosRes.ok) {
+        setCombos((combosData.combos || []).filter(c => !c.kind || c.kind === "llm"));
+        setHiddenShared(combosData.hiddenSharedCombos || []);
+      }
       if (providersRes.ok) {
         setActiveProviders(providersData.connections || []);
       }
@@ -100,6 +110,23 @@ export default function CombosPage() {
       });
     } catch (error) {
       console.log("Error updating capacity adapter:", error);
+    }
+  };
+
+  // Hiding a shared combo frees its name for one of the user's own; restoring it
+  // is refused while a combo of that name still exists on the account.
+  const handleToggleHidden = async (name, hidden) => {
+    try {
+      const res = await fetch("/api/combos/hidden", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, hidden }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || "Failed to update"); return; }
+      await fetchData();
+    } catch {
+      alert("Failed to update");
     }
   };
 
@@ -227,21 +254,72 @@ export default function CombosPage() {
           </div>
         </Card>
       ) : (
-        <div className="flex flex-col gap-4">
-          {combos.map((combo) => (
-            <ComboCard
-              key={combo.id}
-              combo={combo}
-              getCaps={getCaps}
-              activeProviders={activeProviders}
-              copied={copied}
-              onCopy={copy}
-              onEdit={() => setEditingCombo(combo)}
-              onDelete={() => handleDelete(combo.id)}
-              strategy={comboStrategies[combo.name] || {}}
-              onSetStrategy={(patch) => handleSetComboStrategy(combo.name, patch)}
-            />
+        <div className="flex flex-col gap-6">
+          {[
+            { key: "own", title: "Your combos", rows: combos.filter((c) => !c.shared) },
+            {
+              key: "shared",
+              title: "Shared combos",
+              hint: identity.isAdmin
+                ? "Visible to everyone. Users can use them but not edit them."
+                : "Maintained by the admin — use them, or hide one to reuse its name.",
+              rows: combos.filter((c) => c.shared),
+            },
+          ].map((section) => (
+            section.rows.length === 0 && section.key === "own" && !identity.scoped ? null : (
+              <div key={section.key} className="flex flex-col gap-3">
+                {identity.scoped && (
+                  <div>
+                    <h2 className="text-sm font-semibold text-text-main">{section.title}</h2>
+                    {section.hint && <p className="text-xs text-text-muted">{section.hint}</p>}
+                  </div>
+                )}
+                {section.rows.length === 0 ? (
+                  <p className="text-xs text-text-muted">None.</p>
+                ) : section.rows.map((combo) => (
+                  <ComboCard
+                    key={combo.id}
+                    combo={combo}
+                    getCaps={getCaps}
+                    activeProviders={activeProviders}
+                    copied={copied}
+                    onCopy={copy}
+                    onEdit={combo.readOnly ? null : () => setEditingCombo(combo)}
+                    onDelete={combo.readOnly ? null : () => handleDelete(combo.id)}
+                    onHide={combo.readOnly ? () => handleToggleHidden(combo.name, true) : null}
+                    strategy={comboStrategies[combo.name] || {}}
+                    onSetStrategy={(patch) => handleSetComboStrategy(combo.name, patch)}
+                  />
+                ))}
+              </div>
+            )
           ))}
+
+          {hiddenShared.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <div>
+                <h2 className="text-sm font-semibold text-text-main">Hidden shared combos</h2>
+                <p className="text-xs text-text-muted">
+                  Their names are free for your own combos. Restoring one requires deleting yours of
+                  the same name first.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {hiddenShared.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => handleToggleHidden(name, false)}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs text-text-muted transition-colors hover:text-text-main"
+                    title="Restore this shared combo"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">undo</span>
+                    <span className="font-mono">{name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -261,6 +339,7 @@ export default function CombosPage() {
           onClose={() => setShowCreateModal(false)}
           onSave={handleCreate}
           activeProviders={activeProviders}
+          canAssignOwner={identity.scoped && identity.isAdmin}
         />
       )}
 
@@ -272,6 +351,7 @@ export default function CombosPage() {
           onClose={() => setEditingCombo(null)}
           onSave={(data) => handleUpdate(editingCombo.id, data)}
           activeProviders={activeProviders}
+          canAssignOwner={identity.scoped && identity.isAdmin}
         />
       )}
 
@@ -294,7 +374,7 @@ const STRATEGY_OPTIONS = [
   { value: "fusion", label: "Fusion — panel + judge" },
 ];
 
-function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy }) {
+function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdit, onDelete, onHide = null, strategy = {}, onSetStrategy }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
@@ -373,22 +453,36 @@ function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdi
               </span>
               <span className="text-[10px] leading-tight">Copy</span>
             </button>
-            <button
-              onClick={onEdit}
-              className="flex flex-col items-center rounded px-2 py-1 text-text-muted transition-colors hover:bg-black/5 hover:text-primary dark:hover:bg-white/5"
-              title="Edit"
-            >
-              <span className="material-symbols-outlined text-[18px]">edit</span>
-              <span className="text-[10px] leading-tight">Edit</span>
-            </button>
-            <button
-              onClick={onDelete}
-              className="flex flex-col items-center rounded px-2 py-1 text-red-500 transition-colors hover:bg-red-500/10"
-              title="Delete"
-            >
-              <span className="material-symbols-outlined text-[18px]">delete</span>
-              <span className="text-[10px] leading-tight">Delete</span>
-            </button>
+            {onEdit && (
+              <button
+                onClick={onEdit}
+                className="flex flex-col items-center rounded px-2 py-1 text-text-muted transition-colors hover:bg-black/5 hover:text-primary dark:hover:bg-white/5"
+                title="Edit"
+              >
+                <span className="material-symbols-outlined text-[18px]">edit</span>
+                <span className="text-[10px] leading-tight">Edit</span>
+              </button>
+            )}
+            {onDelete && (
+              <button
+                onClick={onDelete}
+                className="flex flex-col items-center rounded px-2 py-1 text-red-500 transition-colors hover:bg-red-500/10"
+                title="Delete"
+              >
+                <span className="material-symbols-outlined text-[18px]">delete</span>
+                <span className="text-[10px] leading-tight">Delete</span>
+              </button>
+            )}
+            {onHide && (
+              <button
+                onClick={onHide}
+                className="flex flex-col items-center rounded px-2 py-1 text-text-muted transition-colors hover:bg-black/5 hover:text-primary dark:hover:bg-white/5"
+                title="Hide this shared combo to free its name for your own"
+              >
+                <span className="material-symbols-outlined text-[18px]">visibility_off</span>
+                <span className="text-[10px] leading-tight">Hide</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -650,13 +744,14 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
   );
 }
 
-function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindFilter = null }) {
+function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindFilter = null, canAssignOwner = false }) {
   // Initialize state with combo values - key prop on parent handles reset on remount
   const [name, setName] = useState(combo?.name || "");
   const [models, setModels] = useState(combo?.models || []);
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState("");
+  const [owner, setOwner] = useState(combo?.owner || "");
   const [modelAliases, setModelAliases] = useState({});
 
   const sensors = useSensors(
@@ -744,7 +839,8 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   const handleSave = async () => {
     if (!validateName(name)) return;
     setSaving(true);
-    await onSave({ name: name.trim(), models });
+    // Only an admin sends an owner; for everyone else the server stamps their own.
+    await onSave({ name: name.trim(), models, ...(canAssignOwner ? { owner: owner.trim() || null } : {}) });
     setSaving(false);
   };
 
@@ -771,6 +867,21 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
               Only letters, numbers, -, _ and . allowed
             </p>
           </div>
+
+          {canAssignOwner && (
+            <div>
+              <Input
+                label="Owner"
+                value={owner}
+                onChange={(e) => setOwner(e.target.value)}
+                placeholder="user@company.com"
+              />
+              <p className="text-[10px] text-text-muted mt-0.5">
+                Leave empty to share with everyone (read-only for them), or use &ldquo;@admin&rdquo; to
+                keep it to the password login.
+              </p>
+            </div>
+          )}
 
           {/* Models */}
           <div>

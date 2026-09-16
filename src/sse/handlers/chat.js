@@ -9,8 +9,8 @@ import {
 } from "../services/auth.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
 import { getExhaustedQuotaResetMs } from "../services/quotaReset.js";
-import { getSettings, getApiKeyOwner } from "@/lib/localDb";
-import { resolveScopedSettings } from "@/lib/auth/scopedSettings";
+import { getSettings, getApiKeyOwner, getApiKeyIdentity } from "@/lib/localDb";
+import { resolveScopedSettings, headroomProjectUrl } from "@/lib/auth/scopedSettings";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
@@ -286,7 +286,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       ccFilterNaming: !!chatSettings.ccFilterNaming,
       rtkEnabled: !!chatSettings.rtkEnabled,
       headroomEnabled: !!chatSettings.headroomEnabled,
-      headroomUrl: chatSettings.headroomUrl || DEFAULT_HEADROOM_URL,
+      headroomUrl: chatSettings.headroomPerApiKeyProject
+        ? headroomProjectUrl(chatSettings.headroomUrl || DEFAULT_HEADROOM_URL, (await getApiKeyIdentity(apiKey)).name)
+        : (chatSettings.headroomUrl || DEFAULT_HEADROOM_URL),
       headroomCompressUserMessages: !!chatSettings.headroomCompressUserMessages,
       headroomTimeoutMs: chatSettings.headroomTimeoutMs,
       cavemanEnabled: !!chatSettings.cavemanEnabled,

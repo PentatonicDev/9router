@@ -4,7 +4,7 @@ import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
 import { hasTrustedPeerHeaders } from "@/lib/auth/trustedPeer";
 import { getDashboardAuthSession } from "@/lib/auth/dashboardSession";
-import { isScopeEnabled, normalizeOwner, parseAdminEmails } from "@/lib/auth/resourceScope";
+import { isScopeEnabled, normalizeOwner, ssoAdminsFor } from "@/lib/auth/resourceScope";
 
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
 const CLI_TOKEN_SALT = "9r-cli-auth";
@@ -191,7 +191,7 @@ async function isAdminRequest(request, settings) {
   if (!session) return false;
   const owner = normalizeOwner(session.oidcEmail || session.samlEmail);
   if (!owner) return true; // password login
-  return parseAdminEmails(settings?.ssoAdminEmails).includes(owner);
+  return ssoAdminsFor(settings).includes(owner);
 }
 
 async function hasValidToken(request) {

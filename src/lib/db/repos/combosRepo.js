@@ -39,10 +39,16 @@ export async function getComboByName(name, owner = undefined) {
     const row = db.get(`SELECT * FROM combos WHERE name = ?`, [name]);
     return rowToCombo(row);
   }
-  const row = owner === null
-    ? db.get(`SELECT * FROM combos WHERE name = ? AND owner IS NULL`, [name])
-    : db.get(`SELECT * FROM combos WHERE name = ? AND (owner = ? OR owner IS NULL) ORDER BY owner IS NULL LIMIT 1`, [name, owner]);
-  return rowToCombo(row);
+  if (owner === null) return rowToCombo(db.get(`SELECT * FROM combos WHERE name = ? AND owner IS NULL`, [name]));
+
+  const own = db.get(`SELECT * FROM combos WHERE name = ? AND owner = ?`, [name, owner]);
+  if (own) return rowToCombo(own);
+
+  // A shared combo the user hid no longer answers for them.
+  const hidden = db.get(`SELECT value FROM kv WHERE scope = 'hiddenGlobalCombos' AND key = ?`, [owner]);
+  if ((parseJson(hidden?.value, []) || []).includes(name)) return null;
+
+  return rowToCombo(db.get(`SELECT * FROM combos WHERE name = ? AND owner IS NULL`, [name]));
 }
 
 export async function createCombo(data) {

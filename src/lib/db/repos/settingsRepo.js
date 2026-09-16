@@ -58,6 +58,9 @@ const DEFAULT_SETTINGS = {
   headroomEnabled: false,
   headroomUrl: DEFAULT_HEADROOM_URL,
   headroomCompressUserMessages: false,
+  // Route each API key's traffic to its own Headroom project (/p/<key name>),
+  // so per-project stats separate the callers instead of pooling them.
+  headroomPerApiKeyProject: false,
   headroomTimeoutMs: 3000,
   cavemanEnabled: false,
   cavemanLevel: "full",

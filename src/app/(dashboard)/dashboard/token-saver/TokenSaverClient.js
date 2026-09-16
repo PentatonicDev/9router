@@ -15,6 +15,8 @@ export default function TokenSaverClient() {
   const [headroomEnabled, setHeadroomEnabled] = useState(false);
   const [headroomUrl, setHeadroomUrl] = useState("http://localhost:8787");
   const [headroomTimeoutMs, setHeadroomTimeoutMs] = useState(3000);
+  const [headroomCompressUserMessages, setHeadroomCompressUserMessages] = useState(false);
+  const [headroomPerApiKeyProject, setHeadroomPerApiKeyProject] = useState(false);
   const [headroomStatus, setHeadroomStatus] = useState({
     installed: false,
     running: false,
@@ -424,6 +426,8 @@ export default function TokenSaverClient() {
           setHeadroomEnabled(!!data.headroomEnabled);
           setHeadroomUrl(data.headroomUrl || "http://localhost:8787");
           if (typeof data.headroomTimeoutMs === "number") setHeadroomTimeoutMs(data.headroomTimeoutMs);
+          setHeadroomCompressUserMessages(!!data.headroomCompressUserMessages);
+          setHeadroomPerApiKeyProject(!!data.headroomPerApiKeyProject);
           setCodeAware(data.headroomCodeAware === true);
           setKompress(data.headroomKompress !== false);
           setCavemanEnabled(!!data.cavemanEnabled);
@@ -826,6 +830,32 @@ export default function TokenSaverClient() {
               Use a local proxy for Start/Stop, or an external Docker sidecar
               like http://headroom:8787.
             </p>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium">Compress user messages</p>
+              <p className="text-xs text-text-muted">
+                Also compress the user turns, not just tool output. Worth trying when
+                messages dominate the payload.
+              </p>
+            </div>
+            <Toggle
+              checked={headroomCompressUserMessages}
+              onChange={(v) => { setHeadroomCompressUserMessages(v); patchSetting({ headroomCompressUserMessages: v }); }}
+            />
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium">Per-API-key project</p>
+              <p className="text-xs text-text-muted">
+                Send each key&rsquo;s traffic to its own Headroom project (<span className="font-mono">/p/&lt;key name&gt;</span>),
+                so per-project stats separate callers instead of pooling them.
+              </p>
+            </div>
+            <Toggle
+              checked={headroomPerApiKeyProject}
+              onChange={(v) => { setHeadroomPerApiKeyProject(v); patchSetting({ headroomPerApiKeyProject: v }); }}
+            />
           </div>
           <div className="flex flex-col gap-1">
             <p className="text-sm font-medium">Timeout (ms)</p>

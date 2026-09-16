@@ -84,14 +84,34 @@ export async function createApiKey(name, machineId, tags = null, owner = undefin
   return apiKey;
 }
 
+// Bindings must not outlive the visibility that justified them: a key handed to
+// another owner keeps routing to accounts that owner cannot see, because the
+// binding list is consulted before ownership at request time. Dropping every
+// binding would silently widen the key to all accounts ("no bindings = every
+// account"), so only the now-unreachable ones go.
+function reachableConnectionIds(db, ids, owner) {
+  if (!ids?.length) return null;
+  const kept = ids.filter((connId) => {
+    const conn = db.get(`SELECT owner FROM providerConnections WHERE id = ?`, [connId]);
+    if (!conn) return false;
+    const connOwner = conn.owner ?? null;
+    return connOwner === null || connOwner === owner;
+  });
+  return kept.length ? kept : null;
+}
+
 export async function updateApiKey(id, data) {
   const db = await getAdapter();
   let result = null;
   db.transaction(() => {
     const row = db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
     if (!row) return;
-    const merged = { ...rowToKey(row), ...data };
+    const previous = rowToKey(row);
+    const merged = { ...previous, ...data };
     merged.allowedConnectionIds = normalizeAllowed(merged.allowedConnectionIds);
+    if (data.owner !== undefined && (merged.owner ?? null) !== (previous.owner ?? null)) {
+      merged.allowedConnectionIds = reachableConnectionIds(db, merged.allowedConnectionIds, merged.owner ?? null);
+    }
     const tags = normalizeTags(merged.tags);
     merged.tags = tags || [];
     db.run(
@@ -129,6 +149,17 @@ export async function getApiKeyAllowedConnectionIds(key) {
  * the key itself carries the identity that caps which accounts it may reach.
  * An unknown key has no owner, matching validateApiKey being a separate check.
  */
+/**
+ * Identity of a key by its value: owner for scoping, name for labelling.
+ * One lookup, since the router needs both on every request.
+ */
+export async function getApiKeyIdentity(key) {
+  if (!key) return { owner: null, name: null };
+  const db = await getAdapter();
+  const row = db.get(`SELECT owner, name FROM apiKeys WHERE key = ?`, [key]);
+  return { owner: row?.owner ?? null, name: row?.name ?? null };
+}
+
 export async function getApiKeyOwner(key) {
   if (!key) return null;
   const db = await getAdapter();

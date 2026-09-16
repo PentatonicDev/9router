@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getApiKeys, createApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
-import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
+import { getScopeFilter, ownerForCreate, scopeVisible } from "@/lib/auth/resourceScope";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +33,10 @@ export async function POST(request) {
 
     // Always get machineId from server
     const machineId = await getConsistentMachineId();
-    const apiKey = await createApiKey(name.trim().slice(0, MAX_NAME_LENGTH), machineId, tags ?? null);
+    const apiKey = await createApiKey(
+      name.trim().slice(0, MAX_NAME_LENGTH), machineId, tags ?? null,
+      await ownerForCreate(body.owner),
+    );
 
     return NextResponse.json({
       key: apiKey.key,
