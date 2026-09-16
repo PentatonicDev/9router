@@ -18,6 +18,12 @@ import EndpointRow from "./components/EndpointRow";
 import StatusAlert from "./components/StatusAlert";
 import Tooltip from "./components/Tooltip";
 import SecurityWarning from "./components/SecurityWarning";
+// Tags are typed as a comma-separated list; the repo does the trimming,
+// de-duplication and capping.
+function parseTagInput(value) {
+  return (value || "").split(",").map((t) => t.trim()).filter(Boolean);
+}
+
 // A binding is stored as a connection id; show the account's own name when the
 // connection is still around, and a short id when it is not yet loaded.
 function connectionLabel(connectionId, connections) {
@@ -30,9 +36,12 @@ function connectionLabel(connectionId, connections) {
 export default function APIPageClient({ machineId }) {
   const [keys, setKeys] = useState([]);
   const [connections, setConnections] = useState([]);
+  const [tagFilter, setTagFilter] = useState("all");
+  const [editKeyState, setEditKeyState] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
+  const [newKeyTags, setNewKeyTags] = useState("");
   const [createdKey, setCreatedKey] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
 
@@ -647,7 +656,7 @@ export default function APIPageClient({ machineId }) {
       const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newKeyName }),
+        body: JSON.stringify({ name: newKeyName, tags: parseTagInput(newKeyTags) }),
       });
       const data = await res.json();
 
@@ -655,6 +664,7 @@ export default function APIPageClient({ machineId }) {
         setCreatedKey(data.key);
         await fetchData();
         setNewKeyName("");
+        setNewKeyTags("");
         setShowAddModal(false);
       }
     } catch (error) {
@@ -699,6 +709,33 @@ export default function APIPageClient({ machineId }) {
       console.log("Error toggling key:", error);
     }
   };
+
+  const handleSaveKeyEdit = async () => {
+    if (!editKeyState || !editKeyState.name.trim()) return;
+    const { id, name, tags } = editKeyState;
+    try {
+      const res = await fetch(`/api/keys/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), tags: parseTagInput(tags) }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setKeys((prev) => prev.map((k) => (k.id === id ? { ...k, ...data.key } : k)));
+        setEditKeyState(null);
+      } else {
+        setEditKeyState((prev) => (prev ? { ...prev, error: data.error || "Failed to save" } : prev));
+      }
+    } catch (error) {
+      setEditKeyState((prev) => (prev ? { ...prev, error: "An error occurred" } : prev));
+    }
+  };
+
+  const allTags = Array.from(new Set(keys.flatMap((k) => k.tags || []))).sort((a, b) => a.localeCompare(b));
+  // Renaming or deleting the last key with a tag would leave the filter stuck
+  // on a tag nothing carries, showing an empty list with no way back.
+  const activeTagFilter = tagFilter !== "all" && allTags.includes(tagFilter) ? tagFilter : "all";
+  const visibleKeyList = activeTagFilter === "all" ? keys : keys.filter((k) => (k.tags || []).includes(activeTagFilter));
 
   const maskKey = (fullKey) => {
     if (!fullKey || fullKey.length <= 10) return fullKey || "";
@@ -988,9 +1025,25 @@ export default function APIPageClient({ machineId }) {
             <span className="material-symbols-outlined text-primary">vpn_key</span>
             API Keys
           </h2>
-          <Button icon="add" onClick={() => setShowAddModal(true)}>
-            Create Key
-          </Button>
+          <div className="flex items-center gap-2">
+            {allTags.length > 0 && (
+              <select
+                value={activeTagFilter}
+                onChange={(e) => setTagFilter(e.target.value)}
+                aria-label="Filter keys by tag"
+                className="h-9 rounded-lg border border-border bg-surface px-2 text-xs text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50"
+                style={{ colorScheme: "auto" }}
+              >
+                <option value="all">All tags</option>
+                {allTags.map((tag) => (
+                  <option key={tag} value={tag}>{tag}</option>
+                ))}
+              </select>
+            )}
+            <Button icon="add" onClick={() => setShowAddModal(true)}>
+              Create Key
+            </Button>
+          </div>
         </div>
 
         <div className="flex items-center justify-between pb-4 mb-4 border-b border-border">
@@ -1025,13 +1078,31 @@ export default function APIPageClient({ machineId }) {
           </div>
         ) : (
           <div className="flex flex-col">
-            {keys.map((key) => (
+            {visibleKeyList.length === 0 && (
+              <p className="py-8 text-center text-sm text-text-muted">
+                No keys tagged &ldquo;{activeTagFilter}&rdquo;.
+              </p>
+            )}
+            {visibleKeyList.map((key) => (
               <div
                 key={key.id}
                 className={`group flex items-center justify-between py-3 border-b border-black/[0.03] dark:border-white/[0.03] last:border-b-0 ${key.isActive === false ? "opacity-60" : ""}`}
               >
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{key.name}</p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <p className="text-sm font-medium">{key.name}</p>
+                    {(key.tags || []).map((tag) => (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => setTagFilter(tag)}
+                        title={`Filter by "${tag}"`}
+                        className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary transition-colors hover:bg-primary/20"
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
                   <div className="flex items-center gap-2 mt-1">
                     <code className="text-xs text-text-muted font-mono">
                       {visibleKeys.has(key.id) ? key.key : maskKey(key.key)}
@@ -1076,6 +1147,13 @@ export default function APIPageClient({ machineId }) {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setEditKeyState({ id: key.id, name: key.name || "", tags: (key.tags || []).join(", "), error: null })}
+                    className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
+                    title="Rename and edit tags"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                  </button>
                   <Link
                     href={`/dashboard/keys/${key.id}`}
                     className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
@@ -1122,6 +1200,7 @@ export default function APIPageClient({ machineId }) {
         onClose={() => {
           setShowAddModal(false);
           setNewKeyName("");
+          setNewKeyTags("");
         }}
       >
         <div className="flex flex-col gap-4">
@@ -1131,6 +1210,12 @@ export default function APIPageClient({ machineId }) {
             onChange={(e) => setNewKeyName(e.target.value)}
             placeholder="Production Key"
           />
+          <Input
+            label="Tags (optional)"
+            value={newKeyTags}
+            onChange={(e) => setNewKeyTags(e.target.value)}
+            placeholder="prod, backend"
+          />
           <div className="flex gap-2">
             <Button onClick={handleCreateKey} fullWidth disabled={!newKeyName.trim()}>
               Create
@@ -1139,10 +1224,43 @@ export default function APIPageClient({ machineId }) {
               onClick={() => {
                 setShowAddModal(false);
                 setNewKeyName("");
+                setNewKeyTags("");
               }}
               variant="ghost"
               fullWidth
             >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Rename / Tags Modal */}
+      <Modal
+        isOpen={!!editKeyState}
+        title="Edit API Key"
+        onClose={() => setEditKeyState(null)}
+      >
+        <div className="flex flex-col gap-4">
+          <Input
+            label="Key Name"
+            value={editKeyState?.name || ""}
+            onChange={(e) => setEditKeyState((prev) => ({ ...prev, name: e.target.value }))}
+            placeholder="Production Key"
+          />
+          <Input
+            label="Tags"
+            value={editKeyState?.tags || ""}
+            onChange={(e) => setEditKeyState((prev) => ({ ...prev, tags: e.target.value }))}
+            placeholder="prod, backend"
+          />
+          <p className="-mt-2 text-xs text-text-muted">Comma-separated. Leave empty to remove all tags.</p>
+          {editKeyState?.error && <p className="text-sm text-red-500">{editKeyState.error}</p>}
+          <div className="flex gap-2">
+            <Button onClick={handleSaveKeyEdit} fullWidth disabled={!editKeyState?.name?.trim()}>
+              Save
+            </Button>
+            <Button onClick={() => setEditKeyState(null)} variant="ghost" fullWidth>
               Cancel
             </Button>
           </div>

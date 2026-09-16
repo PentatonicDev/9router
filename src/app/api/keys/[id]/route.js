@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { deleteApiKey, getApiKeyById, updateApiKey, getProviderConnections } from "@/lib/localDb";
 
+const MAX_NAME_LENGTH = 100;
+
 // Returns the accepted id list, or an { error } describing why it was rejected.
 // An empty list is valid and means "unrestricted".
 async function validateAllowedConnectionIds(value) {
@@ -35,7 +37,7 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { isActive, allowedConnectionIds } = body;
+    const { isActive, allowedConnectionIds, name, tags } = body;
 
     const existing = await getApiKeyById(id);
     if (!existing) {
@@ -44,6 +46,21 @@ export async function PUT(request, { params }) {
 
     const updateData = {};
     if (isActive !== undefined) updateData.isActive = isActive;
+    if (name !== undefined) {
+      if (typeof name !== "string" || !name.trim()) {
+        return NextResponse.json({ error: "Name must be a non-empty string" }, { status: 400 });
+      }
+      updateData.name = name.trim().slice(0, MAX_NAME_LENGTH);
+    }
+    if (tags !== undefined) {
+      if (tags !== null && !Array.isArray(tags)) {
+        return NextResponse.json({ error: "tags must be an array or null" }, { status: 400 });
+      }
+      if (Array.isArray(tags) && tags.some((t) => typeof t !== "string")) {
+        return NextResponse.json({ error: "tags must contain only strings" }, { status: 400 });
+      }
+      updateData.tags = tags;
+    }
     if (allowedConnectionIds !== undefined) {
       const validated = await validateAllowedConnectionIds(allowedConnectionIds);
       if (validated.error) return NextResponse.json({ error: validated.error }, { status: 400 });

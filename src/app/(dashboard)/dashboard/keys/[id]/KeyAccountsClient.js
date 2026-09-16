@@ -105,7 +105,14 @@ export default function KeyAccountsClient({ keyId }) {
             <Link href="/dashboard/endpoint" className="text-xs text-text-muted hover:text-primary">
               ← API keys
             </Link>
-            <h1 className="mt-1 text-lg font-semibold text-text-primary">{apiKey?.name || "Unnamed key"}</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h1 className="text-lg font-semibold text-text-primary">{apiKey?.name || "Unnamed key"}</h1>
+              {(apiKey?.tags || []).map((tag) => (
+                <span key={tag} className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+                  {tag}
+                </span>
+              ))}
+            </div>
             <p className="mt-1 text-sm text-text-muted">
               {unrestricted
                 ? "No accounts linked — this key can use every account."
