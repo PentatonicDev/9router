@@ -1,14 +1,17 @@
-import { getAdapter } from "../driver.js";
+import { getDb } from "../kysely.js";
 
 export async function getMeta(key, fallback = null) {
-  const db = await getAdapter();
-  const row = db.get(`SELECT value FROM _meta WHERE key = ?`, [key]);
+  const db = await getDb();
+  const row = await db.selectFrom("_meta").select("value").where("key", "=", key).executeTakeFirst();
   return row ? row.value : fallback;
 }
 
 export async function setMeta(key, value) {
-  const db = await getAdapter();
-  db.run(`INSERT INTO _meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, String(value)]);
+  const db = await getDb();
+  const v = String(value);
+  await db.insertInto("_meta").values({ key, value: v })
+    .onConflict((oc) => oc.column("key").doUpdateSet({ value: v }))
+    .execute();
 }
 
 // Sync versions for use during migration (adapter passed directly)

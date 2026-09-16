@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { getAdapter } from "../driver.js";
+import { getDb } from "../kysely.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { normalizeOwnerInput, resolveDefaultOwner } from "@/lib/auth/resourceScope";
 
@@ -49,20 +49,20 @@ function rowToKey(row) {
 }
 
 export async function getApiKeys() {
-  const db = await getAdapter();
-  const rows = db.all(`SELECT * FROM apiKeys ORDER BY createdAt ASC`);
+  const db = await getDb();
+  const rows = await db.selectFrom("apiKeys").selectAll().orderBy("createdAt", "asc").execute();
   return rows.map(rowToKey);
 }
 
 export async function getApiKeyById(id) {
-  const db = await getAdapter();
-  const row = db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
+  const db = await getDb();
+  const row = await db.selectFrom("apiKeys").selectAll().where("id", "=", id).executeTakeFirst();
   return rowToKey(row);
 }
 
 export async function createApiKey(name, machineId, tags = null, owner = undefined) {
   if (!machineId) throw new Error("machineId is required");
-  const db = await getAdapter();
+  const db = await getDb();
   const { generateApiKeyWithMachine } = await import("@/shared/utils/apiKey");
   const result = generateApiKeyWithMachine(machineId);
   const apiKey = {
@@ -76,11 +76,12 @@ export async function createApiKey(name, machineId, tags = null, owner = undefin
     owner: owner === undefined ? await resolveDefaultOwner() : normalizeOwnerInput(owner),
     createdAt: new Date().toISOString(),
   };
-  db.run(
-    `INSERT INTO apiKeys(id, key, name, machineId, isActive, allowedConnectionIds, tags, owner, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, null,
-     apiKey.tags.length ? stringifyJson(apiKey.tags) : null, apiKey.owner, apiKey.createdAt]
-  );
+  await db.insertInto("apiKeys").values({
+    id: apiKey.id, key: apiKey.key, name: apiKey.name, machineId: apiKey.machineId,
+    isActive: 1, allowedConnectionIds: null,
+    tags: apiKey.tags.length ? stringifyJson(apiKey.tags) : null,
+    owner: apiKey.owner, createdAt: apiKey.createdAt,
+  }).execute();
   return apiKey;
 }
 
@@ -89,46 +90,49 @@ export async function createApiKey(name, machineId, tags = null, owner = undefin
 // binding list is consulted before ownership at request time. Dropping every
 // binding would silently widen the key to all accounts ("no bindings = every
 // account"), so only the now-unreachable ones go.
-function reachableConnectionIds(db, ids, owner) {
+async function reachableConnectionIds(db, ids, owner) {
   if (!ids?.length) return null;
+  const rows = await db.selectFrom("providerConnections").select(["id", "owner"])
+    .where("id", "in", ids).execute();
+  const ownerById = new Map(rows.map((r) => [r.id, r.owner ?? null]));
   const kept = ids.filter((connId) => {
-    const conn = db.get(`SELECT owner FROM providerConnections WHERE id = ?`, [connId]);
-    if (!conn) return false;
-    const connOwner = conn.owner ?? null;
+    if (!ownerById.has(connId)) return false;
+    const connOwner = ownerById.get(connId);
     return connOwner === null || connOwner === owner;
   });
   return kept.length ? kept : null;
 }
 
 export async function updateApiKey(id, data) {
-  const db = await getAdapter();
+  const db = await getDb();
   let result = null;
-  db.transaction(() => {
-    const row = db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
+  await db.transaction().execute(async (trx) => {
+    const row = await trx.selectFrom("apiKeys").selectAll().where("id", "=", id).executeTakeFirst();
     if (!row) return;
     const previous = rowToKey(row);
     const merged = { ...previous, ...data };
     merged.allowedConnectionIds = normalizeAllowed(merged.allowedConnectionIds);
     if (data.owner !== undefined && (merged.owner ?? null) !== (previous.owner ?? null)) {
-      merged.allowedConnectionIds = reachableConnectionIds(db, merged.allowedConnectionIds, merged.owner ?? null);
+      merged.allowedConnectionIds = await reachableConnectionIds(trx, merged.allowedConnectionIds, merged.owner ?? null);
     }
     const tags = normalizeTags(merged.tags);
     merged.tags = tags || [];
-    db.run(
-      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, allowedConnectionIds = ?, tags = ?, owner = ? WHERE id = ?`,
-      [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0,
-       merged.allowedConnectionIds ? stringifyJson(merged.allowedConnectionIds) : null,
-       tags ? stringifyJson(tags) : null, merged.owner ?? null, id]
-    );
+    await trx.updateTable("apiKeys").set({
+      key: merged.key, name: merged.name, machineId: merged.machineId,
+      isActive: merged.isActive ? 1 : 0,
+      allowedConnectionIds: merged.allowedConnectionIds ? stringifyJson(merged.allowedConnectionIds) : null,
+      tags: tags ? stringifyJson(tags) : null,
+      owner: merged.owner ?? null,
+    }).where("id", "=", id).execute();
     result = merged;
   });
   return result;
 }
 
 export async function deleteApiKey(id) {
-  const db = await getAdapter();
-  const res = db.run(`DELETE FROM apiKeys WHERE id = ?`, [id]);
-  return (res?.changes ?? 0) > 0;
+  const db = await getDb();
+  const res = await db.deleteFrom("apiKeys").where("id", "=", id).executeTakeFirst();
+  return Number(res?.numDeletedRows ?? 0) > 0;
 }
 
 /**
@@ -138,8 +142,8 @@ export async function deleteApiKey(id) {
  */
 export async function getApiKeyAllowedConnectionIds(key) {
   if (!key) return null;
-  const db = await getAdapter();
-  const row = db.get(`SELECT allowedConnectionIds FROM apiKeys WHERE key = ?`, [key]);
+  const db = await getDb();
+  const row = await db.selectFrom("apiKeys").select("allowedConnectionIds").where("key", "=", key).executeTakeFirst();
   if (!row) return null;
   return normalizeAllowed(parseJson(row.allowedConnectionIds, null));
 }
@@ -155,21 +159,21 @@ export async function getApiKeyAllowedConnectionIds(key) {
  */
 export async function getApiKeyIdentity(key) {
   if (!key) return { owner: null, name: null };
-  const db = await getAdapter();
-  const row = db.get(`SELECT owner, name FROM apiKeys WHERE key = ?`, [key]);
+  const db = await getDb();
+  const row = await db.selectFrom("apiKeys").select(["owner", "name"]).where("key", "=", key).executeTakeFirst();
   return { owner: row?.owner ?? null, name: row?.name ?? null };
 }
 
 export async function getApiKeyOwner(key) {
   if (!key) return null;
-  const db = await getAdapter();
-  const row = db.get(`SELECT owner FROM apiKeys WHERE key = ?`, [key]);
+  const db = await getDb();
+  const row = await db.selectFrom("apiKeys").select("owner").where("key", "=", key).executeTakeFirst();
   return row?.owner ?? null;
 }
 
 export async function validateApiKey(key) {
-  const db = await getAdapter();
-  const row = db.get(`SELECT isActive FROM apiKeys WHERE key = ?`, [key]);
+  const db = await getDb();
+  const row = await db.selectFrom("apiKeys").select("isActive").where("key", "=", key).executeTakeFirst();
   if (!row) return false;
   return row.isActive === 1 || row.isActive === true;
 }

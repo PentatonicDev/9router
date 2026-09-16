@@ -48,6 +48,7 @@ export default function ProfilePage() {
   const [oidcTestStatus, setOidcTestStatus] = useState({ type: "", message: "" });
   const [oidcExpanded, setOidcExpanded] = useState(false);
   const [ssoAdminEmails, setSsoAdminEmails] = useState("");
+  const [dbInfo, setDbInfo] = useState(null);
   const [scopeStatus, setScopeStatus] = useState({ type: "", message: "" });
 
   const isSsoOnly = ["sso", "oidc", "saml"].includes(oidcForm.authMode);
@@ -89,6 +90,13 @@ export default function ProfilePage() {
   useEffect(() => {
     if (typeof window !== "undefined")
       setIsRemoteHost(!["localhost", "127.0.0.1", "::1"].includes(window.location.hostname));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/settings/database-mode")
+      .then((res) => res.json())
+      .then((data) => setDbInfo(data?.mode ? data : null))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -798,12 +806,23 @@ export default function ProfilePage() {
         <Card>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
             <div className="flex items-center gap-3 sm:gap-4">
-              <div className="size-10 sm:size-12 rounded-lg bg-green-500/10 text-green-500 flex items-center justify-center shrink-0">
-                <span className="material-symbols-outlined text-xl sm:text-2xl">computer</span>
+              <div className={cn(
+                "size-10 sm:size-12 rounded-lg flex items-center justify-center shrink-0",
+                dbInfo?.mode === "distributed" ? "bg-blue-500/10 text-blue-500" : "bg-green-500/10 text-green-500",
+              )}>
+                <span className="material-symbols-outlined text-xl sm:text-2xl">
+                  {dbInfo?.mode === "distributed" ? "database" : "computer"}
+                </span>
               </div>
               <div>
-                <h2 className="text-lg sm:text-xl font-semibold">Local Mode</h2>
-                <p className="text-sm text-text-muted">Running on your machine</p>
+                <h2 className="text-lg sm:text-xl font-semibold">
+                  {dbInfo?.label || "Local Mode"}
+                </h2>
+                <p className="text-sm text-text-muted">
+                  {dbInfo?.mode === "distributed"
+                    ? "Sharing an external database with other instances"
+                    : "Running on your machine"}
+                </p>
               </div>
             </div>
             <div className="inline-flex p-1 rounded-lg bg-black/5 dark:bg-white/5 w-full sm:w-auto">
@@ -829,11 +848,38 @@ export default function ProfilePage() {
           </div>
           <div className="flex flex-col gap-3 pt-4 border-t border-border">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 rounded-lg bg-bg border border-border gap-2">
-              <div>
-                <p className="font-medium text-sm sm:text-base">Database Location</p>
-                <p className="text-xs sm:text-sm text-text-muted font-mono break-all">~/.9router/db/data.sqlite</p>
+              <div className="min-w-0">
+                <p className="font-medium text-sm sm:text-base">Database</p>
+                {dbInfo?.mode === "distributed" ? (
+                  <div className="text-xs sm:text-sm text-text-muted font-mono break-all">
+                    {dbInfo.invalid ? (
+                      <span className="text-red-500">DATABASE_URL is set but could not be parsed</span>
+                    ) : (
+                      <>
+                        <span>{dbInfo.driver}://{dbInfo.host}:{dbInfo.port}/{dbInfo.database}</span>
+                        {dbInfo.user && <span className="ml-2 opacity-70">user: {dbInfo.user}</span>}
+                        {dbInfo.ssl && <span className="ml-2 opacity-70">sslmode: {dbInfo.ssl}</span>}
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs sm:text-sm text-text-muted font-mono break-all">
+                    {dbInfo?.file || "~/.9router/db/data.sqlite"}
+                  </p>
+                )}
               </div>
+              {dbInfo?.mode === "distributed" && (
+                <span className="shrink-0 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-500">
+                  shared
+                </span>
+              )}
             </div>
+            {dbInfo?.mode === "distributed" && (
+              <p className="text-xs text-text-muted">
+                Set by the <span className="font-mono">DATABASE_URL</span> environment variable. Remove it and
+                restart to go back to the local database.
+              </p>
+            )}
             <div className="flex flex-col sm:flex-row gap-2">
               <Button
                 variant="secondary"

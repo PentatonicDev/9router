@@ -1,4 +1,4 @@
-import { getAdapter } from "../driver.js";
+import { getDb } from "../kysely.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { maskApiKey } from "../helpers/maskKey.js";
 
@@ -94,10 +94,10 @@ async function flushToDatabase() {
     // Drain entire buffer (loop in case more pushed during await)
     while (writeBuffer.length > 0) {
       const items = writeBuffer.splice(0, writeBuffer.length);
-      const db = await getAdapter();
+      const db = await getDb();
       const config = await getObservabilityConfig();
 
-      db.transaction(() => {
+      await db.transaction().execute(async (trx) => {
         for (const item of items) {
           if (!item.id) item.id = generateDetailId(item.model);
           if (!item.timestamp) item.timestamp = new Date().toISOString();
@@ -120,18 +120,31 @@ async function flushToDatabase() {
             pxpipe: item.pxpipe || undefined,
           };
 
-          db.run(
-            `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, apiKey, status, data) VALUES(?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET timestamp = excluded.timestamp, provider = excluded.provider, model = excluded.model, connectionId = excluded.connectionId, apiKey = excluded.apiKey, status = excluded.status, data = excluded.data`,
-            [record.id, record.timestamp, record.provider, record.model, record.connectionId, item.apiKey || null, record.status, stringifyJson(record)]
-          );
+          const values = {
+            id: record.id, timestamp: record.timestamp, provider: record.provider,
+            model: record.model, connectionId: record.connectionId,
+            apiKey: item.apiKey || null, status: record.status, data: stringifyJson(record),
+          };
+          await trx.insertInto("requestDetails").values(values)
+            .onConflict((oc) => oc.column("id").doUpdateSet({
+              timestamp: values.timestamp, provider: values.provider, model: values.model,
+              connectionId: values.connectionId, apiKey: values.apiKey,
+              status: values.status, data: values.data,
+            }))
+            .execute();
         }
 
-        const cnt = db.get(`SELECT COUNT(*) as c FROM requestDetails`);
-        if (cnt && cnt.c > config.maxRecords) {
-          db.run(
-            `DELETE FROM requestDetails WHERE id IN (SELECT id FROM requestDetails ORDER BY timestamp ASC LIMIT ?)`,
-            [cnt.c - config.maxRecords]
-          );
+        const cnt = await trx.selectFrom("requestDetails")
+          .select((eb) => eb.fn.countAll().as("c")).executeTakeFirst();
+        const total = Number(cnt?.c ?? 0);
+        if (total > config.maxRecords) {
+          // Oldest-first pruning keeps the newest maxRecords rows.
+          const stale = await trx.selectFrom("requestDetails").select("id")
+            .orderBy("timestamp", "asc").limit(total - config.maxRecords).execute();
+          if (stale.length) {
+            await trx.deleteFrom("requestDetails")
+              .where("id", "in", stale.map((r) => r.id)).execute();
+          }
         }
       });
     }
@@ -162,31 +175,32 @@ export async function saveRequestDetail(detail) {
 }
 
 export async function getRequestDetails(filter = {}) {
-  const db = await getAdapter();
-  const conds = [];
-  const params = [];
+  const db = await getDb();
 
-  if (filter.provider) { conds.push("provider = ?"); params.push(filter.provider); }
-  if (filter.model) { conds.push("model = ?"); params.push(filter.model); }
-  if (filter.connectionId) { conds.push("connectionId = ?"); params.push(filter.connectionId); }
-  if (filter.apiKey) { conds.push("apiKey = ?"); params.push(filter.apiKey); }
-  if (filter.status) { conds.push("status = ?"); params.push(filter.status); }
-  if (filter.startDate) { conds.push("timestamp >= ?"); params.push(new Date(filter.startDate).toISOString()); }
-  if (filter.endDate) { conds.push("timestamp <= ?"); params.push(new Date(filter.endDate).toISOString()); }
+  // Same predicate for the count and the page, so they cannot drift apart.
+  const applyFilters = (q) => {
+    if (filter.provider) q = q.where("provider", "=", filter.provider);
+    if (filter.model) q = q.where("model", "=", filter.model);
+    if (filter.connectionId) q = q.where("connectionId", "=", filter.connectionId);
+    if (filter.apiKey) q = q.where("apiKey", "=", filter.apiKey);
+    if (filter.status) q = q.where("status", "=", filter.status);
+    if (filter.startDate) q = q.where("timestamp", ">=", new Date(filter.startDate).toISOString());
+    if (filter.endDate) q = q.where("timestamp", "<=", new Date(filter.endDate).toISOString());
+    return q;
+  };
 
-  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
-  const cntRow = db.get(`SELECT COUNT(*) as c FROM requestDetails ${where}`, params);
-  const totalItems = cntRow ? cntRow.c : 0;
+  const cntRow = await applyFilters(
+    db.selectFrom("requestDetails").select((eb) => eb.fn.countAll().as("c")),
+  ).executeTakeFirst();
+  const totalItems = Number(cntRow?.c ?? 0);
 
   const page = filter.page || 1;
   const pageSize = filter.pageSize || 50;
   const totalPages = Math.ceil(totalItems / pageSize);
   const offset = (page - 1) * pageSize;
 
-  const rows = db.all(
-    `SELECT data FROM requestDetails ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
-    [...params, pageSize, offset]
-  );
+  const rows = await applyFilters(db.selectFrom("requestDetails").select("data"))
+    .orderBy("timestamp", "desc").limit(pageSize).offset(offset).execute();
   const details = rows.map((r) => parseJson(r.data, {}));
 
   return {
@@ -196,20 +210,22 @@ export async function getRequestDetails(filter = {}) {
 }
 
 export async function getDistinctApiKeys() {
-  const db = await getAdapter();
-  const rows = db.all(`SELECT DISTINCT apiKey FROM requestDetails WHERE apiKey IS NOT NULL ORDER BY apiKey ASC`);
+  const db = await getDb();
+  const rows = await db.selectFrom("requestDetails").select("apiKey").distinct()
+    .where("apiKey", "is not", null).orderBy("apiKey", "asc").execute();
   return rows.map((r) => r.apiKey);
 }
 
 export async function getDistinctProviders() {
-  const db = await getAdapter();
-  const rows = db.all(`SELECT DISTINCT provider FROM requestDetails WHERE provider IS NOT NULL ORDER BY provider ASC`);
+  const db = await getDb();
+  const rows = await db.selectFrom("requestDetails").select("provider").distinct()
+    .where("provider", "is not", null).orderBy("provider", "asc").execute();
   return rows.map((r) => r.provider);
 }
 
 export async function getRequestDetailById(id) {
-  const db = await getAdapter();
-  const row = db.get(`SELECT data FROM requestDetails WHERE id = ?`, [id]);
+  const db = await getDb();
+  const row = await db.selectFrom("requestDetails").select("data").where("id", "=", id).executeTakeFirst();
   return row ? parseJson(row.data, null) : null;
 }
 

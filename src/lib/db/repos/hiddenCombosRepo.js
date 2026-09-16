@@ -1,4 +1,4 @@
-import { getAdapter } from "../driver.js";
+import { getDb } from "../kysely.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 
 // A user may hide a shared combo to free its name for one of their own. Stored
@@ -8,22 +8,24 @@ const SCOPE = "hiddenGlobalCombos";
 
 export async function getHiddenComboNames(owner) {
   if (!owner) return [];
-  const db = await getAdapter();
-  const row = db.get(`SELECT value FROM kv WHERE scope = ? AND key = ?`, [SCOPE, owner]);
+  const db = await getDb();
+  const row = await db.selectFrom("kv").select("value")
+    .where("scope", "=", SCOPE).where("key", "=", owner).executeTakeFirst();
   return row ? (parseJson(row.value, []) || []) : [];
 }
 
 export async function hideGlobalCombo(owner, name) {
   if (!owner || !name) return;
-  const db = await getAdapter();
-  db.transaction(() => {
-    const row = db.get(`SELECT value FROM kv WHERE scope = ? AND key = ?`, [SCOPE, owner]);
+  const db = await getDb();
+  await db.transaction().execute(async (trx) => {
+    const row = await trx.selectFrom("kv").select("value")
+      .where("scope", "=", SCOPE).where("key", "=", owner).executeTakeFirst();
     const current = row ? (parseJson(row.value, []) || []) : [];
     if (current.includes(name)) return;
-    db.run(
-      `INSERT INTO kv(scope, key, value) VALUES(?, ?, ?) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
-      [SCOPE, owner, stringifyJson([...current, name])]
-    );
+    const value = stringifyJson([...current, name]);
+    await trx.insertInto("kv").values({ scope: SCOPE, key: owner, value })
+      .onConflict((oc) => oc.columns(["scope", "key"]).doUpdateSet({ value }))
+      .execute();
   });
 }
 
@@ -34,20 +36,22 @@ export async function hideGlobalCombo(owner, name) {
  */
 export async function unhideGlobalCombo(owner, name) {
   if (!owner || !name) return false;
-  const db = await getAdapter();
+  const db = await getDb();
   let ok = false;
-  db.transaction(() => {
-    const clash = db.get(`SELECT id FROM combos WHERE name = ? AND owner = ?`, [name, owner]);
+  await db.transaction().execute(async (trx) => {
+    const clash = await trx.selectFrom("combos").select("id")
+      .where("name", "=", name).where("owner", "=", owner).executeTakeFirst();
     if (clash) return;
-    const row = db.get(`SELECT value FROM kv WHERE scope = ? AND key = ?`, [SCOPE, owner]);
+    const row = await trx.selectFrom("kv").select("value")
+      .where("scope", "=", SCOPE).where("key", "=", owner).executeTakeFirst();
     const next = (row ? (parseJson(row.value, []) || []) : []).filter((n) => n !== name);
     if (next.length) {
-      db.run(
-        `INSERT INTO kv(scope, key, value) VALUES(?, ?, ?) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
-        [SCOPE, owner, stringifyJson(next)]
-      );
+      const value = stringifyJson(next);
+      await trx.insertInto("kv").values({ scope: SCOPE, key: owner, value })
+        .onConflict((oc) => oc.columns(["scope", "key"]).doUpdateSet({ value }))
+        .execute();
     } else {
-      db.run(`DELETE FROM kv WHERE scope = ? AND key = ?`, [SCOPE, owner]);
+      await trx.deleteFrom("kv").where("scope", "=", SCOPE).where("key", "=", owner).execute();
     }
     ok = true;
   });

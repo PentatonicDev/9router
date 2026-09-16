@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { getAdapter } from "../driver.js";
+import { getDb } from "../kysely.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 
 function rowToNode(row) {
@@ -27,33 +27,29 @@ function nodeToRow(n) {
   };
 }
 
-function upsert(db, n) {
+async function upsert(db, n) {
   const r = nodeToRow(n);
-  db.run(
-    `INSERT INTO providerNodes(id, type, name, data, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       type=excluded.type, name=excluded.name, data=excluded.data, updatedAt=excluded.updatedAt`,
-    [r.id, r.type, r.name, r.data, r.createdAt, r.updatedAt]
-  );
+  await db.insertInto("providerNodes").values(r)
+    .onConflict((oc) => oc.column("id").doUpdateSet({
+      type: r.type, name: r.name, data: r.data, updatedAt: r.updatedAt,
+    }))
+    .execute();
 }
 
 export async function getProviderNodes(filter = {}) {
-  const db = await getAdapter();
-  const where = [];
-  const params = [];
-  if (filter.type) { where.push("type = ?"); params.push(filter.type); }
-  const sql = `SELECT * FROM providerNodes${where.length ? ` WHERE ${where.join(" AND ")}` : ""}`;
-  return db.all(sql, params).map(rowToNode);
+  const db = await getDb();
+  let q = db.selectFrom("providerNodes").selectAll();
+  if (filter.type) q = q.where("type", "=", filter.type);
+  return (await q.execute()).map(rowToNode);
 }
 
 export async function getProviderNodeById(id) {
-  const db = await getAdapter();
-  return rowToNode(db.get(`SELECT * FROM providerNodes WHERE id = ?`, [id]));
+  const db = await getDb();
+  return rowToNode(await db.selectFrom("providerNodes").selectAll().where("id", "=", id).executeTakeFirst());
 }
 
 export async function createProviderNode(data) {
-  const db = await getAdapter();
+  const db = await getDb();
   const now = new Date().toISOString();
   const node = {
     id: data.id || uuidv4(),
@@ -65,31 +61,31 @@ export async function createProviderNode(data) {
     createdAt: now,
     updatedAt: now,
   };
-  upsert(db, node);
+  await upsert(db, node);
   return node;
 }
 
 export async function updateProviderNode(id, data) {
-  const db = await getAdapter();
+  const db = await getDb();
   let result = null;
-  db.transaction(() => {
-    const row = db.get(`SELECT * FROM providerNodes WHERE id = ?`, [id]);
+  await db.transaction().execute(async (trx) => {
+    const row = await trx.selectFrom("providerNodes").selectAll().where("id", "=", id).executeTakeFirst();
     if (!row) return;
     const merged = { ...rowToNode(row), ...data, updatedAt: new Date().toISOString() };
-    upsert(db, merged);
+    await upsert(trx, merged);
     result = merged;
   });
   return result;
 }
 
 export async function deleteProviderNode(id) {
-  const db = await getAdapter();
+  const db = await getDb();
   let removed = null;
-  db.transaction(() => {
-    const row = db.get(`SELECT * FROM providerNodes WHERE id = ?`, [id]);
+  await db.transaction().execute(async (trx) => {
+    const row = await trx.selectFrom("providerNodes").selectAll().where("id", "=", id).executeTakeFirst();
     if (!row) return;
     removed = rowToNode(row);
-    db.run(`DELETE FROM providerNodes WHERE id = ?`, [id]);
+    await trx.deleteFrom("providerNodes").where("id", "=", id).execute();
   });
   return removed;
 }

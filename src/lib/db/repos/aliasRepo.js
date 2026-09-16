@@ -1,4 +1,4 @@
-import { getAdapter } from "../driver.js";
+import { getDb } from "../kysely.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { makeKv } from "../helpers/kvStore.js";
 
@@ -33,18 +33,20 @@ export async function getCustomModels() {
 // Re-adding an existing model updates caps/name without resetting omitted fields.
 export async function addCustomModel({ providerAlias, id, type = "llm", name, caps }) {
   const k = customKey(providerAlias, id, type);
-  const db = await getAdapter();
+  const db = await getDb();
   let added = false;
-  db.transaction(() => {
-    const row = db.get(`SELECT value FROM kv WHERE scope = 'customModels' AND key = ?`, [k]);
+  await db.transaction().execute(async (trx) => {
+    const row = await trx.selectFrom("kv").select("value")
+      .where("scope", "=", "customModels").where("key", "=", k).executeTakeFirst();
     if (row) {
       const prev = parseJson(row.value) || {};
       const next = { ...prev, ...(name ? { name } : {}), ...(caps ? { caps } : {}) };
-      db.run(`UPDATE kv SET value = ? WHERE scope = 'customModels' AND key = ?`, [stringifyJson(next), k]);
+      await trx.updateTable("kv").set({ value: stringifyJson(next) })
+        .where("scope", "=", "customModels").where("key", "=", k).execute();
       return;
     }
     const value = stringifyJson({ providerAlias, id, type, name: name || id, ...(caps ? { caps } : {}) });
-    db.run(`INSERT INTO kv(scope, key, value) VALUES('customModels', ?, ?)`, [k, value]);
+    await trx.insertInto("kv").values({ scope: "customModels", key: k, value }).execute();
     added = true;
   });
   return added;

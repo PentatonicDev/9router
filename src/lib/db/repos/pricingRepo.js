@@ -1,4 +1,4 @@
-import { getAdapter } from "../driver.js";
+import { getDb } from "../kysely.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { makeKv } from "../helpers/kvStore.js";
 
@@ -58,19 +58,20 @@ export async function getPricingForModel(provider, model) {
 
 // Atomic merge inside transaction (per-provider read-modify-write)
 export async function updatePricing(pricingData) {
-  const db = await getAdapter();
-  db.transaction(() => {
+  const db = await getDb();
+  await db.transaction().execute(async (trx) => {
     for (const [provider, models] of Object.entries(pricingData)) {
-      const row = db.get(`SELECT value FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
+      const row = await trx.selectFrom("kv").select("value")
+        .where("scope", "=", "pricing").where("key", "=", provider).executeTakeFirst();
       const current = row ? (parseJson(row.value, {}) || {}) : {};
       const merged = { ...current };
       for (const [model, pricing] of Object.entries(models)) {
         merged[model] = pricing;
       }
-      db.run(
-        `INSERT INTO kv(scope, key, value) VALUES('pricing', ?, ?) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
-        [provider, stringifyJson(merged)]
-      );
+      const value = stringifyJson(merged);
+      await trx.insertInto("kv").values({ scope: "pricing", key: provider, value })
+        .onConflict((oc) => oc.columns(["scope", "key"]).doUpdateSet({ value }))
+        .execute();
     }
   });
   invalidate();
@@ -79,22 +80,23 @@ export async function updatePricing(pricingData) {
 
 export async function resetPricing(provider, model) {
   if (!provider) return await getUserPricing();
-  const db = await getAdapter();
-  db.transaction(() => {
+  const db = await getDb();
+  await db.transaction().execute(async (trx) => {
     if (!model) {
-      db.run(`DELETE FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
+      await trx.deleteFrom("kv").where("scope", "=", "pricing").where("key", "=", provider).execute();
       return;
     }
-    const row = db.get(`SELECT value FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
+    const row = await trx.selectFrom("kv").select("value")
+      .where("scope", "=", "pricing").where("key", "=", provider).executeTakeFirst();
     const current = row ? (parseJson(row.value, {}) || {}) : {};
     delete current[model];
     if (Object.keys(current).length === 0) {
-      db.run(`DELETE FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
+      await trx.deleteFrom("kv").where("scope", "=", "pricing").where("key", "=", provider).execute();
     } else {
-      db.run(
-        `INSERT INTO kv(scope, key, value) VALUES('pricing', ?, ?) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
-        [provider, stringifyJson(current)]
-      );
+      const value = stringifyJson(current);
+      await trx.insertInto("kv").values({ scope: "pricing", key: provider, value })
+        .onConflict((oc) => oc.columns(["scope", "key"]).doUpdateSet({ value }))
+        .execute();
     }
   });
   invalidate();

@@ -1,5 +1,5 @@
 // Public API barrel — all DB functions
-import { getAdapter } from "./driver.js";
+import { getDb } from "./kysely.js";
 import { stringifyJson, parseJson } from "./helpers/jsonCol.js";
 
 // Settings
@@ -72,100 +72,161 @@ export {
 
 // Export/import full DB
 export async function exportDb() {
-  const db = await getAdapter();
+  const db = await getDb();
   const { exportSettings } = await import("./repos/settingsRepo.js");
 
   const out = {
     settings: await exportSettings(),
-    providerConnections: db.all(`SELECT * FROM providerConnections`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, provider: r.provider, authType: r.authType, name: r.name, email: r.email, priority: r.priority, isActive: r.isActive === 1, owner: r.owner ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt })),
-    providerNodes: db.all(`SELECT * FROM providerNodes`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, type: r.type, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
-    proxyPools: db.all(`SELECT * FROM proxyPools`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, isActive: r.isActive === 1, testStatus: r.testStatus, createdAt: r.createdAt, updatedAt: r.updatedAt })),
-    apiKeys: db.all(`SELECT * FROM apiKeys`).map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1, allowedConnectionIds: parseJson(r.allowedConnectionIds, null), tags: parseJson(r.tags, null), owner: r.owner ?? null, createdAt: r.createdAt })),
-    combos: db.all(`SELECT * FROM combos`).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), owner: r.owner ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt })),
+    providerConnections: (await db.selectFrom("providerConnections").selectAll().execute()).map((r) => ({ ...parseJson(r.data, {}), id: r.id, provider: r.provider, authType: r.authType, name: r.name, email: r.email, priority: r.priority, isActive: r.isActive === 1, owner: r.owner ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt })),
+    providerNodes: (await db.selectFrom("providerNodes").selectAll().execute()).map((r) => ({ ...parseJson(r.data, {}), id: r.id, type: r.type, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
+    proxyPools: (await db.selectFrom("proxyPools").selectAll().execute()).map((r) => ({ ...parseJson(r.data, {}), id: r.id, isActive: r.isActive === 1, testStatus: r.testStatus, createdAt: r.createdAt, updatedAt: r.updatedAt })),
+    apiKeys: (await db.selectFrom("apiKeys").selectAll().execute()).map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1, allowedConnectionIds: parseJson(r.allowedConnectionIds, null), tags: parseJson(r.tags, null), owner: r.owner ?? null, createdAt: r.createdAt })),
+    combos: (await db.selectFrom("combos").selectAll().execute()).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), owner: r.owner ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     modelAliases: {},
     customModels: [],
     mitmAlias: {},
     pricing: {},
   };
 
-  for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'modelAliases'`)) out.modelAliases[r.key] = parseJson(r.value);
-  for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'customModels'`)) out.customModels.push(parseJson(r.value));
-  for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'mitmAlias'`)) out.mitmAlias[r.key] = parseJson(r.value);
-  for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'pricing'`)) out.pricing[r.key] = parseJson(r.value);
+  for (const r of (await db.selectFrom("kv").select(["key","value"]).where("scope","=","modelAliases").execute())) out.modelAliases[r.key] = parseJson(r.value);
+  for (const r of (await db.selectFrom("kv").select(["key","value"]).where("scope","=","customModels").execute())) out.customModels.push(parseJson(r.value));
+  for (const r of (await db.selectFrom("kv").select(["key","value"]).where("scope","=","mitmAlias").execute())) out.mitmAlias[r.key] = parseJson(r.value);
+  for (const r of (await db.selectFrom("kv").select(["key","value"]).where("scope","=","pricing").execute())) out.pricing[r.key] = parseJson(r.value);
+
+  // Every other kv scope, verbatim. The four above keep their shaped fields for
+  // backward compatibility, but a scope added later (disabledModels,
+  // hiddenGlobalCombos) would otherwise be dropped on every backup — silently,
+  // since a restore simply came back without it.
+  const SHAPED_SCOPES = new Set(["modelAliases", "customModels", "mitmAlias", "pricing"]);
+  out.kv = (await db.selectFrom("kv").select(["scope", "key", "value"]).execute())
+    .filter((r) => !SHAPED_SCOPES.has(r.scope))
+    .map((r) => ({ scope: r.scope, key: r.key, value: r.value }));
+
+  // Usage history is the account's record of what it spent; a restore that
+  // dropped it would look like a working system with its ledger erased.
+  out.usageHistory = await db.selectFrom("usageHistory").selectAll().orderBy("id", "asc").execute();
+  out.usageDaily = await db.selectFrom("usageDaily").select(["dateKey", "data"]).execute();
+  out.requestDetails = await db.selectFrom("requestDetails").selectAll().execute();
 
   return out;
+}
+
+// Replace-or-insert on a known key. Kysely emits the right upsert per dialect,
+// which "INSERT OR REPLACE" (SQLite-only) could not.
+async function upsertRow(trx, table, key, values) {
+  const keys = Array.isArray(key) ? key : [key];
+  const updates = Object.fromEntries(Object.entries(values).filter(([k]) => !keys.includes(k)));
+  await trx.insertInto(table).values(values)
+    .onConflict((oc) => {
+      const target = keys.length > 1 ? oc.columns(keys) : oc.column(keys[0]);
+      return Object.keys(updates).length ? target.doUpdateSet(updates) : target.doNothing();
+    })
+    .execute();
 }
 
 export async function importDb(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("Invalid database payload");
   }
-  const db = await getAdapter();
+  const db = await getDb();
 
-  db.transaction(() => {
+  await db.transaction().execute(async (trx) => {
     // Wipe all tables (keep _meta)
-    db.run(`DELETE FROM settings`);
-    db.run(`DELETE FROM providerConnections`);
-    db.run(`DELETE FROM providerNodes`);
-    db.run(`DELETE FROM proxyPools`);
-    db.run(`DELETE FROM apiKeys`);
-    db.run(`DELETE FROM combos`);
-    db.run(`DELETE FROM kv WHERE scope IN ('modelAliases', 'customModels', 'mitmAlias', 'pricing')`);
+    await trx.deleteFrom("settings").execute();
+    await trx.deleteFrom("providerConnections").execute();
+    await trx.deleteFrom("providerNodes").execute();
+    await trx.deleteFrom("proxyPools").execute();
+    await trx.deleteFrom("apiKeys").execute();
+    await trx.deleteFrom("combos").execute();
+    // Every scope, not a fixed list: a backup carries the scopes it had, and a
+    // partial wipe would leave rows from the previous database behind.
+    await trx.deleteFrom("kv").execute();
+    await trx.deleteFrom("usageHistory").execute();
+    await trx.deleteFrom("usageDaily").execute();
+    await trx.deleteFrom("requestDetails").execute();
 
     // Settings
     if (payload.settings) {
-      db.run(`INSERT INTO settings(id, data) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`, [stringifyJson(payload.settings)]);
+      const sdata = stringifyJson(payload.settings);
+      await trx.insertInto("settings").values({ id: 1, data: sdata })
+        .onConflict((oc) => oc.column("id").doUpdateSet({ data: sdata })).execute();
     }
 
     for (const c of payload.providerConnections || []) {
       const { id, provider, authType, name, email, priority, isActive, owner, createdAt, updatedAt, ...rest } = c;
-      db.run(
-        `INSERT OR REPLACE INTO providerConnections(id, provider, authType, name, email, priority, isActive, owner, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, provider, authType || "oauth", name || null, email || null, priority || null, isActive === false ? 0 : 1, owner ?? null, stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]
-      );
+      await upsertRow(trx, "providerConnections", "id", {
+        id, provider, authType: authType || "oauth", name: name || null, email: email || null,
+        priority: priority || null, isActive: isActive === false ? 0 : 1, owner: owner ?? null,
+        data: stringifyJson(rest), createdAt: createdAt || new Date().toISOString(),
+        updatedAt: updatedAt || new Date().toISOString(),
+      });
     }
     for (const n of payload.providerNodes || []) {
       const { id, type, name, createdAt, updatedAt, ...rest } = n;
-      db.run(
-        `INSERT OR REPLACE INTO providerNodes(id, type, name, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)`,
-        [id, type || null, name || null, stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]
-      );
+      await upsertRow(trx, "providerNodes", "id", {
+        id, type: type || null, name: name || null, data: stringifyJson(rest),
+        createdAt: createdAt || new Date().toISOString(), updatedAt: updatedAt || new Date().toISOString(),
+      });
     }
     for (const p of payload.proxyPools || []) {
       const { id, isActive, testStatus, createdAt, updatedAt, ...rest } = p;
-      db.run(
-        `INSERT OR REPLACE INTO proxyPools(id, isActive, testStatus, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)`,
-        [id, isActive === false ? 0 : 1, testStatus || "unknown", stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]
-      );
+      await upsertRow(trx, "proxyPools", "id", {
+        id, isActive: isActive === false ? 0 : 1, testStatus: testStatus || "unknown",
+        data: stringifyJson(rest), createdAt: createdAt || new Date().toISOString(),
+        updatedAt: updatedAt || new Date().toISOString(),
+      });
     }
     for (const k of payload.apiKeys || []) {
-      db.run(
-        `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, allowedConnectionIds, tags, owner, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [k.id, k.key, k.name || null, k.machineId || null, k.isActive === false ? 0 : 1,
-         Array.isArray(k.allowedConnectionIds) && k.allowedConnectionIds.length ? stringifyJson(k.allowedConnectionIds) : null,
-         Array.isArray(k.tags) && k.tags.length ? stringifyJson(k.tags) : null,
-         k.owner ?? null,
-         k.createdAt || new Date().toISOString()]
-      );
+      await upsertRow(trx, "apiKeys", "id", {
+        id: k.id, key: k.key, name: k.name || null, machineId: k.machineId || null,
+        isActive: k.isActive === false ? 0 : 1,
+        allowedConnectionIds: Array.isArray(k.allowedConnectionIds) && k.allowedConnectionIds.length ? stringifyJson(k.allowedConnectionIds) : null,
+        tags: Array.isArray(k.tags) && k.tags.length ? stringifyJson(k.tags) : null,
+        owner: k.owner ?? null, createdAt: k.createdAt || new Date().toISOString(),
+      });
     }
     for (const c of payload.combos || []) {
-      db.run(
-        `INSERT OR REPLACE INTO combos(id, name, kind, models, owner, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?)`,
-        [c.id, c.name, c.kind || null, stringifyJson(c.models || []), c.owner ?? null, c.createdAt || new Date().toISOString(), c.updatedAt || new Date().toISOString()]
-      );
+      await upsertRow(trx, "combos", "id", {
+        id: c.id, name: c.name, kind: c.kind || null, models: stringifyJson(c.models || []),
+        owner: c.owner ?? null, createdAt: c.createdAt || new Date().toISOString(),
+        updatedAt: c.updatedAt || new Date().toISOString(),
+      });
     }
     for (const [a, m] of Object.entries(payload.modelAliases || {})) {
-      db.run(`INSERT OR REPLACE INTO kv(scope, key, value) VALUES('modelAliases', ?, ?)`, [a, stringifyJson(m)]);
+      await upsertRow(trx, "kv", ["scope", "key"], { scope: "modelAliases", key: a, value: stringifyJson(m) });
     }
     for (const m of payload.customModels || []) {
       const k = `${m.providerAlias}|${m.id}|${m.type || "llm"}`;
-      db.run(`INSERT OR REPLACE INTO kv(scope, key, value) VALUES('customModels', ?, ?)`, [k, stringifyJson(m)]);
+      await upsertRow(trx, "kv", ["scope", "key"], { scope: "customModels", key: k, value: stringifyJson(m) });
     }
     for (const [tool, mappings] of Object.entries(payload.mitmAlias || {})) {
-      db.run(`INSERT OR REPLACE INTO kv(scope, key, value) VALUES('mitmAlias', ?, ?)`, [tool, stringifyJson(mappings || {})]);
+      await upsertRow(trx, "kv", ["scope", "key"], { scope: "mitmAlias", key: tool, value: stringifyJson(mappings || {}) });
     }
     for (const [provider, models] of Object.entries(payload.pricing || {})) {
-      db.run(`INSERT OR REPLACE INTO kv(scope, key, value) VALUES('pricing', ?, ?)`, [provider, stringifyJson(models || {})]);
+      await upsertRow(trx, "kv", ["scope", "key"], { scope: "pricing", key: provider, value: stringifyJson(models || {}) });
+    }
+    for (const r of payload.kv || []) {
+      if (!r?.scope || r.key === undefined) continue;
+      await upsertRow(trx, "kv", ["scope", "key"], { scope: r.scope, key: r.key, value: r.value });
+    }
+
+    for (const r of payload.usageHistory || []) {
+      await trx.insertInto("usageHistory").values({
+        timestamp: r.timestamp, provider: r.provider ?? null, model: r.model ?? null,
+        connectionId: r.connectionId ?? null, apiKey: r.apiKey ?? null, endpoint: r.endpoint ?? null,
+        promptTokens: r.promptTokens ?? 0, completionTokens: r.completionTokens ?? 0,
+        cost: r.cost ?? 0, status: r.status ?? null, tokens: r.tokens ?? null, meta: r.meta ?? null,
+      }).execute();
+    }
+    for (const r of payload.usageDaily || []) {
+      await upsertRow(trx, "usageDaily", "dateKey", { dateKey: r.dateKey, data: r.data });
+    }
+    for (const r of payload.requestDetails || []) {
+      await upsertRow(trx, "requestDetails", "id", {
+        id: r.id, timestamp: r.timestamp, provider: r.provider ?? null, model: r.model ?? null,
+        connectionId: r.connectionId ?? null, apiKey: r.apiKey ?? null,
+        status: r.status ?? null, data: r.data,
+      });
     }
   });
 
@@ -174,5 +235,5 @@ export async function importDb(payload) {
 
 // Eager init helper (optional)
 export async function initDb() {
-  await getAdapter();
+  await getDb();
 }

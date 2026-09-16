@@ -1,4 +1,4 @@
-import { getAdapter } from "../driver.js";
+import { getDb } from "../kysely.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 
 const DEFAULT_MITM_ROUTER_BASE = "http://localhost:20128";
@@ -76,8 +76,8 @@ const DEFAULT_SETTINGS = {
 };
 
 async function readRaw() {
-  const db = await getAdapter();
-  const row = db.get(`SELECT data FROM settings WHERE id = 1`);
+  const db = await getDb();
+  const row = await db.selectFrom("settings").select("data").where("id", "=", 1).executeTakeFirst();
   return row ? parseJson(row.data, {}) : {};
 }
 
@@ -107,16 +107,17 @@ export async function getSettings() {
 
 // Atomic read-merge-write inside transaction (prevents losing concurrent updates)
 export async function updateSettings(updates) {
-  const db = await getAdapter();
+  const db = await getDb();
   let next;
-  db.transaction(function () {
-    const row = db.get(`SELECT data FROM settings WHERE id = 1`);
+  await db.transaction().execute(async (trx) => {
+    const row = await trx.selectFrom("settings").select("data").where("id", "=", 1).executeTakeFirst();
     const current = row ? parseJson(row.data, {}) : {};
     next = { ...current, ...updates };
-    db.run(
-      `INSERT INTO settings(id, data) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
-      [stringifyJson(next)],
-    );
+    const data = stringifyJson(next);
+    await trx.insertInto("settings")
+      .values({ id: 1, data })
+      .onConflict((oc) => oc.column("id").doUpdateSet({ data }))
+      .execute();
   });
   return mergeWithDefaults(next);
 }

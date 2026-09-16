@@ -185,3 +185,31 @@ export function buildCreateTableSql(name, def) {
   if (def.primaryKey) cols.push(def.primaryKey);
   return `CREATE TABLE IF NOT EXISTS ${name} (${cols.join(", ")})`;
 }
+
+// Indexes declared structurally so each dialect emits its own DDL: Postgres
+// folds unquoted identifiers to lower case and has no IFNULL, so the raw
+// SQLite strings these replaced only ever worked on SQLite.
+export const INDEXES = [
+  { name: "idx_pc_owner", table: "providerConnections", columns: ["owner"], unique: false },
+  { name: "idx_pc_provider", table: "providerConnections", columns: ["provider"], unique: false },
+  { name: "idx_pc_provider_active", table: "providerConnections", columns: ["provider", "isActive"], unique: false },
+  { name: "idx_pc_priority", table: "providerConnections", columns: ["provider", "priority"], unique: false },
+  { name: "idx_pn_type", table: "providerNodes", columns: ["type"], unique: false },
+  { name: "idx_pp_active", table: "proxyPools", columns: ["isActive"], unique: false },
+  { name: "idx_pp_status", table: "proxyPools", columns: ["testStatus"], unique: false },
+  { name: "idx_ak_key", table: "apiKeys", columns: ["key"], unique: false },
+  { name: "idx_ak_owner", table: "apiKeys", columns: ["owner"], unique: false },
+  { name: "idx_combo_name", table: "combos", columns: ["name"], unique: false },
+  { name: "idx_combo_owner_name", table: "combos", expression: { sqlite: "name, IFNULL(owner, '')", pg: "name, COALESCE(owner, '')" }, unique: true },
+  { name: "idx_kv_scope", table: "kv", columns: ["scope"], unique: false },
+  { name: "idx_uh_ts", table: "usageHistory", columns: ["timestamp"], order: "desc", unique: false },
+  { name: "idx_uh_provider", table: "usageHistory", columns: ["provider"], unique: false },
+  { name: "idx_uh_model", table: "usageHistory", columns: ["model"], unique: false },
+  { name: "idx_uh_conn", table: "usageHistory", columns: ["connectionId"], unique: false },
+  { name: "idx_uh_apikey", table: "usageHistory", columns: ["apiKey"], unique: false },
+  { name: "idx_rd_ts", table: "requestDetails", columns: ["timestamp"], order: "desc", unique: false },
+  { name: "idx_rd_provider", table: "requestDetails", columns: ["provider"], unique: false },
+  { name: "idx_rd_model", table: "requestDetails", columns: ["model"], unique: false },
+  { name: "idx_rd_conn", table: "requestDetails", columns: ["connectionId"], unique: false },
+  { name: "idx_rd_apikey", table: "requestDetails", columns: ["apiKey"], unique: false },
+];

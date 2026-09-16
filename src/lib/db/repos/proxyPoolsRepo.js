@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { getAdapter } from "../driver.js";
+import { getDb } from "../kysely.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 
 function rowToPool(row) {
@@ -27,37 +27,32 @@ function poolToRow(p) {
   };
 }
 
-function upsert(db, p) {
+async function upsert(db, p) {
   const r = poolToRow(p);
-  db.run(
-    `INSERT INTO proxyPools(id, isActive, testStatus, data, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       isActive=excluded.isActive, testStatus=excluded.testStatus,
-       data=excluded.data, updatedAt=excluded.updatedAt`,
-    [r.id, r.isActive, r.testStatus, r.data, r.createdAt, r.updatedAt]
-  );
+  await db.insertInto("proxyPools").values(r)
+    .onConflict((oc) => oc.column("id").doUpdateSet({
+      isActive: r.isActive, testStatus: r.testStatus, data: r.data, updatedAt: r.updatedAt,
+    }))
+    .execute();
 }
 
 export async function getProxyPools(filter = {}) {
-  const db = await getAdapter();
-  const where = [];
-  const params = [];
-  if (filter.isActive !== undefined) { where.push("isActive = ?"); params.push(filter.isActive ? 1 : 0); }
-  if (filter.testStatus) { where.push("testStatus = ?"); params.push(filter.testStatus); }
-  const sql = `SELECT * FROM proxyPools${where.length ? ` WHERE ${where.join(" AND ")}` : ""}`;
-  const list = db.all(sql, params).map(rowToPool);
+  const db = await getDb();
+  let q = db.selectFrom("proxyPools").selectAll();
+  if (filter.isActive !== undefined) q = q.where("isActive", "=", filter.isActive ? 1 : 0);
+  if (filter.testStatus) q = q.where("testStatus", "=", filter.testStatus);
+  const list = (await q.execute()).map(rowToPool);
   list.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
   return list;
 }
 
 export async function getProxyPoolById(id) {
-  const db = await getAdapter();
-  return rowToPool(db.get(`SELECT * FROM proxyPools WHERE id = ?`, [id]));
+  const db = await getDb();
+  return rowToPool(await db.selectFrom("proxyPools").selectAll().where("id", "=", id).executeTakeFirst());
 }
 
 export async function createProxyPool(data) {
-  const db = await getAdapter();
+  const db = await getDb();
   const now = new Date().toISOString();
   const pool = {
     id: data.id || uuidv4(),
@@ -73,31 +68,31 @@ export async function createProxyPool(data) {
     createdAt: now,
     updatedAt: now,
   };
-  upsert(db, pool);
+  await upsert(db, pool);
   return pool;
 }
 
 export async function updateProxyPool(id, data) {
-  const db = await getAdapter();
+  const db = await getDb();
   let result = null;
-  db.transaction(() => {
-    const row = db.get(`SELECT * FROM proxyPools WHERE id = ?`, [id]);
+  await db.transaction().execute(async (trx) => {
+    const row = await trx.selectFrom("proxyPools").selectAll().where("id", "=", id).executeTakeFirst();
     if (!row) return;
     const merged = { ...rowToPool(row), ...data, updatedAt: new Date().toISOString() };
-    upsert(db, merged);
+    await upsert(trx, merged);
     result = merged;
   });
   return result;
 }
 
 export async function deleteProxyPool(id) {
-  const db = await getAdapter();
+  const db = await getDb();
   let removed = null;
-  db.transaction(() => {
-    const row = db.get(`SELECT * FROM proxyPools WHERE id = ?`, [id]);
+  await db.transaction().execute(async (trx) => {
+    const row = await trx.selectFrom("proxyPools").selectAll().where("id", "=", id).executeTakeFirst();
     if (!row) return;
     removed = rowToPool(row);
-    db.run(`DELETE FROM proxyPools WHERE id = ?`, [id]);
+    await trx.deleteFrom("proxyPools").where("id", "=", id).execute();
   });
   return removed;
 }

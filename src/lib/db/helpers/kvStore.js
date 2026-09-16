@@ -1,39 +1,46 @@
-import { getAdapter } from "../driver.js";
+import { getDb } from "../kysely.js";
 import { parseJson, stringifyJson } from "./jsonCol.js";
 
 export function makeKv(scope) {
   return {
     async get(key, fallback = null) {
-      const db = await getAdapter();
-      const row = db.get(`SELECT value FROM kv WHERE scope = ? AND key = ?`, [scope, key]);
+      const db = await getDb();
+      const row = await db.selectFrom("kv").select("value")
+        .where("scope", "=", scope).where("key", "=", key).executeTakeFirst();
       return row ? parseJson(row.value, fallback) : fallback;
     },
     async getAll() {
-      const db = await getAdapter();
-      const rows = db.all(`SELECT key, value FROM kv WHERE scope = ?`, [scope]);
+      const db = await getDb();
+      const rows = await db.selectFrom("kv").select(["key", "value"]).where("scope", "=", scope).execute();
       const out = {};
       for (const r of rows) out[r.key] = parseJson(r.value);
       return out;
     },
     async set(key, value) {
-      const db = await getAdapter();
-      db.run(`INSERT INTO kv(scope, key, value) VALUES(?, ?, ?) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`, [scope, key, stringifyJson(value)]);
+      const db = await getDb();
+      const v = stringifyJson(value);
+      await db.insertInto("kv").values({ scope, key, value: v })
+        .onConflict((oc) => oc.columns(["scope", "key"]).doUpdateSet({ value: v }))
+        .execute();
     },
     async setMany(obj) {
-      const db = await getAdapter();
-      db.transaction(() => {
+      const db = await getDb();
+      await db.transaction().execute(async (trx) => {
         for (const [k, v] of Object.entries(obj)) {
-          db.run(`INSERT INTO kv(scope, key, value) VALUES(?, ?, ?) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`, [scope, k, stringifyJson(v)]);
+          const value = stringifyJson(v);
+          await trx.insertInto("kv").values({ scope, key: k, value })
+            .onConflict((oc) => oc.columns(["scope", "key"]).doUpdateSet({ value }))
+            .execute();
         }
       });
     },
     async remove(key) {
-      const db = await getAdapter();
-      db.run(`DELETE FROM kv WHERE scope = ? AND key = ?`, [scope, key]);
+      const db = await getDb();
+      await db.deleteFrom("kv").where("scope", "=", scope).where("key", "=", key).execute();
     },
     async clear() {
-      const db = await getAdapter();
-      db.run(`DELETE FROM kv WHERE scope = ?`, [scope]);
+      const db = await getDb();
+      await db.deleteFrom("kv").where("scope", "=", scope).execute();
     },
   };
 }
