@@ -281,6 +281,13 @@ export async function buildModelsList(kindFilter, options = {}) {
     if (scoped) {
       keyOwner = await getApiKeyOwner(options.apiKey || null);
       connections = connections.filter((c) => !c.owner || c.owner === keyOwner);
+      // A shared account the user switched off for themselves must not show up
+      // in their catalogue either, or it would advertise models they cannot reach.
+      if (keyOwner) {
+        const { getDisabledAccountIds } = await import("@/lib/db/repos/disabledAccountsRepo.js");
+        const disabled = new Set(await getDisabledAccountIds(keyOwner));
+        if (disabled.size) connections = connections.filter((c) => !disabled.has(c.id));
+      }
     }
   } catch { }
 

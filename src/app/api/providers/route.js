@@ -9,7 +9,9 @@ import {
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
 import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/providerNormalization";
-import { getScopeFilter, ownerForCreate, scopeVisible } from "@/lib/auth/resourceScope";
+import { getScopeFilter, getRequestIdentity, isScopeEnabled, ownerForCreate, scopeVisible } from "@/lib/auth/resourceScope";
+import { getDisabledAccountIds } from "@/lib/db/repos/disabledAccountsRepo.js";
+import { getSettings } from "@/lib/localDb";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +54,13 @@ export async function GET() {
   try {
     const connections = scopeVisible(await getProviderConnections(), await getScopeFilter());
 
+    // A shared account a user switched off is still listed — they have to be
+    // able to switch it back on — but flagged, and shown as read-only since
+    // editing or deleting it belongs to the admin.
+    const identity = await getRequestIdentity();
+    const scoped = isScopeEnabled(await getSettings()) && !identity.isAdmin && !!identity.owner;
+    const disabledForMe = scoped ? new Set(await getDisabledAccountIds(identity.owner)) : new Set();
+
     // Build nodeNameMap for compatible providers (id → name)
     let nodeNameMap = {};
     try {
@@ -67,9 +76,13 @@ export async function GET() {
       const name = isCompatible
         ? (c.name || nodeNameMap[c.provider] || c.providerSpecificData?.nodeName || c.provider)
         : c.name;
+      const shared = (c.owner ?? null) === null;
       return {
         ...c,
         name,
+        shared,
+        readOnly: scoped && shared,
+        disabledForMe: disabledForMe.has(c.id),
         apiKey: undefined,
         accessToken: undefined,
         refreshToken: undefined,

@@ -1,5 +1,18 @@
 import { NextResponse } from "next/server";
 import { canSee, getRequestIdentity, getScopeFilter, normalizeOwnerInput } from "@/lib/auth/resourceScope";
+import { isScopeEnabled } from "@/lib/auth/resourceScope";
+import { getSettings } from "@/lib/localDb";
+import { setAccountDisabled } from "@/lib/db/repos/disabledAccountsRepo.js";
+
+// A shared account (no owner) is the admin's to change. Everyone else may use
+// it and switch it off for themselves, but editing or deleting it would affect
+// every other user, so those stay with the admin.
+async function sharedAccountGuard(connection) {
+  if ((connection?.owner ?? null) !== null) return null;
+  if (!isScopeEnabled(await getSettings())) return null;
+  if ((await getRequestIdentity()).isAdmin) return null;
+  return { error: "Shared accounts are managed by the admin", status: 403 };
+}
 import {
   getProviderConnectionById,
   getProxyPoolById,
@@ -108,6 +121,19 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
+    // Turning a shared account off for yourself is the one change a non-admin
+    // may make to it, and it is recorded per user rather than on the account.
+    const identity = await getRequestIdentity();
+    if ((existing.owner ?? null) === null && !identity.isAdmin && identity.owner
+        && isScopeEnabled(await getSettings())) {
+      const onlyActive = Object.keys(body).length === 1 && isActive !== undefined;
+      if (!onlyActive) {
+        return NextResponse.json({ error: "Shared accounts are managed by the admin" }, { status: 403 });
+      }
+      await setAccountDisabled(identity.owner, id, isActive === false);
+      return NextResponse.json({ connection: { ...existing, isActive: isActive !== false, disabledForMe: isActive === false } });
+    }
+
     const proxyConfig = normalizeProxyConfig(body);
     if (proxyConfig.error) {
       return NextResponse.json({ error: proxyConfig.error }, { status: 400 });
@@ -186,6 +212,8 @@ export async function DELETE(request, { params }) {
     if (!existing || !canSee(existing, await getScopeFilter())) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
+    const denied = await sharedAccountGuard(existing);
+    if (denied) return NextResponse.json({ error: denied.error }, { status: denied.status });
 
     const deleted = await deleteProviderConnection(id);
     if (!deleted) {

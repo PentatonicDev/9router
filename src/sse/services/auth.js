@@ -79,8 +79,16 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     const settings0 = await getSettings();
     if (settings0?.scopeResourcesByUser === true) {
       const keyOwner = await getApiKeyOwner(options?.apiKey || null);
-      if (keyOwner) connections = connections.filter(c => !c.owner || c.owner === keyOwner);
-      else connections = connections.filter(c => !c.owner);
+      if (keyOwner) {
+        connections = connections.filter(c => !c.owner || c.owner === keyOwner);
+        // A shared account the user switched off for themselves leaves their
+        // pool without being disabled for anyone else.
+        const { getDisabledAccountIds } = await import("@/lib/db/repos/disabledAccountsRepo.js");
+        const disabled = new Set(await getDisabledAccountIds(keyOwner));
+        if (disabled.size) connections = connections.filter(c => !disabled.has(c.id));
+      } else {
+        connections = connections.filter(c => !c.owner);
+      }
     }
 
     // Account binding: a key with `allowedConnectionIds` only routes to those
