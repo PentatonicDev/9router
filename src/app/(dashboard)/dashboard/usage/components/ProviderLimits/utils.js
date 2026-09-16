@@ -127,6 +127,14 @@ export function getConnectionsEmptyMessage(totals, providerFilter, accountFilter
         "Connect to providers with OAuth to track your API quota limits and usage.",
     };
   }
+  if (!totals.keyFilteredConnections) {
+    return {
+      icon: "key_off",
+      title: "No Accounts Linked To This Key",
+      description:
+        "This API key is linked to accounts that have no quota tracking. Link other accounts on the key page, or pick another key.",
+    };
+  }
   if (!totals.providerFilteredConnections) {
     return {
       icon: "filter_alt_off",
@@ -173,6 +181,7 @@ export function getSafeTotals(totals, fallbackTotal = 0) {
   return (
     totals || {
       eligibleConnections: fallbackTotal,
+      keyFilteredConnections: fallbackTotal,
       providerFilteredConnections: fallbackTotal,
     }
   );

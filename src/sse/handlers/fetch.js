@@ -165,7 +165,7 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
   const fetchLockKey = `webfetch:${providerId}`;
 
   while (true) {
-    const credentials = await getProviderCredentials(providerId, excludeConnectionIds, fetchLockKey);
+    const credentials = await getProviderCredentials(providerId, excludeConnectionIds, fetchLockKey, { apiKey });
 
     if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
       return responseFromRoutingCandidate(credentials.candidate);

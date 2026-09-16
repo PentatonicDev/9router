@@ -148,6 +148,8 @@ export default function ProviderLimits() {
   const [providerFilter, setProviderFilter] = useState("all");
   const [providerOptions, setProviderOptions] = useState([]);
   const [accountFilter, setAccountFilter] = useState("all");
+  const [apiKeyFilter, setApiKeyFilter] = useState("all");
+  const [apiKeyOptions, setApiKeyOptions] = useState([]);
   const [quotaSortMode, setQuotaSortMode] = useState("default");
   const [quotaVisibility, setQuotaVisibility] = useState({});
   const [expiringFirst, setExpiringFirst] = useState(false);
@@ -166,6 +168,7 @@ export default function ProviderLimits() {
   });
   const [totals, setTotals] = useState({
     eligibleConnections: 0,
+    keyFilteredConnections: 0,
     providerFilteredConnections: 0,
   });
 
@@ -187,6 +190,10 @@ export default function ProviderLimits() {
           params.set("provider", providerFilter);
         }
 
+        if (apiKeyFilter !== "all") {
+          params.set("apiKeyId", apiKeyFilter);
+        }
+
         const response = await fetch(
           `/api/providers/client?${params.toString()}`,
         );
@@ -199,6 +206,7 @@ export default function ProviderLimits() {
 
         setConnections(connectionList);
         setProviderOptions(getProviderOptions(data.providerOptions));
+        setApiKeyOptions(data.apiKeyOptions || []);
         setPagination(nextPagination);
         setTotals(nextTotals);
         setPage(getPaginationPageValue(data.pagination, targetPage));
@@ -207,12 +215,13 @@ export default function ProviderLimits() {
         console.error("Error fetching connections:", error);
         setConnections([]);
         setProviderOptions([]);
+        setApiKeyOptions([]);
         setPagination({ page: 1, pageSize, total: 0, totalPages: 1 });
-        setTotals({ eligibleConnections: 0, providerFilteredConnections: 0 });
+        setTotals({ eligibleConnections: 0, keyFilteredConnections: 0, providerFilteredConnections: 0 });
         return [];
       }
     },
-    [accountFilter, expiringFirst, page, pageSize, providerFilter],
+    [accountFilter, apiKeyFilter, expiringFirst, page, pageSize, providerFilter],
   );
 
   // Fetch quota for a specific connection
@@ -938,6 +947,29 @@ export default function ProviderLimits() {
               </option>
             ))}
           </select>
+
+          {apiKeyOptions.length > 0 && (
+            <select
+              value={apiKeyFilter}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                if (shouldResetPage(apiKeyFilter, nextValue)) {
+                  setPage(1);
+                }
+                setApiKeyFilter(nextValue);
+              }}
+              className="h-8 max-w-[11rem] rounded-lg border border-black/10 bg-black/[0.02] px-2 text-xs text-text-primary outline-none transition-colors hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/10"
+              aria-label="Filter accounts by API key"
+            >
+              <option value="all">All API keys</option>
+              {apiKeyOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name || "Unnamed key"}
+                  {option.boundConnections ? ` (${option.boundConnections})` : " (all accounts)"}
+                </option>
+              ))}
+            </select>
+          )}
 
           {providerFilter === "codex" && (
             <select

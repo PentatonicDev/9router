@@ -256,7 +256,7 @@ async function forwardGeminiNativeRequest(request, body, model, action, errorCon
   const excludeConnectionIds = new Set();
   const bodyText = JSON.stringify(body);
   while (true) {
-    const credentials = await getProviderCredentials("gemini", excludeConnectionIds, modelId);
+    const credentials = await getProviderCredentials("gemini", excludeConnectionIds, modelId, { apiKey: extractGeminiClientApiKey(request) });
     if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
       console.log(`[GEMINI_NATIVE] exhausted model=${modelId} status=${credentials.candidate.status} error=${credentials.candidate.message}`);
       return responseFromRoutingCandidate(credentials.candidate, errorContext);

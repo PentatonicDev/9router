@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getProviderConnections } from "@/lib/localDb";
+import { getProviderConnections, getApiKeys } from "@/lib/localDb";
 import { backfillCodexEmails } from "@/lib/oauth/providers";
 import { USAGE_APIKEY_PROVIDERS, USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
 
@@ -80,16 +80,32 @@ export async function GET(request) {
 
     const { searchParams } = new URL(request.url);
     const provider = searchParams.get("provider") || "all";
+    const apiKeyId = searchParams.get("apiKeyId") || "all";
     const accountStatus = searchParams.get("accountStatus") || "all";
     const sort = searchParams.get("sort") || "priority";
     const page = parsePositiveInt(searchParams.get("page"), 1);
     const pageSize = Math.min(parsePositiveInt(searchParams.get("pageSize"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
 
     const allConnections = await getProviderConnections();
+    const apiKeys = await getApiKeys();
     const eligibleConnections = allConnections.filter(isUsageEligible);
     const providerOptions = Array.from(new Set(eligibleConnections.map((conn) => conn.provider))).sort();
+    const apiKeyOptions = apiKeys.map((k) => ({
+      id: k.id,
+      name: k.name,
+      boundConnections: k.allowedConnectionIds?.length ?? 0,
+    }));
 
-    const providerFilteredConnections = eligibleConnections.filter((conn) => (
+    // A key with no bound accounts reaches every account, so filtering by it is
+    // the same as not filtering at all.
+    const selectedKey = apiKeyId === "all" ? null : apiKeys.find((k) => k.id === apiKeyId);
+    const keyAllowedIds = selectedKey?.allowedConnectionIds || null;
+
+    const keyFilteredConnections = keyAllowedIds
+      ? eligibleConnections.filter((conn) => keyAllowedIds.includes(conn.id))
+      : eligibleConnections;
+
+    const providerFilteredConnections = keyFilteredConnections.filter((conn) => (
       provider === "all" || conn.provider === provider
     ));
 
@@ -109,6 +125,7 @@ export async function GET(request) {
     return NextResponse.json({
       connections: pageConnections,
       providerOptions,
+      apiKeyOptions,
       pagination: {
         page: currentPage,
         pageSize,
@@ -117,6 +134,7 @@ export async function GET(request) {
       },
       totals: {
         eligibleConnections: eligibleConnections.length,
+        keyFilteredConnections: keyFilteredConnections.length,
         providerFilteredConnections: providerFilteredConnections.length,
       },
     });

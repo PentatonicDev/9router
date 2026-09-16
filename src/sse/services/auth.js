@@ -1,4 +1,4 @@
-import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
+import { getProviderConnections, validateApiKey, getApiKeyAllowedConnectionIds, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getApplicableModelLock, getModelLockMetaKey } from "open-sse/services/accountFallback.js";
 import { classifyRoutingReason, publicStatusForReason, sanitizePublicMessage } from "open-sse/utils/error.js";
@@ -24,6 +24,8 @@ function githubMonthlyResetMs(status, errorText, provider) {
  * @param {string} provider - Provider name
  * @param {Set<string>|string|null} excludeConnectionIds - Connection ID(s) to exclude (for retry with next account)
  * @param {string|null} model - Model name for per-model rate limit filtering
+ * @param {object} options - { preferredConnectionId, apiKey } — `apiKey` restricts
+ *   selection to the accounts bound to that key (unbound key = every account).
  */
 export async function getProviderCredentials(provider, excludeConnectionIds = null, model = null, options = {}) {
   // Normalize to Set for consistent handling
@@ -69,7 +71,12 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       };
     }
 
-    const connections = await getProviderConnections({ provider: providerId, isActive: true });
+    let connections = await getProviderConnections({ provider: providerId, isActive: true });
+
+    // Account binding: a key with `allowedConnectionIds` only routes to those
+    // accounts. No binding (or no key) leaves the pool untouched.
+    const allowedConnectionIds = await getApiKeyAllowedConnectionIds(options?.apiKey || null);
+    if (allowedConnectionIds) connections = connections.filter(c => allowedConnectionIds.includes(c.id));
     log.debug("AUTH", `${provider} | total connections: ${connections.length}, excludeIds: ${excludeSet.size > 0 ? [...excludeSet].join(",") : "none"}, model: ${model || "any"}`);
 
     if (connections.length === 0) {

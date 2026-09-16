@@ -91,6 +91,7 @@ describe("web fetch account state", () => {
       "jina-reader",
       expect.any(Set),
       "webfetch:jina-reader",
+      { apiKey: null },
     );
     expect(mocks.markAccountUnavailable).not.toHaveBeenCalled();
   });

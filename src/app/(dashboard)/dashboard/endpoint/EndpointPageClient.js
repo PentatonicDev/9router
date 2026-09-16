@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
+import Link from "next/link";
 import { Card, Button, Input, Modal, CardSkeleton, Toggle, ConfirmModal } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import {
@@ -1042,8 +1043,21 @@ export default function APIPageClient({ machineId }) {
                   {key.isActive === false && (
                     <p className="text-xs text-orange-500 mt-1">Paused</p>
                   )}
+                  {key.allowedConnectionIds?.length > 0 && (
+                    <p className="text-xs text-text-muted mt-1">
+                      {key.allowedConnectionIds.length} linked account
+                      {key.allowedConnectionIds.length === 1 ? "" : "s"}
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
+                  <Link
+                    href={`/dashboard/keys/${key.id}`}
+                    className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
+                    title="Link accounts to this key"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">link</span>
+                  </Link>
                   <Toggle
                     size="sm"
                     checked={key.isActive ?? true}

@@ -1,5 +1,14 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
+import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+
+// An empty binding list means "no restriction": the key reaches every account.
+// Callers rely on null (not []) to express that, so normalize both ways here.
+function normalizeAllowed(value) {
+  if (!Array.isArray(value)) return null;
+  const ids = value.filter((id) => typeof id === "string" && id.trim() !== "");
+  return ids.length ? Array.from(new Set(ids)) : null;
+}
 
 function rowToKey(row) {
   if (!row) return null;
@@ -9,6 +18,7 @@ function rowToKey(row) {
     name: row.name,
     machineId: row.machineId,
     isActive: row.isActive === 1 || row.isActive === true,
+    allowedConnectionIds: normalizeAllowed(parseJson(row.allowedConnectionIds, null)),
     createdAt: row.createdAt,
   };
 }
@@ -36,11 +46,12 @@ export async function createApiKey(name, machineId) {
     key: result.key,
     machineId,
     isActive: true,
+    allowedConnectionIds: null,
     createdAt: new Date().toISOString(),
   };
   db.run(
-    `INSERT INTO apiKeys(id, key, name, machineId, isActive, createdAt) VALUES(?, ?, ?, ?, ?, ?)`,
-    [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, apiKey.createdAt]
+    `INSERT INTO apiKeys(id, key, name, machineId, isActive, allowedConnectionIds, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+    [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, null, apiKey.createdAt]
   );
   return apiKey;
 }
@@ -52,9 +63,11 @@ export async function updateApiKey(id, data) {
     const row = db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
     if (!row) return;
     const merged = { ...rowToKey(row), ...data };
+    merged.allowedConnectionIds = normalizeAllowed(merged.allowedConnectionIds);
     db.run(
-      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ? WHERE id = ?`,
-      [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, id]
+      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, allowedConnectionIds = ? WHERE id = ?`,
+      [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0,
+       merged.allowedConnectionIds ? stringifyJson(merged.allowedConnectionIds) : null, id]
     );
     result = merged;
   });
@@ -65,6 +78,19 @@ export async function deleteApiKey(id) {
   const db = await getAdapter();
   const res = db.run(`DELETE FROM apiKeys WHERE id = ?`, [id]);
   return (res?.changes ?? 0) > 0;
+}
+
+/**
+ * Connection ids this key is bound to, or null when it is unrestricted.
+ * An unknown key is also unrestricted — key *validity* is a separate check
+ * (validateApiKey), gated by settings.requireApiKey.
+ */
+export async function getApiKeyAllowedConnectionIds(key) {
+  if (!key) return null;
+  const db = await getAdapter();
+  const row = db.get(`SELECT allowedConnectionIds FROM apiKeys WHERE key = ?`, [key]);
+  if (!row) return null;
+  return normalizeAllowed(parseJson(row.allowedConnectionIds, null));
 }
 
 export async function validateApiKey(key) {
