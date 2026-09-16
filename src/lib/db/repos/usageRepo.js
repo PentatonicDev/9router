@@ -2,12 +2,7 @@ import { EventEmitter } from "events";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
-
-function maskApiKey(key) {
-  if (!key || typeof key !== "string") return null;
-  if (key.length <= 8) return key.charAt(0) + "***";
-  return key.slice(0, 8) + "***";
-}
+import { maskApiKey } from "../helpers/maskKey.js";
 
 const PENDING_TIMEOUT_MS = 60 * 1000;
 const RING_CAP = 50;
@@ -343,8 +338,14 @@ function loadDaysInRange(adapter, maxDays) {
   return adapter.all(`SELECT dateKey, data FROM usageDaily WHERE dateKey >= ?`, [cutoffKey]);
 }
 
-export async function getUsageStats(period = "all") {
+export async function getUsageStats(period = "all", options = {}) {
   const db = await getAdapter();
+  // Filtering by key forces the per-request path: the daily rollups aggregate
+  // providers/models/accounts without a key dimension, so only usageHistory can
+  // answer "this key only" exactly.
+  // ponytail: scans the period's history rows instead of a rollup — fine while
+  // usageHistory is unpruned and small; add a per-key daily rollup if it grows.
+  const apiKeyFilter = typeof options.apiKey === "string" && options.apiKey ? options.apiKey : null;
 
   const [{ getProviderConnections }, { getApiKeys }, { getProviderNodes }] = await Promise.all([
     import("./connectionsRepo.js"),
@@ -369,13 +370,17 @@ export async function getUsageStats(period = "all") {
   for (const k of allApiKeys) apiKeyMap[k.key] = { name: k.name, id: k.id, createdAt: k.createdAt };
 
   // recentRequests from live history (last 100 entries enough for 20 deduped)
-  const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status FROM usageHistory ORDER BY id DESC LIMIT 100`);
+  const recentRows = apiKeyFilter
+    ? db.all(`SELECT timestamp, provider, model, apiKey, tokens, status FROM usageHistory WHERE apiKey = ? ORDER BY id DESC LIMIT 100`, [apiKeyFilter])
+    : db.all(`SELECT timestamp, provider, model, apiKey, tokens, status FROM usageHistory ORDER BY id DESC LIMIT 100`);
   const seen = new Set();
   const recentRequests = recentRows
     .map((r) => {
       const t = parseJson(r.tokens, {}) || {};
       return {
         timestamp: r.timestamp, model: r.model, provider: r.provider || "",
+        apiKeyMasked: maskApiKey(r.apiKey),
+        keyName: (r.apiKey && apiKeyMap[r.apiKey]?.name) || (r.apiKey ? maskApiKey(r.apiKey) : "Local (No API Key)"),
         promptTokens: t.prompt_tokens || t.input_tokens || 0,
         completionTokens: t.completion_tokens || t.output_tokens || 0,
         cachedTokens: t.cached_tokens || t.cache_read_input_tokens || 0,
@@ -443,7 +448,7 @@ export async function getUsageStats(period = "all") {
     }
   }
 
-  const useDailySummary = period !== "24h" && period !== "today";
+  const useDailySummary = period !== "24h" && period !== "today" && !apiKeyFilter;
 
   if (useDailySummary) {
     const periodDays = { "7d": 7, "30d": 30, "60d": 60 };
@@ -564,18 +569,23 @@ export async function getUsageStats(period = "all") {
       if (stats.byEndpoint[endpointKey] && new Date(ts) > new Date(stats.byEndpoint[endpointKey].lastUsed)) stats.byEndpoint[endpointKey].lastUsed = ts;
     }
   } else {
-    // 24h / today: live history
-    let cutoff;
+    // Per-request path: 24h/today, or any period narrowed to one API key.
+    // "all" has no cutoff; every other period here is a fixed window.
+    let cutoff = null;
     if (period === "today") {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
       cutoff = startOfDay.toISOString();
-    } else {
-      cutoff = new Date(Date.now() - PERIOD_MS["24h"]).toISOString();
+    } else if (period !== "all") {
+      cutoff = new Date(Date.now() - (PERIOD_MS[period] || PERIOD_MS["24h"])).toISOString();
     }
+    const conds = [];
+    const params = [];
+    if (cutoff) { conds.push("timestamp >= ?"); params.push(cutoff); }
+    if (apiKeyFilter) { conds.push("apiKey = ?"); params.push(apiKeyFilter); }
     const filtered = db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
-      [cutoff]
+      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory${conds.length ? ` WHERE ${conds.join(" AND ")}` : ""}`,
+      params
     );
 
     for (const r of filtered) {

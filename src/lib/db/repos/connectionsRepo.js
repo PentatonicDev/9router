@@ -229,6 +229,23 @@ export async function updateProviderConnection(id, data) {
   return result;
 }
 
+// A deleted account must not linger in apiKeys.allowedConnectionIds, or the key
+// page lists a phantom binding and the quota filter counts an account that is
+// gone. Emptying a key's list returns it to unrestricted, per the documented
+// "no bindings = every account" rule.
+// Must be called INSIDE a transaction.
+function unbindConnectionsInTx(db, ids) {
+  if (!ids.length) return;
+  const removed = new Set(ids);
+  for (const row of db.all(`SELECT id, allowedConnectionIds FROM apiKeys WHERE allowedConnectionIds IS NOT NULL`)) {
+    const current = parseJson(row.allowedConnectionIds, null);
+    if (!Array.isArray(current)) continue;
+    const next = current.filter((connId) => !removed.has(connId));
+    if (next.length === current.length) continue;
+    db.run(`UPDATE apiKeys SET allowedConnectionIds = ? WHERE id = ?`, [next.length ? stringifyJson(next) : null, row.id]);
+  }
+}
+
 export async function deleteProviderConnection(id) {
   const db = await getAdapter();
   let ok = false;
@@ -236,6 +253,7 @@ export async function deleteProviderConnection(id) {
     const row = db.get(`SELECT provider FROM providerConnections WHERE id = ?`, [id]);
     if (!row) return;
     db.run(`DELETE FROM providerConnections WHERE id = ?`, [id]);
+    unbindConnectionsInTx(db, [id]);
     reorderInTx(db, row.provider);
     ok = true;
   });
@@ -244,9 +262,15 @@ export async function deleteProviderConnection(id) {
 
 export async function deleteProviderConnectionsByProvider(providerId) {
   const db = await getAdapter();
-  const before = db.get(`SELECT COUNT(*) AS n FROM providerConnections WHERE provider = ?`, [providerId]);
-  db.run(`DELETE FROM providerConnections WHERE provider = ?`, [providerId]);
-  return before?.n || 0;
+  let deleted = 0;
+  db.transaction(() => {
+    const rows = db.all(`SELECT id FROM providerConnections WHERE provider = ?`, [providerId]);
+    if (!rows.length) return;
+    db.run(`DELETE FROM providerConnections WHERE provider = ?`, [providerId]);
+    unbindConnectionsInTx(db, rows.map((r) => r.id));
+    deleted = rows.length;
+  });
+  return deleted;
 }
 
 export async function reorderProviderConnections(providerId) {

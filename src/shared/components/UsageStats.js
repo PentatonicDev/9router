@@ -56,6 +56,7 @@ function RecentRequests({ requests = [] }) {
               <tr className="border-b border-border">
                 <th className="py-1.5 text-left font-semibold text-text-muted w-2"></th>
                 <th className="py-1.5 text-left font-semibold text-text-muted">Model</th>
+                <th className="py-1.5 text-left font-semibold text-text-muted">Key</th>
                 <th className="py-1.5 text-right font-semibold text-text-muted whitespace-nowrap">In / Out</th>
                 <th className="py-1.5 text-right font-semibold text-text-muted">When</th>
               </tr>
@@ -69,6 +70,7 @@ function RecentRequests({ requests = [] }) {
                       <span className={`block w-1.5 h-1.5 rounded-full ${ok ? "bg-success" : "bg-error"}`} />
                     </td>
                     <td className="py-1.5 font-mono truncate max-w-[120px]" title={r.model}>{r.model}</td>
+                    <td className="py-1.5 truncate max-w-[90px] text-text-muted" title={r.keyName || "Local (no key)"}>{r.keyName || "Local"}</td>
                     <td className="py-1.5 text-right whitespace-nowrap">
                       <span className="text-primary">{fmt(r.promptTokens)}↑</span>
                       {" "}
@@ -200,7 +202,7 @@ const PERIODS = [
   { value: "60d", label: "60D" },
 ];
 
-export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false } = {}) {
+export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false, apiKeyId = "all", onApiKeyOptions } = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -216,6 +218,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
   const [periodLocal, setPeriodLocal] = useState("today");
   const isInitialLoad = useRef(true);
   const hasLoadedStats = useRef(false);
+  const onApiKeyOptionsRef = useRef(onApiKeyOptions);
   const period = periodProp ?? periodLocal;
   const setPeriod = setPeriodProp ?? setPeriodLocal;
 
@@ -251,6 +254,12 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    onApiKeyOptionsRef.current = onApiKeyOptions;
+  }, [onApiKeyOptions]);
+
+  const keyFiltered = apiKeyId !== "all";
+
   // Fetch filtered stats via REST when period changes
   useEffect(() => {
     // First load: show full spinner; subsequent: show subtle fetching indicator
@@ -261,12 +270,16 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       setFetching(true);
     }
 
-    fetch(`/api/usage/stats?period=${period}`)
+    const params = new URLSearchParams({ period });
+    if (apiKeyId && apiKeyId !== "all") params.set("apiKeyId", apiKeyId);
+
+    fetch(`/api/usage/stats?${params.toString()}`)
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         if (data) {
           hasLoadedStats.current = true;
           setStats((prev) => ({ ...prev, ...data }));
+          if (data.apiKeyOptions) onApiKeyOptionsRef.current?.(data.apiKeyOptions);
         }
       })
       .catch(() => {})
@@ -274,7 +287,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         setLoading(false);
         setFetching(false);
       });
-  }, [period]);
+  }, [period, apiKeyId]);
 
   // SSE connection - real-time updates for activeRequests + recentRequests only
   useEffect(() => {
@@ -289,7 +302,9 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
           return {
             ...prev,
             activeRequests: data.activeRequests,
-            recentRequests: data.recentRequests,
+            // The stream carries every key's traffic, so a filtered view keeps
+            // the REST rows rather than showing requests from other keys.
+            recentRequests: keyFiltered ? prev.recentRequests : data.recentRequests,
             errorProvider: data.errorProvider,
             pending: data.pending,
           };
@@ -303,7 +318,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
     es.onerror = () => setLoading(false);
 
     return () => es.close();
-  }, []);
+  }, [keyFiltered]);
 
   const toggleSort = useCallback((tableType, field) => {
     const params = new URLSearchParams(searchParams.toString());

@@ -48,9 +48,20 @@ export function isOidcConfigured(settings) {
   );
 }
 
+// The dashboard's "OIDC only" button stores authMode "sso" (the SAML/OIDC tab
+// picks the protocol via ssoType), so "sso" must be honoured here too —
+// otherwise enabling OIDC-only locks the user out: password login is refused
+// and /api/auth/oidc/start answers oidc_not_configured.
+const OIDC_AUTH_MODES = ["oidc", "sso", "both"];
+
+export function isOidcAuthMode(settings) {
+  if (!OIDC_AUTH_MODES.includes(settings?.authMode)) return false;
+  return settings.authMode === "oidc" || (settings.ssoType || "oidc") === "oidc";
+}
+
 export async function getOidcRuntimeConfig() {
   const settings = await getSettings();
-  if (!["oidc", "both"].includes(settings.authMode) || !isOidcConfigured(settings)) return null;
+  if (!isOidcAuthMode(settings) || !isOidcConfigured(settings)) return null;
 
   const issuerUrl = trimTrailingSlashes(settings.oidcIssuerUrl);
   return {

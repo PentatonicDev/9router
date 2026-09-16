@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getUsageStats } from "@/lib/usageDb";
+import { getApiKeys } from "@/lib/localDb";
 
 const VALID_PERIODS = new Set(["today", "24h", "7d", "30d", "60d", "all"]);
 
@@ -14,8 +15,18 @@ export async function GET(request) {
       return NextResponse.json({ error: "Invalid period" }, { status: 400 });
     }
 
-    const stats = await getUsageStats(period);
-    return NextResponse.json(stats);
+    // Clients pass the key's id, never the secret itself; the raw key stays
+    // server-side and is only used to match usage rows.
+    const apiKeyId = searchParams.get("apiKeyId");
+    const apiKeys = await getApiKeys();
+    const selectedKey = apiKeyId && apiKeyId !== "all" ? apiKeys.find((k) => k.id === apiKeyId) : null;
+    if (apiKeyId && apiKeyId !== "all" && !selectedKey) {
+      return NextResponse.json({ error: "Unknown API key" }, { status: 400 });
+    }
+
+    const stats = await getUsageStats(period, { apiKey: selectedKey?.key || null });
+    const apiKeyOptions = apiKeys.map((k) => ({ id: k.id, name: k.name }));
+    return NextResponse.json({ ...stats, apiKeyOptions });
   } catch (error) {
     console.error("[API] Failed to get usage stats:", error);
     return NextResponse.json({ error: "Failed to fetch usage stats" }, { status: 500 });

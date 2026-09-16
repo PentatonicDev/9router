@@ -18,8 +18,18 @@ import EndpointRow from "./components/EndpointRow";
 import StatusAlert from "./components/StatusAlert";
 import Tooltip from "./components/Tooltip";
 import SecurityWarning from "./components/SecurityWarning";
+// A binding is stored as a connection id; show the account's own name when the
+// connection is still around, and a short id when it is not yet loaded.
+function connectionLabel(connectionId, connections) {
+  const conn = connections.find((c) => c.id === connectionId);
+  if (!conn) return `${connectionId.slice(0, 8)}...`;
+  const name = conn.displayName || conn.name || conn.email || conn.id.slice(0, 8);
+  return conn.provider ? `${conn.provider} · ${name}` : name;
+}
+
 export default function APIPageClient({ machineId }) {
   const [keys, setKeys] = useState([]);
+  const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
@@ -262,6 +272,13 @@ export default function APIPageClient({ machineId }) {
         const data = await res.json();
         return data.keys || [];
       };
+
+      // Bound accounts are rendered as pills, so the key list needs the
+      // connections to resolve each id to a readable name.
+      fetch("/api/providers")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => setConnections(data?.connections || []))
+        .catch(() => {});
 
       let existing = await fetchKeys();
       // Auto-provision a default key for first-time users so the endpoint works out of the box.
@@ -1044,10 +1061,18 @@ export default function APIPageClient({ machineId }) {
                     <p className="text-xs text-orange-500 mt-1">Paused</p>
                   )}
                   {key.allowedConnectionIds?.length > 0 && (
-                    <p className="text-xs text-text-muted mt-1">
-                      {key.allowedConnectionIds.length} linked account
-                      {key.allowedConnectionIds.length === 1 ? "" : "s"}
-                    </p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {key.allowedConnectionIds.map((connId) => (
+                        <span
+                          key={connId}
+                          className="inline-flex items-center gap-1 rounded-full bg-black/5 px-2 py-0.5 text-[11px] text-text-muted dark:bg-white/10"
+                          title={connectionLabel(connId, connections)}
+                        >
+                          <span className="material-symbols-outlined text-[12px]">link</span>
+                          <span className="max-w-[140px] truncate">{connectionLabel(connId, connections)}</span>
+                        </span>
+                      ))}
+                    </div>
                   )}
                 </div>
                 <div className="flex items-center gap-2">

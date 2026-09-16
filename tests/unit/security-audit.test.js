@@ -6,12 +6,25 @@ import path from "path";
 // AUDIT-002 (#1962): API key masking in usage stats
 // ============================================================
 describe("AUDIT-002: API key masking", () => {
-  it("source should contain maskApiKey function", () => {
-    const source = fs.readFileSync(
-      path.resolve("src/lib/db/repos/usageRepo.js"),
+  // maskApiKey lives in a shared helper so usage stats and request details
+  // mask identically. Assert both that it exists and that usageRepo still
+  // pulls it in — an import that disappears would silently stop masking.
+  it("shared helper should define maskApiKey", () => {
+    const helper = fs.readFileSync(
+      path.resolve("src/lib/db/helpers/maskKey.js"),
       "utf-8"
     );
-    expect(source).toContain("function maskApiKey");
+    expect(helper).toContain("function maskApiKey");
+  });
+
+  it("usage and request-detail repos should import the shared masker", () => {
+    for (const repo of ["usageRepo.js", "requestDetailsRepo.js"]) {
+      const source = fs.readFileSync(
+        path.resolve(`src/lib/db/repos/${repo}`),
+        "utf-8"
+      );
+      expect(source).toMatch(/import \{ maskApiKey \} from ".*helpers\/maskKey\.js"/);
+    }
   });
 
   it("getUsageHistory should use apiKeyMasked instead of apiKey", () => {
