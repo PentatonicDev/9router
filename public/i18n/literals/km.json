@@ -149,7 +149,6 @@
   "Batch Size": "ទំហំបាច់",
   "Beautiful web dashboard for managing providers and monitoring usage.": "ផ្ទាំងគ្រប់គ្រងលើវេបដ៏ស្រស់ស្អាត សម្រាប់គ្រប់គ្រងអ្នកផ្តល់សេវា និងតាមដានការប្រើប្រាស់។",
   "Best quality, but costs the most": "គុណភាពល្អបំផុត ប៉ុន្តែចំណាយខ្ពស់បំផុត",
-  "Bias the model toward minimal code: YAGNI, reuse stdlib, deletion over addition": "ណែនាំម៉ូដែលឱ្យប្រើកូដតិចបំផុត៖ YAGNI, ប្រើ stdlib ឡើងវិញ និងលុបជំនួសការបន្ថែម",
   "Binary File": "ឯកសារ Binary",
   "Blog": "ប្លុក",
   "Both": "ទាំងពីរ",
@@ -247,7 +246,6 @@
   "Completion/response tokens": "Tokens សម្រាប់ Completion/response",
   "Compress LLM output": "បង្រួម Output របស់ LLM",
   "Compress context": "បង្រួម Context",
-  "Compress prompts via /v1/compress before routing to the model": "បង្រួម Prompts តាម /v1/compress មុនពេលបញ្ជូនទៅម៉ូដែល",
   "Compress tool output": "បង្រួម Output របស់ឧបករណ៍",
   "Compress tool output to reduce token usage.": "បង្រួម Output របស់ឧបករណ៍ ដើម្បីកាត់បន្ថយការប្រើ Token។",
   "Config path: Linux/macOS ~/.deepseek/config.toml • Windows %USERPROFILE%\\.deepseek\\config.toml": "ទីតាំង Config៖ Linux/macOS ~/.deepseek/config.toml • Windows %USERPROFILE%\\.deepseek\\config.toml",
@@ -1142,7 +1140,6 @@
   "Temperature": "Temperature",
   "Terminal": "Terminal",
   "Terms of Service": "លក្ខខណ្ឌសេវាកម្ម",
-  "Terse-style system prompt → ~65% fewer output tokens (up to 87%)": "System Prompt បែបសង្ខេប → កាត់បន្ថយ Output Tokens ប្រហែល 65% (រហូតដល់ 87%)",
   "Test": "សាកល្បង",
   "Test Again": "សាកល្បងម្តងទៀត",
   "Test All": "សាកល្បងទាំងអស់",
@@ -1327,7 +1324,6 @@
   "every request bills all panel models + the judge": "សំណើនីមួយៗគិតថ្លៃលើម៉ូដែល Panel ទាំងអស់ + Judge",
   "export": "នាំចេញ",
   "failed": "បរាជ័យ",
-  "git/grep/ls/tree/logs → 60-90% fewer input tokens": "git/grep/ls/tree/logs → កាត់បន្ថយ Input Tokens 60-90%",
   "h ago": "ម៉ោងមុន",
   "has been connected.": "ត្រូវបានភ្ជាប់។",
   "iFlow AI": "iFlow AI",
@@ -1394,5 +1390,9 @@
   "⚠️ Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk.": "⚠️ សេចក្តីជូនដំណឹងអំពីហានិភ័យ៖ អ្នកផ្តល់សេវានេះប្រើ Subscription/OAuth Session ដែលមិនមានអាជ្ញាបណ្ណផ្លូវការសម្រាប់ប្រើជា Proxy/Router។ គណនីអាចត្រូវបានដាក់កម្រិត ឬហាមឃាត់។ ប្រើដោយទទួលខុសត្រូវលើហានិភ័យដោយខ្លួនឯង។",
   "✓ Confirm Add": "✓ បញ្ជាក់ការបន្ថែម",
   "📝 Configure providers in dashboard or use environment variables": "📝 កំណត់អ្នកផ្តល់សេវាក្នុងផ្ទាំងគ្រប់គ្រង ឬប្រើ Environment Variables",
-  "🔐 OAuth required. Add now and authenticate after Apply; tool list will be discovered after first connect.": "🔐 ត្រូវការ OAuth។ បន្ថែមឥឡូវ ហើយផ្ទៀងផ្ទាត់បន្ទាប់ពីចុច អនុវត្ត; បញ្ជីឧបករណ៍នឹងត្រូវបានរកឃើញបន្ទាប់ពីការតភ្ជាប់លើកដំបូង។"
+  "🔐 OAuth required. Add now and authenticate after Apply; tool list will be discovered after first connect.": "🔐 ត្រូវការ OAuth។ បន្ថែមឥឡូវ ហើយផ្ទៀងផ្ទាត់បន្ទាប់ពីចុច អនុវត្ត; បញ្ជីឧបករណ៍នឹងត្រូវបានរកឃើញបន្ទាប់ពីការតភ្ជាប់លើកដំបូង។",
+  "Rewrites long command output (git, grep, ls, tree, logs) into a compact form before it reaches the model, keeping file names and results. Nothing you type changes — 60-90% fewer input tokens.": "git/grep/ls/tree/logs → កាត់បន្ថយ Input Tokens 60-90%",
+  "Sends the conversation through the Headroom service, which shortens long text the other compressors cannot read — prose, JSON, web pages. Runs before the request reaches the provider, so you pay for less.": "បង្រួម Prompts តាម /v1/compress មុនពេលបញ្ជូនទៅម៉ូដែល",
+  "Asks the model to answer in a clipped style, dropping filler and pleasantries. Shortens the replies you read, not what you send — around 65% fewer output tokens.": "System Prompt បែបសង្ខេប → កាត់បន្ថយ Output Tokens ប្រហែល 65% (រហូតដល់ 87%)",
+  "Asks the model to write less code: reuse what exists, prefer the standard library, delete rather than add. Changes the answers you get, not the size of the request.": "ណែនាំម៉ូដែលឱ្យប្រើកូដតិចបំផុត៖ YAGNI, ប្រើ stdlib ឡើងវិញ និងលុបជំនួសការបន្ថែម"
 }

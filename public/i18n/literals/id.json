@@ -149,7 +149,6 @@
   "Batch Size": "Ukuran Batch",
   "Beautiful web dashboard for managing providers and monitoring usage.": "Dasbor web indah untuk mengelola penyedia dan memantau penggunaan.",
   "Best quality, but costs the most": "Kualitas terbaik, tetapi biaya paling mahal",
-  "Bias the model toward minimal code: YAGNI, reuse stdlib, deletion over addition": "Membimbing model ke kode minimal: YAGNI, gunakan ulang stdlib, hapus daripada menambah",
   "Binary File": "File Biner",
   "Blog": "Blog",
   "Both": "Keduanya",
@@ -247,7 +246,6 @@
   "Completion/response tokens": "Token pelengkapan/respons",
   "Compress LLM output": "Kompresi keluaran LLM",
   "Compress context": "Kompresi konteks",
-  "Compress prompts via /v1/compress before routing to the model": "Kompresi prompt melalui /v1/compress sebelum merutekan ke model",
   "Compress tool output": "Kompresi keluaran alat",
   "Compress tool output to reduce token usage.": "Kompresi keluaran alat untuk mengurangi penggunaan token.",
   "Config path: Linux/macOS ~/.deepseek/config.toml • Windows %USERPROFILE%\\.deepseek\\config.toml": "Jalur konfigurasi: Linux/macOS ~/.deepseek/config.toml • Windows %USERPROFILE%\\.deepseek\\config.toml",
@@ -1140,7 +1138,6 @@
   "Temperature": "Temperatur",
   "Terminal": "Terminal",
   "Terms of Service": "Ketentuan Layanan",
-  "Terse-style system prompt → ~65% fewer output tokens (up to 87%)": "Prompt sistem gaya ringkas → ~65% lebih sedikit token keluaran (hingga 87%)",
   "Test": "Uji",
   "Test Again": "Uji Lagi",
   "Test All": "Uji Semua",
@@ -1322,7 +1319,6 @@
   "every request bills all panel models + the judge": "setiap permintaan menagih semua model panel + juri",
   "export": "ekspor",
   "failed": "gagal",
-  "git/grep/ls/tree/logs → 60-90% fewer input tokens": "git/grep/ls/tree/logs → 60-90% lebih sedikit token masukan",
   "h ago": "jam yang lalu",
   "has been connected.": "telah terhubung.",
   "iFlow AI": "iFlow AI",
@@ -1389,5 +1385,9 @@
   "⚠️ Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk.": "⚠️ Pemberitahuan Risiko: Penyedia ini menggunakan sesi langganan/OAuth yang tidak dilisensikan secara resmi untuk penggunaan proxy/router. Akun mungkin dibatasi atau diblokir. Gunakan dengan risiko Anda sendiri.",
   "✓ Confirm Add": "✓ Konfirmasi Tambah",
   "📝 Configure providers in dashboard or use environment variables": "📝 Konfigurasi penyedia di dasbor atau gunakan variabel lingkungan",
-  "🔐 OAuth required. Add now and authenticate after Apply; tool list will be discovered after first connect.": "🔐 OAuth diperlukan. Tambah sekarang dan autentikasi setelah Terapkan; daftar alat akan ditemukan setelah koneksi pertama."
+  "🔐 OAuth required. Add now and authenticate after Apply; tool list will be discovered after first connect.": "🔐 OAuth diperlukan. Tambah sekarang dan autentikasi setelah Terapkan; daftar alat akan ditemukan setelah koneksi pertama.",
+  "Rewrites long command output (git, grep, ls, tree, logs) into a compact form before it reaches the model, keeping file names and results. Nothing you type changes — 60-90% fewer input tokens.": "git/grep/ls/tree/logs → 60-90% lebih sedikit token masukan",
+  "Sends the conversation through the Headroom service, which shortens long text the other compressors cannot read — prose, JSON, web pages. Runs before the request reaches the provider, so you pay for less.": "Kompresi prompt melalui /v1/compress sebelum merutekan ke model",
+  "Asks the model to answer in a clipped style, dropping filler and pleasantries. Shortens the replies you read, not what you send — around 65% fewer output tokens.": "Prompt sistem gaya ringkas → ~65% lebih sedikit token keluaran (hingga 87%)",
+  "Asks the model to write less code: reuse what exists, prefer the standard library, delete rather than add. Changes the answers you get, not the size of the request.": "Membimbing model ke kode minimal: YAGNI, gunakan ulang stdlib, hapus daripada menambah"
 }

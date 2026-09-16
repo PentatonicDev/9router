@@ -4,6 +4,7 @@ import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import bcrypt from "bcryptjs";
 import { getRequestIdentity, isScopeEnabled, isSsoOnly, parseAdminEmails } from "@/lib/auth/resourceScope";
+import { TOKEN_SAVER_KEYS, resolveTokenSaverFor } from "@/lib/auth/scopedSettings";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -15,6 +16,18 @@ const SETTINGS_RESPONSE_HEADERS = {
 // Secrets must never be mass-assigned from request body (CWE-915)
 const PROTECTED_SETTING_KEYS = ["password", "mitmSudoEncrypted"];
 
+// An external Headroom (a URL that is not loopback) is the operator's own
+// deployment and always counts as set up; a local one has to be installed.
+async function isHeadroomReady(settings) {
+  try {
+    const { getHeadroomStatus, DEFAULT_HEADROOM_URL } = await import("@/lib/headroom/detect");
+    const status = await getHeadroomStatus(settings?.headroomUrl || DEFAULT_HEADROOM_URL);
+    return !status.localUrl || status.installed || status.running;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET() {
   try {
     const settings = await getSettings();
@@ -23,12 +36,30 @@ export async function GET() {
     
     const enableRequestLogs = process.env.ENABLE_REQUEST_LOGS === "true";
     const enableTranslator = process.env.ENABLE_TRANSLATOR === "true";
-    
-    return NextResponse.json({ 
-      ...safeSettings, 
+
+    // A scoped user edits their own token-saver overrides, so hand back the
+    // effective view — theirs where set, the admin's otherwise — plus which keys
+    // are inherited, so the dashboard can say so instead of showing the global
+    // value as if the user had chosen it.
+    const identity = await getRequestIdentity();
+    let tokenSaverInherited = [];
+    if (isScopeEnabled(settings) && !identity.isAdmin && identity.owner) {
+      const { effective, overridden } = resolveTokenSaverFor(settings, identity.owner);
+      Object.assign(safeSettings, effective);
+      tokenSaverInherited = TOKEN_SAVER_KEYS.filter((k) => !overridden.includes(k));
+      const ownAdapter = settings.capacityAdapterByOwner?.[identity.owner];
+      if (ownAdapter) safeSettings.capacityAdapter = ownAdapter;
+    }
+    delete safeSettings.tokenSaverByOwner;
+    delete safeSettings.capacityAdapterByOwner;
+
+    return NextResponse.json({
+      ...safeSettings,
       enableRequestLogs,
       enableTranslator,
-      hasPassword: !!password
+      hasPassword: !!password,
+      tokenSaverInherited,
+      tokenSaverScoped: isScopeEnabled(settings) && !identity.isAdmin && !!identity.owner,
     }, { headers: SETTINGS_RESPONSE_HEADERS });
   } catch (error) {
     console.log("Error getting settings:", error);
@@ -50,16 +81,40 @@ export async function PATCH(request) {
     if (isScopeEnabled(current)) {
       const identity = await getRequestIdentity();
       if (!identity.isAdmin) {
-        const ownAdapter = body.capacityAdapter;
-        const onlyAdapter = Object.keys(body).length === 1 && ownAdapter !== undefined;
-        // Narrow exception: a scoped user still owns their own vision adapter,
-        // which lives inside this global blob rather than in its own table.
-        if (!onlyAdapter || !identity.owner) {
+        // Narrow exception: a scoped user owns their own vision adapter and
+        // token-saver flags, which live inside this global blob rather than in
+        // tables of their own. Anything else here is global configuration.
+        const OWN_KEYS = new Set(["capacityAdapter", ...TOKEN_SAVER_KEYS]);
+        const touched = Object.keys(body);
+        if (!identity.owner || !touched.length || !touched.every((k) => OWN_KEYS.has(k))) {
           return NextResponse.json({ error: "Admin access required" }, { status: 403 });
         }
-        const next = { ...(current.capacityAdapterByOwner || {}), [identity.owner]: ownAdapter };
-        delete body.capacityAdapter;
-        body.capacityAdapterByOwner = next;
+
+        if (body.capacityAdapter !== undefined) {
+          body.capacityAdapterByOwner = { ...(current.capacityAdapterByOwner || {}), [identity.owner]: body.capacityAdapter };
+          delete body.capacityAdapter;
+        }
+
+        // Headroom is infrastructure the admin installs and starts. A user may
+        // only opt in or out of one that is already set up — otherwise the flag
+        // would point at a proxy that is not there, and every request would pay
+        // the timeout before failing open.
+        if (body.headroomEnabled === true && !(await isHeadroomReady(current))) {
+          return NextResponse.json(
+            { error: "Headroom is not set up on this instance. Ask an admin to install it." },
+            { status: 409 }
+          );
+        }
+
+        const ownSaver = { ...(current.tokenSaverByOwner?.[identity.owner] || {}) };
+        for (const key of TOKEN_SAVER_KEYS) {
+          if (body[key] === undefined) continue;
+          // null clears the override, putting the user back on the global value.
+          if (body[key] === null) delete ownSaver[key];
+          else ownSaver[key] = body[key];
+          delete body[key];
+        }
+        body.tokenSaverByOwner = { ...(current.tokenSaverByOwner || {}), [identity.owner]: ownSaver };
       }
     }
 
@@ -144,6 +199,23 @@ export async function PATCH(request) {
 
     const { password, oidcClientSecret, ...safeSettings } = settings;
     safeSettings.oidcConfigured = !!(safeSettings.oidcIssuerUrl && safeSettings.oidcClientId && oidcClientSecret);
+
+    // A scoped user gets their own effective view back, not the global blob:
+    // echoing every setting here would hand out the whole configuration they
+    // are not allowed to read.
+    const patchIdentity = await getRequestIdentity();
+    if (isScopeEnabled(settings) && !patchIdentity.isAdmin && patchIdentity.owner) {
+      const { effective, overridden } = resolveTokenSaverFor(settings, patchIdentity.owner);
+      return NextResponse.json({
+        ...effective,
+        capacityAdapter: settings.capacityAdapterByOwner?.[patchIdentity.owner] ?? settings.capacityAdapter,
+        tokenSaverInherited: TOKEN_SAVER_KEYS.filter((k) => !overridden.includes(k)),
+        tokenSaverScoped: true,
+      }, { headers: SETTINGS_RESPONSE_HEADERS });
+    }
+
+    delete safeSettings.tokenSaverByOwner;
+    delete safeSettings.capacityAdapterByOwner;
     return NextResponse.json(safeSettings, { headers: SETTINGS_RESPONSE_HEADERS });
   } catch (error) {
     console.log("Error updating settings:", error);

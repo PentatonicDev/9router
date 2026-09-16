@@ -103,6 +103,10 @@ const ADMIN_ONLY_PATHS = [
   "/dashboard/console-log",
   "/dashboard/translator",
   "/dashboard/media-providers",
+  // Settings is global configuration (auth mode, SSO, tunnel, DB backup), not
+  // per-user preference: language and theme live in the header, and a scoped SSO
+  // user has no dashboard password to change.
+  "/dashboard/profile",
 ];
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);

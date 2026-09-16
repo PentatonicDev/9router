@@ -149,7 +149,6 @@
   "Batch Size": "批量大小",
   "Beautiful web dashboard for managing providers and monitoring usage.": "精美的 Web 仪表盘，用于管理提供商和监控使用情况。",
   "Best quality, but costs the most": "质量最佳但成本最高",
-  "Bias the model toward minimal code: YAGNI, reuse stdlib, deletion over addition": "引导模型编写最少代码：YAGNI、重用标准库、删除多于添加",
   "Binary File": "二进制文件",
   "Blog": "博客",
   "Both": "两者",
@@ -248,7 +247,6 @@
   "Completion/response tokens": "补全/响应 Token",
   "Compress LLM output": "压缩 LLM 输出",
   "Compress context": "压缩上下文",
-  "Compress prompts via /v1/compress before routing to the model": "在路由到模型之前通过 /v1/compress 压缩提示",
   "Compress tool output": "压缩工具输出",
   "Compress tool output to reduce token usage.": "压缩工具输出以减少 Token 使用量。",
   "Config path: Linux/macOS ~/.deepseek/config.toml • Windows %USERPROFILE%\\.deepseek\\config.toml": "配置路径：Linux/macOS ~/.deepseek/config.toml • Windows %USERPROFILE%\\.deepseek\\config.toml",
@@ -1141,7 +1139,6 @@
   "Temperature": "温度",
   "Terminal": "终端",
   "Terms of Service": "服务条款",
-  "Terse-style system prompt → ~65% fewer output tokens (up to 87%)": "简洁风格系统提示 → ~减少 65% 的输出 Token（最高 87%）",
   "Test": "测试",
   "Test Again": "再次测试",
   "Test All": "全部测试",
@@ -1323,7 +1320,6 @@
   "every request bills all panel models + the judge": "每次请求会计费所有面板模型 + 裁判",
   "export": "导出",
   "failed": "失败",
-  "git/grep/ls/tree/logs → 60-90% fewer input tokens": "git/grep/ls/tree/logs → 减少 60-90% 的输入 Token",
   "h ago": "小时前",
   "has been connected.": "已连接。",
   "iFlow AI": "iFlow AI",
@@ -1390,5 +1386,9 @@
   "⚠️ Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk.": "⚠️ 风险提示：此提供商使用的订阅/OAuth 会话未获官方授权用于代理/路由器使用。账户可能被限制或封禁。使用风险自负。",
   "✓ Confirm Add": "✓ 确认添加",
   "📝 Configure providers in dashboard or use environment variables": "📝 在仪表盘中配置提供商或使用环境变量",
-  "🔐 OAuth required. Add now and authenticate after Apply; tool list will be discovered after first connect.": "🔐 需要 OAuth。立即添加并在应用后认证；工具列表将在首次连接后自动发现。"
+  "🔐 OAuth required. Add now and authenticate after Apply; tool list will be discovered after first connect.": "🔐 需要 OAuth。立即添加并在应用后认证；工具列表将在首次连接后自动发现。",
+  "Rewrites long command output (git, grep, ls, tree, logs) into a compact form before it reaches the model, keeping file names and results. Nothing you type changes — 60-90% fewer input tokens.": "git/grep/ls/tree/logs → 减少 60-90% 的输入 Token",
+  "Sends the conversation through the Headroom service, which shortens long text the other compressors cannot read — prose, JSON, web pages. Runs before the request reaches the provider, so you pay for less.": "在路由到模型之前通过 /v1/compress 压缩提示",
+  "Asks the model to answer in a clipped style, dropping filler and pleasantries. Shortens the replies you read, not what you send — around 65% fewer output tokens.": "简洁风格系统提示 → ~减少 65% 的输出 Token（最高 87%）",
+  "Asks the model to write less code: reuse what exists, prefer the standard library, delete rather than add. Changes the answers you get, not the size of the request.": "引导模型编写最少代码：YAGNI、重用标准库、删除多于添加"
 }

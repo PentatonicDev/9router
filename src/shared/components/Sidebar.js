@@ -304,7 +304,8 @@ export default function Sidebar({ onClose }) {
               ) : null;
             })}
 
-            {/* Settings */}
+            {/* Settings — global configuration, so admin-only while scoping is on */}
+            {showAdminItems && (
             <Link
               href="/dashboard/profile"
               onClick={onClose}
@@ -325,6 +326,7 @@ export default function Sidebar({ onClose }) {
               </span>
               <span className="text-[13px] font-medium">Settings</span>
             </Link>
+            )}
           </div>
         </nav>
 

@@ -61,6 +61,9 @@ const DEFAULT_SETTINGS = {
   // Route each API key's traffic to its own Headroom project (/p/<key name>),
   // so per-project stats separate the callers instead of pooling them.
   headroomPerApiKeyProject: false,
+  // Per-user token-saver overrides, keyed by owner. A key left unset here keeps
+  // the global (admin) value, so the default lives in one place.
+  tokenSaverByOwner: {},
   headroomTimeoutMs: 3000,
   cavemanEnabled: false,
   cavemanLevel: "full",

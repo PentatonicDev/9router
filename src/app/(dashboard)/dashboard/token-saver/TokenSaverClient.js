@@ -10,6 +10,34 @@ import {
   PONYTAIL_LEVELS,
 } from "../endpoint/endpointConstants";
 
+// Defined at module level: components created inside a render are new types on
+// every pass, which remounts them and loses focus/state.
+function DefaultBadge({ keys, scoped, inherited }) {
+  if (!scoped || !keys.every((k) => inherited.includes(k))) return null;
+  return (
+    <span
+      className="ml-2 rounded-full bg-black/5 px-2 py-0.5 text-[10px] font-medium text-text-muted align-middle dark:bg-white/10"
+      title="Using the admin's default. Changing it here creates your own setting."
+    >
+      default
+    </span>
+  );
+}
+
+function ResetLink({ keys, scoped, inherited, onReset }) {
+  if (!scoped || keys.every((k) => inherited.includes(k))) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onReset(keys)}
+      className="ml-2 align-middle text-[10px] text-text-muted underline transition-colors hover:text-primary"
+      title="Drop your setting and follow the admin's default again"
+    >
+      use default
+    </button>
+  );
+}
+
 export default function TokenSaverClient() {
   const [rtkEnabled, setRtkEnabledState] = useState(true);
   const [headroomEnabled, setHeadroomEnabled] = useState(false);
@@ -17,6 +45,12 @@ export default function TokenSaverClient() {
   const [headroomTimeoutMs, setHeadroomTimeoutMs] = useState(3000);
   const [headroomCompressUserMessages, setHeadroomCompressUserMessages] = useState(false);
   const [headroomPerApiKeyProject, setHeadroomPerApiKeyProject] = useState(false);
+  // Which keys still come from the admin's global config, and whether this user
+  // has a scope of their own at all.
+  const [inherited, setInherited] = useState([]);
+  const [scoped, setScoped] = useState(false);
+  // Headroom is infrastructure: installing and starting it is the admin's job.
+  const [isAdmin, setIsAdmin] = useState(true);
   const [headroomStatus, setHeadroomStatus] = useState({
     installed: false,
     running: false,
@@ -89,10 +123,24 @@ export default function TokenSaverClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
+      // Saving turns an inherited value into the user's own, so refresh which
+      // keys are still the admin's rather than leaving a stale badge behind.
+      // Unconditional: reading `scoped` here would make this reactive, and the
+      // response carries the field either way.
+      const res = await fetch("/api/settings");
+      if (res.ok) {
+        const data = await res.json();
+        setInherited(data.tokenSaverInherited || []);
+      }
     } catch (error) {
       console.log("Error updating setting:", error);
     }
   };
+
+  // Back to the admin's value: null clears the override server-side.
+  const resetToDefault = (keys) => patchSetting(Object.fromEntries(keys.map((k) => [k, null])));
+
+
 
   const handleRtkEnabled = async (value) => {
     try {
@@ -428,6 +476,9 @@ export default function TokenSaverClient() {
           if (typeof data.headroomTimeoutMs === "number") setHeadroomTimeoutMs(data.headroomTimeoutMs);
           setHeadroomCompressUserMessages(!!data.headroomCompressUserMessages);
           setHeadroomPerApiKeyProject(!!data.headroomPerApiKeyProject);
+          setInherited(data.tokenSaverInherited || []);
+          setScoped(!!data.tokenSaverScoped);
+          setIsAdmin(!data.tokenSaverScoped);
           setCodeAware(data.headroomCodeAware === true);
           setKompress(data.headroomKompress !== false);
           setCavemanEnabled(!!data.cavemanEnabled);
@@ -459,6 +510,10 @@ export default function TokenSaverClient() {
   const headroomCanStart = !!headroomStatus.canStart;
   const headroomManaged =
     headroomLocalUrl && !!headroomStatus.managedPid;
+  // A user can only turn Headroom on or off once the admin has it set up;
+  // with nothing installed the row would be a dead switch, so it is hidden.
+  const headroomInstalled = headroomRunning || !!headroomStatus.installed || !headroomLocalUrl;
+  const showHeadroomRow = isAdmin || headroomInstalled;
 
   const pxpipeHealthy = pxpipeHealth?.healthy === true;
   const pxpipeStatusLabel = pxpipeStatus.loading
@@ -492,6 +547,8 @@ export default function TokenSaverClient() {
           <div className="min-w-0 flex-1">
             <p className="font-medium">
               Compress tool output{" "}
+              <DefaultBadge keys={["rtkEnabled"]} scoped={scoped} inherited={inherited} />
+              <ResetLink keys={["rtkEnabled"]} scoped={scoped} inherited={inherited} onReset={resetToDefault} />
               <a
                 href="https://github.com/rtk-ai/rtk"
                 target="_blank"
@@ -502,7 +559,9 @@ export default function TokenSaverClient() {
               </a>
             </p>
             <p className="text-sm text-text-muted">
-              git/grep/ls/tree/logs → 60-90% fewer input tokens
+              Rewrites long command output (git, grep, ls, tree, logs) into a compact
+              form before it reaches the model, keeping file names and results.
+              Nothing you type changes — 60-90% fewer input tokens.
             </p>
           </div>
           <Toggle
@@ -510,11 +569,14 @@ export default function TokenSaverClient() {
             onChange={() => handleRtkEnabled(!rtkEnabled)}
           />
         </div>
+        {showHeadroomRow && (
         <div className="flex items-center justify-between py-4 gap-4 flex-wrap">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-3 flex-wrap">
               <p className="font-medium">
                 Compress context{" "}
+                <DefaultBadge keys={["headroomEnabled"]} scoped={scoped} inherited={inherited} />
+                <ResetLink keys={["headroomEnabled"]} scoped={scoped} inherited={inherited} onReset={resetToDefault} />
                 <a
                   href="https://github.com/chopratejas/headroom"
                   target="_blank"
@@ -524,21 +586,27 @@ export default function TokenSaverClient() {
                   (Headroom)
                 </a>
               </p>
-              <span
-                className={`text-xs px-2 py-0.5 rounded ${headroomRunning ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}
-              >
-                {headroomStatusLabel}
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowHeadroomInstallModal(true)}
-                className="text-xs text-primary underline hover:opacity-80"
-              >
-                {headroomRunning ? "Manage" : "Setup"}
-              </button>
+              {isAdmin && (
+                <>
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded ${headroomRunning ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}
+                  >
+                    {headroomStatusLabel}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowHeadroomInstallModal(true)}
+                    className="text-xs text-primary underline hover:opacity-80"
+                  >
+                    {headroomRunning ? "Manage" : "Setup"}
+                  </button>
+                </>
+              )}
             </div>
             <p className="text-sm text-text-muted mt-1">
-              Compress prompts via /v1/compress before routing to the model
+              Sends the conversation through the Headroom service, which shortens
+              long text the other compressors cannot read — prose, JSON, web pages.
+              Runs before the request reaches the provider, so you pay for less.
             </p>
           </div>
           <Toggle
@@ -546,7 +614,8 @@ export default function TokenSaverClient() {
             onChange={() => handleHeadroomEnabled(!headroomEnabled)}
           />
         </div>
-        {headroomStatus.installed && (
+        )}
+        {isAdmin && headroomStatus.installed && (
           <div className="mb-3 ml-1 pl-3 pb-4 border-l-2 border-border">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs text-text-muted">
@@ -648,6 +717,8 @@ export default function TokenSaverClient() {
           <div className="min-w-0 flex-1">
             <p className="font-medium">
               Compress LLM output{" "}
+              <DefaultBadge keys={["cavemanEnabled", "cavemanLevel"]} scoped={scoped} inherited={inherited} />
+              <ResetLink keys={["cavemanEnabled", "cavemanLevel"]} scoped={scoped} inherited={inherited} onReset={resetToDefault} />
               <a
                 href="https://github.com/JuliusBrussee/caveman"
                 target="_blank"
@@ -658,7 +729,9 @@ export default function TokenSaverClient() {
               </a>
             </p>
             <p className="text-sm text-text-muted">
-              Terse-style system prompt → ~65% fewer output tokens (up to 87%)
+              Asks the model to answer in a clipped style, dropping filler and
+              pleasantries. Shortens the replies you read, not what you send —
+              around 65% fewer output tokens.
             </p>
           </div>
           <div className="flex items-center gap-3 shrink-0">
@@ -698,6 +771,8 @@ export default function TokenSaverClient() {
           <div className="min-w-0 flex-1">
             <p className="font-medium">
               Lazy senior dev{" "}
+              <DefaultBadge keys={["ponytailEnabled", "ponytailLevel"]} scoped={scoped} inherited={inherited} />
+              <ResetLink keys={["ponytailEnabled", "ponytailLevel"]} scoped={scoped} inherited={inherited} onReset={resetToDefault} />
               <a
                 href="https://github.com/DietrichGebert/ponytail"
                 target="_blank"
@@ -708,8 +783,9 @@ export default function TokenSaverClient() {
               </a>
             </p>
             <p className="text-sm text-text-muted">
-              Bias the model toward minimal code: YAGNI, reuse stdlib,
-              deletion over addition
+              Asks the model to write less code: reuse what exists, prefer the
+              standard library, delete rather than add. Changes the answers you get,
+              not the size of the request.
             </p>
           </div>
           <div className="flex items-center gap-3 shrink-0">

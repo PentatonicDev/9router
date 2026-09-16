@@ -149,7 +149,6 @@
   "Batch Size": "اندازه دسته",
   "Beautiful web dashboard for managing providers and monitoring usage.": "داشبورد وب زیبا برای مدیریت ارائه‌دهندگان و نظارت بر مصرف.",
   "Best quality, but costs the most": "بهترین کیفیت، اما هزینه‌برترین",
-  "Bias the model toward minimal code: YAGNI, reuse stdlib, deletion over addition": "مدل را به سمت کد حداقلی سوق دهید: YAGNI، استفاده مجدد از کتابخانه استاندارد، حذف به جای افزودن",
   "Binary File": "فایل باینری",
   "Blog": "وبلاگ",
   "Both": "هر دو",
@@ -247,7 +246,6 @@
   "Completion/response tokens": "توکن‌های تکمیل/پاسخ",
   "Compress LLM output": "فشرده‌سازی خروجی LLM",
   "Compress context": "فشرده‌سازی زمینه",
-  "Compress prompts via /v1/compress before routing to the model": "فشرده‌سازی پرامپت‌ها از طریق /v1/compress قبل از مسیردهی به مدل",
   "Compress tool output": "فشرده‌سازی خروجی ابزار",
   "Compress tool output to reduce token usage.": "خروجی ابزار را برای کاهش مصرف توکن فشرده کنید.",
   "Config path: Linux/macOS ~/.deepseek/config.toml • Windows %USERPROFILE%\\.deepseek\\config.toml": "مسیر پیکربندی: Linux/macOS ~/.deepseek/config.toml • Windows %USERPROFILE%\\.deepseek\\config.toml",
@@ -1140,7 +1138,6 @@
   "Temperature": "دما",
   "Terminal": "ترمینال",
   "Terms of Service": "شرایط خدمات",
-  "Terse-style system prompt → ~65% fewer output tokens (up to 87%)": "پرامپت سیستم مختصر → ~۶۵٪ توکن خروجی کمتر (تا ۸۷٪)",
   "Test": "آزمایش",
   "Test Again": "آزمایش مجدد",
   "Test All": "آزمایش همه",
@@ -1322,7 +1319,6 @@
   "every request bills all panel models + the judge": "هر درخواست همه مدل‌های پنل + داور را صورتحساب می‌کند",
   "export": "خروجی",
   "failed": "ناموفق",
-  "git/grep/ls/tree/logs → 60-90% fewer input tokens": "git/grep/ls/tree/logs → ۶۰-۹۰٪ توکن ورودی کمتر",
   "h ago": "ساعت قبل",
   "has been connected.": "متصل شده است.",
   "iFlow AI": "iFlow AI",
@@ -1389,5 +1385,9 @@
   "⚠️ Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk.": "⚠️ اطلاعیه ریسک: این ارائه‌دهنده از اشتراک/جلسه OAuth استفاده می‌کند که به طور رسمی برای استفاده پروکسی/روتر مجوز ندارد. حساب ممکن است محدود یا مسدود شود. با مسئولیت خود استفاده کنید.",
   "✓ Confirm Add": "✓ تأیید افزودن",
   "📝 Configure providers in dashboard or use environment variables": "📝 ارائه‌دهندگان را در داشبورد پیکربندی کنید یا از متغیرهای محیطی استفاده کنید",
-  "🔐 OAuth required. Add now and authenticate after Apply; tool list will be discovered after first connect.": "🔐 نیاز به OAuth. اکنون اضافه کنید و پس از اعمال، احراز هویت کنید؛ لیست ابزارها پس از اولین اتصال کشف می‌شود."
+  "🔐 OAuth required. Add now and authenticate after Apply; tool list will be discovered after first connect.": "🔐 نیاز به OAuth. اکنون اضافه کنید و پس از اعمال، احراز هویت کنید؛ لیست ابزارها پس از اولین اتصال کشف می‌شود.",
+  "Rewrites long command output (git, grep, ls, tree, logs) into a compact form before it reaches the model, keeping file names and results. Nothing you type changes — 60-90% fewer input tokens.": "git/grep/ls/tree/logs → ۶۰-۹۰٪ توکن ورودی کمتر",
+  "Sends the conversation through the Headroom service, which shortens long text the other compressors cannot read — prose, JSON, web pages. Runs before the request reaches the provider, so you pay for less.": "فشرده‌سازی پرامپت‌ها از طریق /v1/compress قبل از مسیردهی به مدل",
+  "Asks the model to answer in a clipped style, dropping filler and pleasantries. Shortens the replies you read, not what you send — around 65% fewer output tokens.": "پرامپت سیستم مختصر → ~۶۵٪ توکن خروجی کمتر (تا ۸۷٪)",
+  "Asks the model to write less code: reuse what exists, prefer the standard library, delete rather than add. Changes the answers you get, not the size of the request.": "مدل را به سمت کد حداقلی سوق دهید: YAGNI، استفاده مجدد از کتابخانه استاندارد، حذف به جای افزودن"
 }

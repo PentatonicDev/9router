@@ -149,7 +149,6 @@
   "Batch Size": "ขนาด Batch",
   "Beautiful web dashboard for managing providers and monitoring usage.": "web dashboard สวยงามสำหรับจัดการผู้ให้บริการและตรวจสอบการใช้งาน",
   "Best quality, but costs the most": "คุณภาพดีที่สุด แต่มีค่าใช้จ่ายมากที่สุด",
-  "Bias the model toward minimal code: YAGNI, reuse stdlib, deletion over addition": "บังคับโมเดลให้เขียน code น้อยที่สุด: YAGNI, ใช้ stdlib ซ้ำ, ลบมากกว่าเพิ่ม",
   "Binary File": "ไฟล์ไบนารี",
   "Blog": "บล็อก",
   "Both": "ทั้งคู่",
@@ -247,7 +246,6 @@
   "Completion/response tokens": "Completion/Response tokens",
   "Compress LLM output": "บีบอัด output ของ LLM",
   "Compress context": "บีบอัดบริบท",
-  "Compress prompts via /v1/compress before routing to the model": "บีบอัด prompt ผ่าน /v1/compress ก่อนส่งไปยังโมเดล",
   "Compress tool output": "บีบอัด tool output",
   "Compress tool output to reduce token usage.": "บีบอัด tool output เพื่อลดการใช้งาน token",
   "Config path: Linux/macOS ~/.deepseek/config.toml • Windows %USERPROFILE%\\.deepseek\\config.toml": "เส้นทาง Config: Linux/macOS ~/.deepseek/config.toml • Windows %USERPROFILE%\\.deepseek\\config.toml",
@@ -1140,7 +1138,6 @@
   "Temperature": "Temperature",
   "Terminal": "Terminal",
   "Terms of Service": "ข้อกำหนดการให้บริการ",
-  "Terse-style system prompt → ~65% fewer output tokens (up to 87%)": "Terse-style system prompt → ลด output tokens ประมาณ 65% (สูงสุด 87%)",
   "Test": "ทดสอบ",
   "Test Again": "ทดสอบอีกครั้ง",
   "Test All": "ทดสอบทั้งหมด",
@@ -1322,7 +1319,6 @@
   "every request bills all panel models + the judge": "ทุก request จะคิดค่าใช้จ่าย panel models ทั้งหมด + judge",
   "export": "ส่งออก",
   "failed": "ล้มเหลว",
-  "git/grep/ls/tree/logs → 60-90% fewer input tokens": "git/grep/ls/tree/logs → ลด input tokens 60-90%",
   "h ago": "ชั่วโมงที่แล้ว",
   "has been connected.": "เชื่อมต่อแล้ว",
   "iFlow AI": "iFlow AI",
@@ -1389,5 +1385,9 @@
   "⚠️ Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk.": "⚠️ ประกาศความเสี่ยง: Provider นี้ใช้ subscription/OAuth session ที่ไม่ได้รับอนุญาตอย่างเป็นทางการสำหรับการใช้งาน proxy/router บัญชีอาจถูกจำกัดหรือแบน ใช้ด้วยความเสี่ยงของคุณเอง",
   "✓ Confirm Add": "✓ ยืนยันการเพิ่ม",
   "📝 Configure providers in dashboard or use environment variables": "📝 กำหนดค่า providers ใน dashboard หรือใช้ environment variables",
-  "🔐 OAuth required. Add now and authenticate after Apply; tool list will be discovered after first connect.": "🔐 ต้องใช้ OAuth เพิ่มตอนนี้แล้ว authenticate หลัง Apply; รายการเครื่องมือจะถูกค้นพบหลังการเชื่อมต่อครั้งแรก"
+  "🔐 OAuth required. Add now and authenticate after Apply; tool list will be discovered after first connect.": "🔐 ต้องใช้ OAuth เพิ่มตอนนี้แล้ว authenticate หลัง Apply; รายการเครื่องมือจะถูกค้นพบหลังการเชื่อมต่อครั้งแรก",
+  "Rewrites long command output (git, grep, ls, tree, logs) into a compact form before it reaches the model, keeping file names and results. Nothing you type changes — 60-90% fewer input tokens.": "git/grep/ls/tree/logs → ลด input tokens 60-90%",
+  "Sends the conversation through the Headroom service, which shortens long text the other compressors cannot read — prose, JSON, web pages. Runs before the request reaches the provider, so you pay for less.": "บีบอัด prompt ผ่าน /v1/compress ก่อนส่งไปยังโมเดล",
+  "Asks the model to answer in a clipped style, dropping filler and pleasantries. Shortens the replies you read, not what you send — around 65% fewer output tokens.": "Terse-style system prompt → ลด output tokens ประมาณ 65% (สูงสุด 87%)",
+  "Asks the model to write less code: reuse what exists, prefer the standard library, delete rather than add. Changes the answers you get, not the size of the request.": "บังคับโมเดลให้เขียน code น้อยที่สุด: YAGNI, ใช้ stdlib ซ้ำ, ลบมากกว่าเพิ่ม"
 }

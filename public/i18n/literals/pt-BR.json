@@ -105,7 +105,6 @@
   "Batch Import": "Importar em Lote",
   "Batch Import Proxies": "Importar Proxies em Lote",
   "Batch Size": "Tamanho do lote",
-  "Bias the model toward minimal code: YAGNI, reuse stdlib, deletion over addition": "Tendenciar o modelo para código mínimo: YAGNI, reutilizar stdlib, deletar ao invés de adicionar",
   "Binary File": "Arquivo Binário",
   "Browse & edit files": "Navegue e edite arquivos",
   "Browse MCP Marketplace": "Explorar Marketplace MCP",
@@ -195,7 +194,6 @@
   "Compress context": "Comprimir contexto",
   "Compress prompts and outputs to save tokens": "Comprimir prompts e saídas para economizar tokens",
   "Compress prompts as images": "Comprimir prompts como imagens",
-  "Compress prompts via /v1/compress before routing to the model": "Comprimir prompts via /v1/compress antes de rotear para o modelo",
   "Compress tool output": "Comprimir saída da ferramenta",
   "Compressed": "Comprimido",
   "Compressed (est.)": "Comprimido (est.)",
@@ -986,7 +984,6 @@
   "Temperature": "Temperatura",
   "Terminal": "Terminal",
   "Terms of Service": "Termos de Serviço",
-  "Terse-style system prompt → ~65% fewer output tokens (up to 87%)": "Prompt de sistema conciso → ~65% menos tokens de saída (até 87%)",
   "Test Example": "Exemplo de Teste",
   "Test Results": "Resultados do Teste",
   "Test all API Key connections": "Testar todas as conexões de Chave API",
@@ -1119,7 +1116,6 @@
   "[ml] downloads ~1 GB (torch + huggingface-hub). Continue?": "[ml] baixa ~1 GB (torch + huggingface-hub). Continuar?",
   "e.g. a warm, gentle voice, speaking slowly with a British accent": "ex.: voz quente e suave, falando devagar com sotaque britânico",
   "extras status failed": "falha no status dos extras",
-  "git/grep/ls/tree/logs → 60-90% fewer input tokens": "git/grep/ls/tree/logs → 60-90% menos tokens de entrada",
   "not installed": "não instalado",
   "sk_9router (default)": "sk_9router (padrão)",
   "tree-sitter AST compression for code responses": "Compressão AST tree-sitter para respostas de código",
@@ -1130,5 +1126,9 @@
   "— rotates models across requests to spread load": "— rotaciona os modelos entre as requisições para distribuir a carga",
   "— tries models in order (next on failure)": "— tenta os modelos em ordem (próximo em caso de falha)",
   "⚠️ MITM intercepts HTTPS traffic of IDE tools (Antigravity, GitHub Copilot, Kiro) via local CA to redirect requests to your providers. May violate ToS → account ban. Use at your own risk.": "⚠️ MITM intercepta tráfego HTTPS de ferramentas IDE (Antigravity, GitHub Copilot, Kiro) via CA local para redirecionar solicitações aos seus provedores. Pode violar ToS → risco de banimento de conta. Use por sua conta e risco.",
-  "⚠️ Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk.": "⚠️ Aviso de Risco: Este provedor usa uma sessão de assinatura/OAuth não licenciada oficialmente para uso de proxy/roteador. A conta pode ser restrita ou banida. Use por sua conta e risco."
+  "⚠️ Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk.": "⚠️ Aviso de Risco: Este provedor usa uma sessão de assinatura/OAuth não licenciada oficialmente para uso de proxy/roteador. A conta pode ser restrita ou banida. Use por sua conta e risco.",
+  "Rewrites long command output (git, grep, ls, tree, logs) into a compact form before it reaches the model, keeping file names and results. Nothing you type changes — 60-90% fewer input tokens.": "Reescreve a saída longa de comandos (git, grep, ls, tree, logs) num formato compacto antes de chegar ao modelo, preservando nomes de arquivo e resultados. Nada do que você escreve muda — 60-90% menos tokens de entrada.",
+  "Sends the conversation through the Headroom service, which shortens long text the other compressors cannot read — prose, JSON, web pages. Runs before the request reaches the provider, so you pay for less.": "Passa a conversa pelo serviço Headroom, que encurta textos longos que os outros compressores não sabem ler — prosa, JSON, páginas web. Roda antes de a requisição chegar ao provedor, então você paga por menos.",
+  "Asks the model to answer in a clipped style, dropping filler and pleasantries. Shortens the replies you read, not what you send — around 65% fewer output tokens.": "Pede ao modelo que responda em estilo seco, sem enrolação nem cortesias. Encurta as respostas que você lê, não o que você envia — cerca de 65% menos tokens de saída.",
+  "Asks the model to write less code: reuse what exists, prefer the standard library, delete rather than add. Changes the answers you get, not the size of the request.": "Pede ao modelo que escreva menos código: reaproveitar o que existe, preferir a biblioteca padrão, deletar em vez de adicionar. Muda as respostas que você recebe, não o tamanho da requisição."
 }
