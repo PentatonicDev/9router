@@ -1,4 +1,8 @@
 import { FORMATS } from "../translator/formats.js";
+import { errorStreamChunk } from "./error.js";
+import { SSE_DONE } from "./sseConstants.js";
+
+const sharedEncoder = new TextEncoder();
 
 // Parse SSE data line
 export function parseSSELine(line, format = null) {
@@ -129,4 +133,24 @@ export function formatSSE(data, sourceFormat) {
   }
 
   return `data: ${JSON.stringify(data)}\n\n`;
+}
+
+// Terminal frames for a stream that aborted after HTTP 200 was already sent, so
+// the status code can no longer change. OpenAI-compatible clients (openai-python
+// raises APIError on any `data:` payload carrying an `error` key, checked before
+// [DONE]) need the error frame first, then [DONE]; Claude and Responses clients
+// read their own error event and never wait for [DONE]. Never fabricate a
+// successful finish_reason instead.
+//
+// Returns encoded bytes: onAbortTerminal callbacks are enqueued verbatim, same
+// as buildAbortedResponsesTerminalBytes.
+//
+// NOTE: non-SSE client formats (Ollama NDJSON) get an SSE frame here — dead in
+// practice because detectFormatByEndpoint never resolves to OLLAMA.
+export function buildStreamErrorBytes(statusCode, message, clientFormat) {
+  const chunk = errorStreamChunk(clientFormat, message, statusCode);
+  const eventOnly = clientFormat === FORMATS.CLAUDE || clientFormat === FORMATS.OPENAI_RESPONSES;
+  const sse = formatSSE(chunk, clientFormat) + (eventOnly ? "" : SSE_DONE);
+
+  return sharedEncoder.encode(sse);
 }

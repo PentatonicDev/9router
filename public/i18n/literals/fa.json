@@ -1389,5 +1389,21 @@
   "Rewrites long command output (git, grep, ls, tree, logs) into a compact form before it reaches the model, keeping file names and results. Nothing you type changes — 60-90% fewer input tokens.": "git/grep/ls/tree/logs → ۶۰-۹۰٪ توکن ورودی کمتر",
   "Sends the conversation through the Headroom service, which shortens long text the other compressors cannot read — prose, JSON, web pages. Runs before the request reaches the provider, so you pay for less.": "فشرده‌سازی پرامپت‌ها از طریق /v1/compress قبل از مسیردهی به مدل",
   "Asks the model to answer in a clipped style, dropping filler and pleasantries. Shortens the replies you read, not what you send — around 65% fewer output tokens.": "پرامپت سیستم مختصر → ~۶۵٪ توکن خروجی کمتر (تا ۸۷٪)",
-  "Asks the model to write less code: reuse what exists, prefer the standard library, delete rather than add. Changes the answers you get, not the size of the request.": "مدل را به سمت کد حداقلی سوق دهید: YAGNI، استفاده مجدد از کتابخانه استاندارد، حذف به جای افزودن"
+  "Asks the model to write less code: reuse what exists, prefer the standard library, delete rather than add. Changes the answers you get, not the size of the request.": "مدل را به سمت کد حداقلی سوق دهید: YAGNI، استفاده مجدد از کتابخانه استاندارد، حذف به جای افزودن",
+  "Combo & Vision Adapter":"آداپتور بینایی و ترکیبی",
+  "Vision Adapter": "آداپتور بینایی",
+  "Skills": "مهارت‌ها",
+  "Cached Cost":"هزینه‌ی کش‌شده",
+  "Compress prompts and outputs to save tokens":"فشرده‌سازی پرامپت‌ها و خروجی‌ها برای صرفه‌جویی در توکن‌ها",
+  "Manage your web providers": "مدیریت ارائه‌دهندگان خدمات وب خود را انجام دهید",
+  "providers":"ارائه‌دهندگان",
+  "combos": "ترکیبی",
+  "Configure enterprise Single Sign-On (SSO) for dashboard access using SAML 2.0 or OIDC.":"پیکربندی ورود تک‌نشانه سازمانی (SSO) برای دسترسی به داشبورد با استفاده از SAML 2.0 یا OIDC.",
+  "Optional SSO via Okta, Entra ID, Keycloak, or OIDC":"SSO اختیاری از طریق Okta، Entra ID، Keycloak یا OIDC",
+  "Single Sign-On (SSO)":"ورود یک‌باره (SSO)",
+  "SSO Protocol":"پروتکل SSO",
+  "Keep legacy password login.":"حفظ ورود با نام کاربری و رمز عبور قدیمی",
+  "Require SSO for dashboard access.":"برای دسترسی به داشبورد نیاز به SSO دارد.",
+  "Allow password or SSO login.":"اجازه ورود با رمز عبور یا ورود یک‌بار مصرف (SSO)",
+  "Save OIDC settings":"ذخیره تنظیمات OIDC"
 }

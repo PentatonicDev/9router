@@ -2,3 +2,7 @@ node_modules/
 package-lock.json
 .vite/
 coverage/
+
+# Regenerated per checkout: it embeds the app and Node versions, so a committed
+# copy goes stale on every bump (upstream dropped it in 2203cd8f for the same reason).
+translator/__snapshots__/golden-url-header.test.js.snap
