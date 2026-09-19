@@ -21,7 +21,8 @@ import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "o
 import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
-import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
+import { detectFormatByEndpoint, FORMATS } from "open-sse/translator/formats.js";
+import { createStreamingResponse } from "open-sse/utils/streamHandler.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
@@ -96,17 +97,34 @@ export async function handleChat(request, clientRawRequest = null, options = {})
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model", errorContext);
   }
 
-  // Bypass naming/warmup requests before combo rotation to avoid wasting rotation slots
   const userAgent = request?.headers?.get("user-agent") || "";
   const bypassResponse = handleBypassRequest(body, modelStr, userAgent, !!settings.ccFilterNaming);
   if (bypassResponse) return bypassResponse.response || bypassResponse;
 
-  const requiredCapabilities = detectRequiredCapabilities(body);
+  const route = (signal) => routeChat({
+    body, modelStr, settings, comboOwner, clientRawRequest, request, apiKey, errorContext, signal,
+  });
+  const pathname = new URL(request.url).pathname;
+  const clientFormat = detectFormatByEndpoint(pathname, body) || FORMATS.OPENAI;
+  const streamsSSE = body.stream === true && (
+    pathname.includes("/v1/chat/completions") ||
+    pathname.includes("/v1/responses") ||
+    pathname.includes("/v1/messages")
+  );
+  if (streamsSSE) {
+    return createStreamingResponse(route, {
+      clientFormat,
+      signal: request.signal,
+      requestId: errorContext.requestId,
+    });
+  }
+  return route(request.signal);
+}
 
-  // Check if model is a combo (has multiple models with fallback)
+async function routeChat({ body, modelStr, settings, comboOwner, clientRawRequest, request, apiKey, errorContext, signal }) {
+  const requiredCapabilities = detectRequiredCapabilities(body);
   const comboModels = await getComboModels(modelStr, comboOwner);
   if (comboModels) {
-    // Check for combo-specific strategy first, fallback to global
     const comboStrategies = settings.comboStrategies || {};
     const comboSpecificStrategy = comboStrategies[modelStr]?.fallbackStrategy;
     const comboStrategy = comboSpecificStrategy || settings.comboStrategy || "fallback";
@@ -124,7 +142,7 @@ export async function handleChat(request, clientRawRequest = null, options = {})
             const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
             cleanRawReq = { ...clientRawRequest, body: cleanBody };
           }
-          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext);
+          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext, signal);
         },
         log,
         comboName: modelStr,
@@ -140,7 +158,7 @@ export async function handleChat(request, clientRawRequest = null, options = {})
       body,
       models: augmentedModels,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal),
         adapterAdded
       ),
       log,
@@ -151,8 +169,6 @@ export async function handleChat(request, clientRawRequest = null, options = {})
     });
   }
 
-  // Single model request — may still switch to a capacity-adapter model if the
-  // target lacks a capability the request needs (e.g. no vision, request has an image).
   const soloAugmented = augmentModelsWithCapacityAdapter([modelStr], requiredCapabilities, settings);
   if (soloAugmented.length > 1) {
     const adapterAdded = soloAugmented.filter((m) => m !== modelStr);
@@ -161,7 +177,7 @@ export async function handleChat(request, clientRawRequest = null, options = {})
       body,
       models: soloAugmented,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal),
         adapterAdded
       ),
       log,
@@ -171,13 +187,13 @@ export async function handleChat(request, clientRawRequest = null, options = {})
     });
   }
 
-  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, errorContext);
+  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, errorContext, signal);
 }
 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, errorContext = {}) {
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, errorContext = {}, signal = null) {
   // Combo names are unique per owner, so resolution needs to know whose key this is.
   const comboOwner = await resolveComboOwner(apiKey);
   const modelInfo = await getModelInfo(modelStr, comboOwner);
@@ -206,7 +222,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
               const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
               cleanRawReq = { ...clientRawRequest, body: cleanBody };
             }
-            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext);
+            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext, signal);
           },
           log,
           comboName: modelStr,
@@ -222,7 +238,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         body,
         models: augmentedModels,
         handleSingleModel: withCapacityAdapterStripping(
-          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext),
+          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal),
           adapterAdded
         ),
         log,
@@ -303,6 +319,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       onPxpipeEvent: appendPxpipeEvent,
       providerThinking,
       errorContext,
+      signal,
       // Detect source format by endpoint + body
       sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,
       onCredentialsRefreshed: async (newCreds) => {
@@ -320,6 +337,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     });
 
     if (result.success) return withRequestId(result.response, errorContext);
+    if (result.status === 499 || signal?.aborted) return withRequestId(result.response, errorContext);
 
     // Antigravity 409/429: refresh live quota to get exact resetAt before locking
     let quotaResetMs = null;

@@ -1,3 +1,9 @@
+# Unreleased
+
+## Fixes
+- **Stream**: open the client SSE response as soon as a `stream: true` request is authenticated, so routing, combo/account fallback and provider prefill no longer leave the connection silent — reverse proxies (Cloudflare's 125s Proxy Read Timeout) answered 524 before upstream headers existed. Heartbeats are SSE comments, suppressed while a partial event is in flight, and the final client-facing stream is relayed unchanged. A failure that resolves before the stream opens now travels in-band in the client's format (OpenAI error frame + `[DONE]`, Claude `event: error`, Responses `event: response.failed` + `[DONE]`) instead of dropping the connection.
+- **Stream**: cancel the upstream request when the client disconnects, and stop locking the account when the abort is what ended the request.
+
 # v0.5.81 (2026-09-18)
 
 ## Features
