@@ -1,38 +1,115 @@
 import { getConsoleLogs, getConsoleEmitter, initConsoleLogCapture } from "@/lib/consoleLogBuffer";
+import { isDistributed } from "@/lib/db/mode";
+import { getInstanceId } from "@/lib/instanceId";
+import { CONSOLE_LOG_CONFIG } from "@/shared/constants/config";
 
 export const dynamic = "force-dynamic";
 
 initConsoleLogCapture();
 
+// Poll period for the shared table. Cheap: an indexed `id > cursor` read that
+// returns nothing when no instance logged.
+const POLL_INTERVAL_MS = CONSOLE_LOG_CONFIG.pollIntervalMs;
+
 export async function GET(request) {
   const encoder = new TextEncoder();
-  const emitter = getConsoleEmitter();
-  const state = { closed: false, send: null, sendLines: null, sendClear: null, keepalive: null };
+  const state = { closed: false, keepalive: null, poll: null, cleanup: null };
 
-  // Idempotent: safe to call from request.signal abort, cancel(), or enqueue failure.
   const cleanup = () => {
     if (state.closed) return;
     state.closed = true;
-    if (state.send) emitter.off("line", state.send);
-    if (state.sendLines) emitter.off("lines", state.sendLines);
-    if (state.sendClear) emitter.off("clear", state.sendClear);
+    state.cleanup?.();
     if (state.keepalive) clearInterval(state.keepalive);
+    if (state.poll) clearInterval(state.poll);
   };
-
-  // request.signal fires reliably on client disconnect; ReadableStream.cancel()
-  // is not always invoked in Next.js, which caused listeners to accumulate.
   request.signal.addEventListener("abort", cleanup, { once: true });
+
+  if (isDistributed()) {
+    const { getConsoleLogsSince, getRecentConsoleLogs, getConsoleLogInstances } =
+      await import("@/lib/db/repos/consoleLogsRepo.js");
+    let cursor = 0;
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (payload) => {
+          if (state.closed) return false;
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+            return true;
+          } catch {
+            cleanup();
+            return false;
+          }
+        };
+
+        try {
+          // Open on the newest page (not the oldest), then follow forward by id.
+          const recent = await getRecentConsoleLogs(CONSOLE_LOG_CONFIG.clientMaxLines);
+          cursor = recent.length ? recent[recent.length - 1].id : 0;
+          if (!send({
+            type: "init",
+            logs: recent.map((r) => r.line),
+            entries: recent,
+            instances: await getConsoleLogInstances(),
+            selfInstance: getInstanceId(),
+          })) return;
+        } catch {
+          send({ type: "init", logs: [], entries: [], instances: [], selfInstance: getInstanceId() });
+        }
+
+        const tick = async () => {
+          if (state.closed) return;
+          try {
+            const rows = await getConsoleLogsSince(cursor);
+            if (rows.length) {
+              cursor = rows[rows.length - 1].id;
+              send({ type: "entries", entries: rows });
+            }
+          } catch {
+            // A transient read failure must not end the stream; next tick retries.
+          } finally {
+            // Schedule only after the read finishes: a slow database must not stack
+            // overlapping polls for every open dashboard.
+            if (!state.closed) state.poll = setTimeout(tick, POLL_INTERVAL_MS);
+          }
+        };
+        state.poll = setTimeout(tick, POLL_INTERVAL_MS);
+
+        state.keepalive = setInterval(() => {
+          if (state.closed) return;
+          try {
+            controller.enqueue(encoder.encode(": ping\n\n"));
+          } catch {
+            cleanup();
+          }
+        }, 25000);
+      },
+      cancel() {
+        cleanup();
+      },
+    });
+
+    state.cleanup = () => {};
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+
+  const emitter = getConsoleEmitter();
 
   const stream = new ReadableStream({
     start(controller) {
-      // Send all buffered logs immediately on connect
       const buffered = getConsoleLogs();
       if (buffered.length > 0) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "init", logs: buffered })}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "init", logs: buffered, selfInstance: getInstanceId() })}\n\n`));
       }
 
-      // Push new lines as they arrive
-      state.send = (line) => {
+      const send = (line) => {
         if (state.closed) return;
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "line", line })}\n\n`));
@@ -41,7 +118,7 @@ export async function GET(request) {
         }
       };
 
-      state.sendLines = (lines) => {
+      const sendLines = (lines) => {
         if (state.closed || !Array.isArray(lines) || lines.length === 0) return;
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "lines", lines })}\n\n`));
@@ -50,8 +127,7 @@ export async function GET(request) {
         }
       };
 
-      // Notify client when cleared
-      state.sendClear = () => {
+      const sendClear = () => {
         if (state.closed) return;
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "clear" })}\n\n`));
@@ -60,11 +136,16 @@ export async function GET(request) {
         }
       };
 
-      emitter.on("line", state.send);
-      emitter.on("lines", state.sendLines);
-      emitter.on("clear", state.sendClear);
+      emitter.on("line", send);
+      emitter.on("lines", sendLines);
+      emitter.on("clear", sendClear);
 
-      // Keepalive ping every 25s
+      state.cleanup = () => {
+        emitter.off("line", send);
+        emitter.off("lines", sendLines);
+        emitter.off("clear", sendClear);
+      };
+
       state.keepalive = setInterval(() => {
         if (state.closed) { clearInterval(state.keepalive); return; }
         try {

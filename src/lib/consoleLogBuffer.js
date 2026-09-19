@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import { CONSOLE_LOG_CONFIG } from "@/shared/constants/config.js";
+import { isDistributed } from "@/lib/db/mode.js";
 
 const consoleLevels = ["log", "info", "warn", "error", "debug"];
 
@@ -24,8 +25,21 @@ if (!state.emitter) {
 if (!state.pendingLines) state.pendingLines = [];
 if (!state.flushTimer) state.flushTimer = null;
 
-const FLUSH_INTERVAL_MS = 100;
+// Shared Postgres does not need ten writes/second from every pod: the dashboard
+// polls once/second anyway. Local SSE keeps the original low-latency flush.
+const FLUSH_INTERVAL_MS = isDistributed() ? 1000 : 100;
 const MAX_BATCH_LINES = 50;
+
+// In distributed mode the in-process buffer only holds this instance's lines, so
+// the flush that already batches every 100ms also appends to the shared table —
+// that is what lets the dashboard read every instance's output from one place.
+// Local mode keeps the previous behaviour and pays nothing.
+function persistLines(lines) {
+  if (!isDistributed()) return;
+  import("./db/repos/consoleLogsRepo.js")
+    .then((m) => m.appendConsoleLogs(lines))
+    .catch(() => {}); // log persistence must never break the writer
+}
 
 function flushPendingLines() {
   state.flushTimer = null;
@@ -33,6 +47,7 @@ function flushPendingLines() {
 
   const lines = state.pendingLines.splice(0, state.pendingLines.length);
   state.emitter.emit("lines", lines);
+  persistLines(lines);
 }
 
 function scheduleFlush() {
@@ -42,7 +57,10 @@ function scheduleFlush() {
 }
 
 function toLogLine(level, args) {
-  return args.map(formatArg).join(" ");
+  const line = args.map(formatArg).join(" ");
+  // Preserve the console method as data. Raw console.error/warn/info calls have
+  // no marker in their text, so discarding `level` made every one render as LOG.
+  return level === "log" ? line : `[${level.toUpperCase()}] ${line}`;
 }
 
 // Strip ANSI escape codes so terminal colors don't bleed into UI

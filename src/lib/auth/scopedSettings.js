@@ -42,9 +42,11 @@ export function resolveTokenSaverFor(settings, owner) {
  * here, means every consumer that already receives `settings` (combo expansion,
  * capability augmentation, the token savers) sees the right values unchanged.
  */
-export async function resolveScopedSettings(settings, apiKey) {
+export async function resolveScopedSettings(settings, apiKey, resolvedOwner = undefined) {
   if (!isScopeEnabled(settings)) return settings;
-  const owner = await getApiKeyOwner(apiKey || null);
+  const owner = resolvedOwner === undefined
+    ? await getApiKeyOwner(apiKey || null)
+    : resolvedOwner;
   if (!owner) return settings;
 
   const merged = { ...settings };

@@ -60,6 +60,12 @@ export const STREAM_HEARTBEAT_INTERVAL_MS = envMs("STREAM_HEARTBEAT_INTERVAL_MS"
 // slow reasoning models aren't aborted mid-stream. Env: STREAM_STALL_TIMEOUT_MS.
 export const STREAM_STALL_TIMEOUT_MS = envMs("STREAM_STALL_TIMEOUT_MS", 360 * 1000);
 
+// How long the client response is held open before it is committed to 200, so a
+// routing failure that resolves quickly can still answer with its real status
+// (429/503). Routing errors land in ~100ms; the hold stays far below any proxy
+// idle timeout. Env: STREAM_STATUS_GRACE_MS.
+export const STREAM_STATUS_GRACE_MS = envMs("STREAM_STATUS_GRACE_MS", 1500);
+
 // Time-to-first-token timeout (prompt prefill). Env: STREAM_FIRST_CHUNK_TIMEOUT_MS.
 export const STREAM_FIRST_CHUNK_TIMEOUT_MS = envMs("STREAM_FIRST_CHUNK_TIMEOUT_MS", 200 * 1000);
 

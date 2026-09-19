@@ -13,7 +13,7 @@ export {
   getApiKeys, getApiKeyById, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
   getApiKeyAllowedConnectionIds,
   getApiKeyOwner,
-  getApiKeyIdentity,
+  getApiKeyIdentity, getApiKeyRoutingContext,
   getCombos, getComboById, getComboByName,
   createCombo, updateCombo, deleteCombo,
   getModelAliases, setModelAlias, deleteModelAlias,

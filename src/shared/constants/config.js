@@ -55,7 +55,11 @@ export const API_ENDPOINTS = {
 };
 
 export const CONSOLE_LOG_CONFIG = {
+  // Ring buffer kept per server process.
   maxLines: 200,
+  // Display window in the dashboard. Larger than maxLines because in distributed
+  // mode it spans every instance, so the same line count covers far less time.
+  clientMaxLines: 2000,
   pollIntervalMs: 1000,
 };
 

@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -153,6 +153,21 @@ export const TABLES = {
       "CREATE INDEX IF NOT EXISTS idx_uh_apikey ON usageHistory(apiKey)",
     ],
   },
+  // Console output, so every instance sharing this database can be read from one
+  // dashboard. `instanceId` is the writer (pod/host name), which is what separates
+  // the streams: the in-process buffer only ever holds this instance's own lines.
+  consoleLogs: {
+    columns: {
+      id: "INTEGER PRIMARY KEY AUTOINCREMENT",
+      instanceId: "TEXT NOT NULL",
+      timestamp: "TEXT NOT NULL",
+      line: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_cl_ts ON consoleLogs(timestamp DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_cl_instance ON consoleLogs(instanceId)",
+    ],
+  },
   usageDaily: {
     columns: {
       dateKey: "TEXT PRIMARY KEY",
@@ -202,6 +217,8 @@ export const INDEXES = [
   { name: "idx_combo_name", table: "combos", columns: ["name"], unique: false },
   { name: "idx_combo_owner_name", table: "combos", expression: { sqlite: "name, IFNULL(owner, '')", pg: "name, COALESCE(owner, '')" }, unique: true },
   { name: "idx_kv_scope", table: "kv", columns: ["scope"], unique: false },
+  { name: "idx_cl_ts", table: "consoleLogs", columns: ["timestamp"], order: "desc", unique: false },
+  { name: "idx_cl_instance", table: "consoleLogs", columns: ["instanceId"], unique: false },
   { name: "idx_uh_ts", table: "usageHistory", columns: ["timestamp"], order: "desc", unique: false },
   { name: "idx_uh_provider", table: "usageHistory", columns: ["provider"], unique: false },
   { name: "idx_uh_model", table: "usageHistory", columns: ["model"], unique: false },

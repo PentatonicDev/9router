@@ -148,6 +148,23 @@ export async function getApiKeyAllowedConnectionIds(key) {
   return normalizeAllowed(parseJson(row.allowedConnectionIds, null));
 }
 
+// Everything the router needs from an API key, in one read. In distributed mode
+// each call is a Postgres round trip; keeping validity, ownership, bindings and
+// label together avoids re-reading the same row four times before dispatch.
+export async function getApiKeyRoutingContext(key) {
+  if (!key) return { valid: false, owner: null, name: null, allowedConnectionIds: null };
+  const db = await getDb();
+  const row = await db.selectFrom("apiKeys")
+    .select(["isActive", "owner", "name", "allowedConnectionIds"])
+    .where("key", "=", key).executeTakeFirst();
+  return {
+    valid: row ? row.isActive === 1 || row.isActive === true : false,
+    owner: row?.owner ?? null,
+    name: row?.name ?? null,
+    allowedConnectionIds: normalizeAllowed(parseJson(row?.allowedConnectionIds, null)),
+  };
+}
+
 /**
  * The owner of a key, as stored. Used by the router, where there is no session:
  * the key itself carries the identity that caps which accounts it may reach.

@@ -1,7 +1,7 @@
 // Stream handler with disconnect detection - shared for all providers
-import { STREAM_HEARTBEAT_INTERVAL_MS, STREAM_STALL_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { STREAM_HEARTBEAT_INTERVAL_MS, STREAM_STALL_TIMEOUT_MS, STREAM_STATUS_GRACE_MS, HTTP_STATUS } from "../config/runtimeConfig.js";
 import { FORMATS } from "../translator/formats.js";
-import { sanitizePublicMessage } from "./error.js";
+import { sanitizePublicMessage, errorResponse } from "./error.js";
 import { buildAbortedResponsesTerminalBytes } from "./responsesStreamHelpers.js";
 import { SSE_HEADERS_CORS } from "./sseConstants.js";
 import { buildStreamErrorBytes } from "./streamHelpers.js";
@@ -26,24 +26,46 @@ function earlyErrorBytes(status, message, clientFormat) {
   return buildStreamErrorBytes(status, message, clientFormat);
 }
 
+// Resolve after ms with an unreffed, cancellable timer. A route that settles
+// immediately should not leave one timer behind for every request.
+function delay(ms) {
+  let timer;
+  const promise = new Promise((resolve) => {
+    timer = setTimeout(resolve, ms);
+    timer?.unref?.();
+  });
+  return { promise, cancel: () => clearTimeout(timer) };
+}
+
 /**
- * Open an SSE response before provider routing finishes, then relay the final
- * client-facing stream byte-for-byte. Heartbeats are comments, so conforming
- * SSE clients ignore them while reverse proxies still observe response traffic.
+ * Relay a client-facing SSE stream, opening the response before provider routing
+ * finishes so a long await cannot hit a proxy idle timeout.
+ *
+ * Routing is held against STREAM_STATUS_GRACE_MS first. A failure that resolves
+ * inside that window answers with its own status (429/503) instead of being
+ * written as an error frame inside an already-committed 200, where a client that
+ * reads 200 as "stream started" sees an empty stream rather than the failure.
+ * Routing that outlives the window falls through to the open-now path, so the
+ * socket is never idle long enough for a proxy to cut it.
+ *
+ * Heartbeats are comments, so conforming SSE clients ignore them while reverse
+ * proxies still observe response traffic.
  */
-export function createStreamingResponse(responsePromise, { clientFormat = FORMATS.OPENAI, signal, requestId } = {}) {
+export async function createStreamingResponse(responsePromise, { clientFormat = FORMATS.OPENAI, signal, requestId } = {}) {
   const abortController = new AbortController();
+  let closed = false;
   let reader = null;
   let heartbeat = null;
-  let closed = false;
+  let clientController = null;
   let atEventBoundary = true;
   let eventTail = "";
   const boundaryDecoder = new TextDecoder();
 
+  const detach = () => signal?.removeEventListener("abort", abort);
   const cleanup = () => {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
-    signal?.removeEventListener("abort", abort);
+    detach();
   };
   const abort = () => {
     if (closed) return;
@@ -51,10 +73,50 @@ export function createStreamingResponse(responsePromise, { clientFormat = FORMAT
     cleanup();
     abortController.abort(signal?.reason);
     reader?.cancel(signal?.reason).catch(() => {});
+    try { clientController?.close(); } catch {}
   };
+  signal?.addEventListener("abort", abort, { once: true });
+
+  // One routing attempt, awaited twice at most: the race below and, when the
+  // hold expires first, the relay that continues waiting on the same promise.
+  const routing = Promise.resolve().then(() => responsePromise(abortController.signal));
+  const grace = delay(STREAM_STATUS_GRACE_MS);
+  const raced = await Promise.race([
+    routing.then(
+      (response) => ({ settled: true, response }),
+      (error) => ({ settled: true, error }),
+    ),
+    grace.promise.then(() => ({ settled: false })),
+  ]);
+  grace.cancel();
+
+  if (closed) {
+    detach();
+    routing.then((r) => r?.body?.cancel?.().catch(() => {})).catch(() => {});
+    return new Response(null, { status: 499 });
+  }
+
+  // Routing already failed: hand its response over untouched so the status,
+  // Retry-After and X-9Router-* headers reach the client as the wire truth.
+  if (raced.settled && raced.response && !raced.response.ok) {
+    detach();
+    return raced.response;
+  }
+
+  // Routing threw outright — give it a real status too, not a 200 body frame.
+  if (raced.settled && raced.error) {
+    detach();
+    if (raced.error?.name === "AbortError") return new Response(null, { status: 499 });
+    return errorResponse(
+      HTTP_STATUS.BAD_GATEWAY,
+      sanitizePublicMessage(raced.error?.message),
+      { requestId, errorFormat: clientFormat },
+    );
+  }
 
   const stream = new ReadableStream({
     start(controller) {
+      clientController = controller;
       const sendHeartbeat = () => {
         if (closed || !atEventBoundary) return;
         try { controller.enqueue(heartbeatBytes); } catch { abort(); }
@@ -62,14 +124,17 @@ export function createStreamingResponse(responsePromise, { clientFormat = FORMAT
 
       sendHeartbeat();
       heartbeat = setInterval(sendHeartbeat, STREAM_HEARTBEAT_INTERVAL_MS);
-      signal?.addEventListener("abort", abort, { once: true });
 
       (async () => {
         try {
-          const response = await responsePromise(abortController.signal);
-          if (closed) return;
+          const response = raced.settled ? raced.response : await routing;
+          if (closed) {
+            response?.body?.cancel?.().catch(() => {});
+            return;
+          }
           if (!response?.ok || !response.body) {
             cleanup();
+            detach();
             const status = response?.status || 502;
             const message = response ? await responseError(response) : "Upstream provider request failed";
             if (!closed) controller.enqueue(earlyErrorBytes(status, message, clientFormat));
@@ -89,10 +154,12 @@ export function createStreamingResponse(responsePromise, { clientFormat = FORMAT
           if (!closed) {
             closed = true;
             cleanup();
+            detach();
             controller.close();
           }
         } catch (error) {
           cleanup();
+          detach();
           if (closed || error?.name === "AbortError") return;
           try {
             controller.enqueue(earlyErrorBytes(502, sanitizePublicMessage(error?.message), clientFormat));

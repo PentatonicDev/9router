@@ -5,11 +5,10 @@ import {
   markAccountUnavailable,
   clearAccountError,
   extractApiKey,
-  isValidApiKey,
 } from "../services/auth.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
 import { getExhaustedQuotaResetMs } from "../services/quotaReset.js";
-import { getSettings, getApiKeyOwner, getApiKeyIdentity } from "@/lib/localDb";
+import { getSettings, getApiKeyRoutingContext } from "@/lib/localDb";
 import { resolveScopedSettings, headroomProjectUrl } from "@/lib/auth/scopedSettings";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
@@ -33,13 +32,6 @@ import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
  * Supports: OpenAI, Claude, Gemini, OpenAI Responses API formats
  * Format detection and translation handled by translator
  */
-// undefined (not null) keeps the legacy lookup: name alone, ignoring ownership.
-async function resolveComboOwner(apiKey) {
-  const settings = await getSettings();
-  if (settings?.scopeResourcesByUser !== true) return undefined;
-  return await getApiKeyOwner(apiKey || null);
-}
-
 export async function handleChat(request, clientRawRequest = null, options = {}) {
   const errorContext = createErrorContext(request, options);
   let body;
@@ -77,16 +69,21 @@ export async function handleChat(request, clientRawRequest = null, options = {})
     log.debug("AUTH", "No API key provided (local mode)");
   }
 
-  // Enforce API key if enabled in settings
-  const settings = await resolveScopedSettings(await getSettings(), apiKey);
-  const comboOwner = await resolveComboOwner(apiKey);
+  // One API-key read supplies validity, owner, binding and label for the whole
+  // request. Every candidate/fallback below reuses this request-scoped snapshot.
+  const [rawSettings, apiKeyContext] = await Promise.all([
+    getSettings(),
+    getApiKeyRoutingContext(apiKey),
+  ]);
+  const settings = await resolveScopedSettings(rawSettings, apiKey, apiKeyContext.owner);
+  // undefined (not null) keeps the legacy combo lookup: name alone, ignoring ownership.
+  const comboOwner = rawSettings.scopeResourcesByUser === true ? apiKeyContext.owner : undefined;
   if (settings.requireApiKey) {
     if (!apiKey) {
       log.warn("AUTH", "Missing API key (requireApiKey=true)");
       return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key", errorContext);
     }
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) {
+    if (!apiKeyContext.valid) {
       log.warn("AUTH", "Invalid API key (requireApiKey=true)");
       return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key", errorContext);
     }
@@ -102,7 +99,8 @@ export async function handleChat(request, clientRawRequest = null, options = {})
   if (bypassResponse) return bypassResponse.response || bypassResponse;
 
   const route = (signal) => routeChat({
-    body, modelStr, settings, comboOwner, clientRawRequest, request, apiKey, errorContext, signal,
+    body, modelStr, settings, comboOwner, apiKeyContext,
+    clientRawRequest, request, apiKey, errorContext, signal,
   });
   const pathname = new URL(request.url).pathname;
   const clientFormat = detectFormatByEndpoint(pathname, body) || FORMATS.OPENAI;
@@ -121,7 +119,11 @@ export async function handleChat(request, clientRawRequest = null, options = {})
   return route(request.signal);
 }
 
-async function routeChat({ body, modelStr, settings, comboOwner, clientRawRequest, request, apiKey, errorContext, signal }) {
+async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, clientRawRequest, request, apiKey, errorContext, signal }) {
+  // Reuse request-scoped reads across model/account fallback. In distributed mode
+  // these are Postgres round trips; re-reading the same settings/owner for every
+  // candidate adds latency without changing the answer inside one request.
+  const routingContext = { settings, comboOwner, apiKeyContext };
   const requiredCapabilities = detectRequiredCapabilities(body);
   const comboModels = await getComboModels(modelStr, comboOwner);
   if (comboModels) {
@@ -142,7 +144,7 @@ async function routeChat({ body, modelStr, settings, comboOwner, clientRawReques
             const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
             cleanRawReq = { ...clientRawRequest, body: cleanBody };
           }
-          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext, signal);
+          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext, signal, routingContext);
         },
         log,
         comboName: modelStr,
@@ -158,7 +160,7 @@ async function routeChat({ body, modelStr, settings, comboOwner, clientRawReques
       body,
       models: augmentedModels,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext),
         adapterAdded
       ),
       log,
@@ -177,7 +179,7 @@ async function routeChat({ body, modelStr, settings, comboOwner, clientRawReques
       body,
       models: soloAugmented,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext),
         adapterAdded
       ),
       log,
@@ -187,22 +189,23 @@ async function routeChat({ body, modelStr, settings, comboOwner, clientRawReques
     });
   }
 
-  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, errorContext, signal);
+  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, errorContext, signal, routingContext);
 }
 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, errorContext = {}, signal = null) {
-  // Combo names are unique per owner, so resolution needs to know whose key this is.
-  const comboOwner = await resolveComboOwner(apiKey);
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, errorContext = {}, signal = null, routingContext = {}) {
+  // Combo names are unique per owner. routeChat already resolved both values;
+  // fallback recursion carries them instead of repeating the same DB reads.
+  const comboOwner = routingContext.comboOwner;
+  const chatSettings = routingContext.settings || await getSettings();
   const modelInfo = await getModelInfo(modelStr, comboOwner);
 
   // If provider is null, this might be a combo name - check and handle
   if (!modelInfo.provider) {
     const comboModels = await getComboModels(modelStr, comboOwner);
     if (comboModels) {
-      const chatSettings = await getSettings();
       // Check for combo-specific strategy first, fallback to global
       const comboStrategies = chatSettings.comboStrategies || {};
       const comboSpecificStrategy = comboStrategies[modelStr]?.fallbackStrategy;
@@ -222,7 +225,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
               const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
               cleanRawReq = { ...clientRawRequest, body: cleanBody };
             }
-            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext, signal);
+            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext, signal, routingContext);
           },
           log,
           comboName: modelStr,
@@ -238,7 +241,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         body,
         models: augmentedModels,
         handleSingleModel: withCapacityAdapterStripping(
-          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal),
+          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext),
           adapterAdded
         ),
         log,
@@ -263,7 +266,12 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   const excludeConnectionIds = new Set();
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { apiKey });
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, {
+      apiKey,
+      settings: chatSettings,
+      keyOwner: comboOwner === undefined ? null : comboOwner,
+      allowedConnectionIds: routingContext.apiKeyContext?.allowedConnectionIds ?? null,
+    });
 
     if (credentials?.noActiveCredentials) {
       log.warn("AUTH", credentials.candidate.message);
@@ -288,7 +296,6 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     }
 
     // Use shared chatCore
-    const chatSettings = await getSettings();
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
     const result = await handleChatCore({
       body: { ...body, model: `${provider}/${model}` },
@@ -303,7 +310,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       rtkEnabled: !!chatSettings.rtkEnabled,
       headroomEnabled: !!chatSettings.headroomEnabled,
       headroomUrl: chatSettings.headroomPerApiKeyProject
-        ? headroomProjectUrl(chatSettings.headroomUrl || DEFAULT_HEADROOM_URL, (await getApiKeyIdentity(apiKey)).name)
+        ? headroomProjectUrl(chatSettings.headroomUrl || DEFAULT_HEADROOM_URL, routingContext.apiKeyContext?.name)
         : (chatSettings.headroomUrl || DEFAULT_HEADROOM_URL),
       headroomCompressUserMessages: !!chatSettings.headroomCompressUserMessages,
       headroomTimeoutMs: chatSettings.headroomTimeoutMs,

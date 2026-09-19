@@ -6,8 +6,10 @@ import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.
 import { getAntigravityQuotaCache } from "./antigravityQuota.js";
 import * as log from "../utils/logger.js";
 
-// Mutex to prevent race conditions during account selection
-let selectionMutex = Promise.resolve();
+// Serialize round-robin updates only inside the provider pool they mutate.
+// One global mutex made an unrelated provider wait behind another; per-provider
+// mutexes preserve the race guard while letting independent pools select in parallel.
+const selectionMutexes = new Map();
 
 const GITHUB_MONTHLY_USAGE_LIMIT = "you've reached your additional usage limit for your plan";
 
@@ -33,20 +35,28 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     ? excludeConnectionIds
     : (excludeConnectionIds ? new Set([excludeConnectionIds]) : new Set());
   const preferredConnectionId = options?.preferredConnectionId || null;
-  // Acquire mutex to prevent race conditions
-  const currentMutex = selectionMutex;
+  // Fill-first only reads the pool, so concurrent requests cannot race on it.
+  // Round-robin updates lastUsedAt/consecutiveUseCount and keeps the per-provider
+  // lock. Legacy callers that did not pass settings stay locked conservatively.
+  const providerId = resolveProviderId(provider);
+  const strategyHint = (options.settings?.providerStrategies?.[providerId] || {}).fallbackStrategy
+    || options.settings?.fallbackStrategy;
+  const needsSelectionLock = strategyHint === undefined || strategyHint === "round-robin";
+  const currentMutex = needsSelectionLock
+    ? selectionMutexes.get(providerId) || Promise.resolve()
+    : Promise.resolve();
   let resolveMutex;
-  selectionMutex = new Promise(resolve => { resolveMutex = resolve; });
+  const nextMutex = needsSelectionLock
+    ? new Promise((resolve) => { resolveMutex = resolve; })
+    : null;
+  if (nextMutex) selectionMutexes.set(providerId, nextMutex);
 
   try {
     await currentMutex;
 
-    // Resolve alias to provider ID (e.g., "kc" -> "kilocode")
-    const providerId = resolveProviderId(provider);
-
     // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings)
     if (FREE_PROVIDERS[providerId]?.noAuth) {
-      const settings = await getSettings();
+      const settings = options.settings || await getSettings();
       const override = (settings.providerStrategies || {})[providerId] || {};
       const strategy = override.rotateStrategy || "none";
       let pickedId = override.proxyPoolId || null;
@@ -76,9 +86,11 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     // Ownership: there is no session here, so the key itself carries the identity.
     // A key owned by someone only reaches that owner's accounts plus the shared
     // ones; an unowned key keeps reaching everything.
-    const settings0 = await getSettings();
+    const settings0 = options.settings || await getSettings();
     if (settings0?.scopeResourcesByUser === true) {
-      const keyOwner = await getApiKeyOwner(options?.apiKey || null);
+      const keyOwner = Object.hasOwn(options, "keyOwner")
+        ? options.keyOwner
+        : await getApiKeyOwner(options?.apiKey || null);
       if (keyOwner) {
         connections = connections.filter(c => !c.owner || c.owner === keyOwner);
         // A shared account the user switched off for themselves leaves their
@@ -93,7 +105,9 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
 
     // Account binding: a key with `allowedConnectionIds` only routes to those
     // accounts. No binding (or no key) leaves the pool untouched.
-    const allowedConnectionIds = await getApiKeyAllowedConnectionIds(options?.apiKey || null);
+    const allowedConnectionIds = Object.hasOwn(options, "allowedConnectionIds")
+      ? options.allowedConnectionIds
+      : await getApiKeyAllowedConnectionIds(options?.apiKey || null);
     if (allowedConnectionIds) connections = connections.filter(c => allowedConnectionIds.includes(c.id));
     log.debug("AUTH", `${provider} | total connections: ${connections.length}, excludeIds: ${excludeSet.size > 0 ? [...excludeSet].join(",") : "none"}, model: ${model || "any"}`);
 
@@ -213,10 +227,10 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       };
     }
 
-    const settings = await getSettings();
+    const selectionSettings = options.settings || await getSettings();
     // Per-provider strategy overrides global setting
-    const providerOverride = (settings.providerStrategies || {})[providerId] || {};
-    const strategy = providerOverride.fallbackStrategy || settings.fallbackStrategy || "fill-first";
+    const providerOverride = (selectionSettings.providerStrategies || {})[providerId] || {};
+    const strategy = providerOverride.fallbackStrategy || selectionSettings.fallbackStrategy || "fill-first";
 
     let connection;
     // Pin to preferred connection if specified and available
@@ -229,7 +243,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     if (connection) {
       // skip strategy
     } else if (strategy === "round-robin") {
-      const stickyLimit = providerOverride.stickyRoundRobinLimit || settings.stickyRoundRobinLimit || 3;
+      const stickyLimit = providerOverride.stickyRoundRobinLimit || selectionSettings.stickyRoundRobinLimit || 3;
 
       // Sort by lastUsed (most recent first) to find current candidate
       const byRecency = [...availableConnections].sort((a, b) => {
@@ -303,6 +317,8 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     };
   } finally {
     if (resolveMutex) resolveMutex();
+    // Delete only our own tail; a newer waiter may already own the map entry.
+    if (nextMutex && selectionMutexes.get(providerId) === nextMutex) selectionMutexes.delete(providerId);
   }
 }
 
