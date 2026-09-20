@@ -2,11 +2,24 @@ import { NextResponse } from "next/server";
 import { getCombos, createCombo, getComboByName } from "@/lib/localDb";
 import { getHiddenComboNames } from "@/lib/db/repos/hiddenCombosRepo.js";
 import { getRequestIdentity, getScopeFilter, ownerForCreate, scopeVisible } from "@/lib/auth/resourceScope";
+import { THINKING_ORDER } from "open-sse/translator/concerns/thinking.js";
 
 export const dynamic = "force-dynamic";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
+
+// combo.modelOptions: { [modelEntryString]: { maxThinking: <THINKING_ORDER level> } }.
+// Absent/null is valid (no caps set); an unrecognized maxThinking level is rejected
+// outright rather than silently ignored, so a typo in a client PUT/POST is caught here.
+export function isValidModelOptions(modelOptions) {
+  if (modelOptions === undefined || modelOptions === null) return true;
+  if (typeof modelOptions !== "object" || Array.isArray(modelOptions)) return false;
+  return Object.values(modelOptions).every((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    return entry.maxThinking === undefined || THINKING_ORDER.includes(entry.maxThinking);
+  });
+}
 
 // GET /api/combos - Get all combos
 export async function GET() {
@@ -34,7 +47,7 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { name, models, kind } = body;
+    const { name, models, kind, modelOptions } = body;
 
     if (!name) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
@@ -43,6 +56,10 @@ export async function POST(request) {
     // Validate name format
     if (!VALID_NAME_REGEX.test(name)) {
       return NextResponse.json({ error: "Name can only contain letters, numbers, -, _ and ." }, { status: 400 });
+    }
+
+    if (!isValidModelOptions(modelOptions)) {
+      return NextResponse.json({ error: "Invalid modelOptions: unknown maxThinking level" }, { status: 400 });
     }
 
     // Names are unique per owner, so only a clash within the caller's own scope
@@ -63,7 +80,7 @@ export async function POST(request) {
     }
 
     const combo = await createCombo({
-      name, models: models || [], kind: kind || null,
+      name, models: models || [], kind: kind || null, modelOptions: modelOptions || null,
       owner: await ownerForCreate(body.owner),
     });
 

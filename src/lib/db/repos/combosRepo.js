@@ -10,6 +10,7 @@ function rowToCombo(row) {
     name: row.name,
     kind: row.kind,
     models: parseJson(row.models, []),
+    modelOptions: parseJson(row.modelOptions, null),
     owner: row.owner ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -63,13 +64,16 @@ export async function createCombo(data) {
     name: data.name,
     kind: data.kind || null,
     models: data.models || [],
+    modelOptions: data.modelOptions || null,
     owner: data.owner === undefined ? await resolveDefaultOwner() : normalizeOwnerInput(data.owner),
     createdAt: now,
     updatedAt: now,
   };
   await db.insertInto("combos").values({
     id: combo.id, name: combo.name, kind: combo.kind,
-    models: stringifyJson(combo.models), owner: combo.owner,
+    models: stringifyJson(combo.models),
+    modelOptions: combo.modelOptions ? stringifyJson(combo.modelOptions) : null,
+    owner: combo.owner,
     createdAt: combo.createdAt, updatedAt: combo.updatedAt,
   }).execute();
   return combo;
@@ -85,6 +89,7 @@ export async function updateCombo(id, data) {
     await trx.updateTable("combos").set({
       name: merged.name, kind: merged.kind,
       models: stringifyJson(merged.models || []),
+      modelOptions: merged.modelOptions ? stringifyJson(merged.modelOptions) : null,
       owner: merged.owner ?? null, updatedAt: merged.updatedAt,
     }).where("id", "=", id).execute();
     result = merged;

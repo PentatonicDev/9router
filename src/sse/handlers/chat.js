@@ -10,7 +10,7 @@ import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../service
 import { getExhaustedQuotaResetMs } from "../services/quotaReset.js";
 import { getSettings, getApiKeyRoutingContext } from "@/lib/localDb";
 import { resolveScopedSettings, headroomProjectUrl } from "@/lib/auth/scopedSettings";
-import { getModelInfo, getComboModels } from "../services/model.js";
+import { getModelInfo, getComboModels, getComboModelOptions } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
 import { getTransform as getPxpipeTransform } from "@/lib/pxpipe/loader.js";
@@ -131,6 +131,11 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
   const requiredCapabilities = detectRequiredCapabilities(body);
   const comboModels = await getComboModels(modelStr, comboOwner);
   if (comboModels) routingContext.comboName = modelStr;
+  // This combo's own per-model thinking-cap map. Passed explicitly through the
+  // handleSingleModel closures below (never stored on the shared routingContext)
+  // so a nested-combo candidate resolving its own map can never clobber this one
+  // for sibling fallback candidates in the same loop.
+  const comboModelOptions = comboModels ? await getComboModelOptions(modelStr, comboOwner) : null;
   if (comboModels) {
     const comboStrategies = settings.comboStrategies || {};
     const comboSpecificStrategy = comboStrategies[modelStr]?.fallbackStrategy;
@@ -149,7 +154,7 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
             const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
             cleanRawReq = { ...clientRawRequest, body: cleanBody };
           }
-          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext, signal, routingContext);
+          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext, signal, routingContext, comboModelOptions);
         },
         log,
         comboName: modelStr,
@@ -165,7 +170,7 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
       body,
       models: augmentedModels,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext, comboModelOptions),
         adapterAdded
       ),
       log,
@@ -184,7 +189,7 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
       body,
       models: soloAugmented,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext, null),
         adapterAdded
       ),
       log,
@@ -194,13 +199,13 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
     });
   }
 
-  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, errorContext, signal, routingContext);
+  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, errorContext, signal, routingContext, null);
 }
 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, errorContext = {}, signal = null, routingContext = {}) {
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, errorContext = {}, signal = null, routingContext = {}, comboModelOptions = null) {
   // Combo names are unique per owner. routeChat already resolved both values;
   // fallback recursion carries them instead of repeating the same DB reads.
   const comboOwner = routingContext.comboOwner;
@@ -218,6 +223,11 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       const requiredCapabilities = detectRequiredCapabilities(body);
       const augmentedModels = augmentModelsWithCapacityAdapter(comboModels, requiredCapabilities, chatSettings);
       const adapterAdded = augmentedModels.filter((m) => !comboModels.includes(m));
+      // Nested combo (modelStr here is itself a combo name found inside another
+      // combo's models[]): resolve its own cap map locally. Deliberately independent
+      // of the comboModelOptions parameter above — a nested combo's caps never
+      // inherit or overwrite the outer combo's map for sibling candidates.
+      const nestedModelOptions = await getComboModelOptions(modelStr, comboOwner);
 
       if (comboStrategy === "fusion") {
         log.info("CHAT", `Combo "${modelStr}" with ${comboModels.length} models (strategy: fusion)`);
@@ -230,7 +240,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
               const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
               cleanRawReq = { ...clientRawRequest, body: cleanBody };
             }
-            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext, signal, routingContext);
+            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, errorContext, signal, routingContext, nestedModelOptions);
           },
           log,
           comboName: modelStr,
@@ -246,7 +256,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         body,
         models: augmentedModels,
         handleSingleModel: withCapacityAdapterStripping(
-          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext),
+          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext, nestedModelOptions),
           adapterAdded
         ),
         log,
@@ -308,6 +318,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     // Use shared chatCore
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
+    const maxThinkingLevel = (comboModelOptions || {})[modelStr]?.maxThinking ?? null;
     const result = await handleChatCore({
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
@@ -336,6 +347,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       pxpipeTransform: chatSettings.pxpipeEnabled ? await getPxpipeTransform() : null,
       onPxpipeEvent: appendPxpipeEvent,
       providerThinking,
+      maxThinkingLevel,
       errorContext,
       entryPhases,
       comboName: routingContext.comboName,

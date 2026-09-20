@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -86,6 +86,10 @@ export const TABLES = {
       name: "TEXT",
       machineId: "TEXT",
       isActive: "INTEGER DEFAULT 1",
+      // 1 = the key may drive the dashboard REST API as its owner (see
+      // resourceScope.js / dashboardGuard.js). Off by default: a leaked routing
+      // key must not become a management credential.
+      management: "INTEGER DEFAULT 0",
       // JSON array of providerConnections.id this key may route to.
       // NULL/empty = unrestricted (the key reaches every account).
       allowedConnectionIds: "TEXT",
@@ -110,6 +114,9 @@ export const TABLES = {
       name: "TEXT NOT NULL",
       kind: "TEXT",
       models: "TEXT NOT NULL",
+      // JSON keyed by the entry string in `models`: { "<model>": { maxThinking: <level> } }.
+      // A fallback candidate never thinks above its cap, whatever the client asked for.
+      modelOptions: "TEXT",
       // See providerConnections.owner.
       owner: "TEXT",
       createdAt: "TEXT NOT NULL",

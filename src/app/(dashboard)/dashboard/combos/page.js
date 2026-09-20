@@ -9,6 +9,24 @@ import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModa
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
+import { THINKING_ORDER } from "open-sse/translator/concerns/thinking.js";
+
+// Cap levels a combo entry's model actually supports, in THINKING_ORDER order.
+// "auto"/"ultra" (and any provider-specific onOff sentinel like "thinking") are
+// deliberately excluded — they're not valid maxThinking cap values (see thinking.js).
+// Returns null when the entry has no resolvable provider/model or no reasoning levels.
+function getCapLevelsForEntry(modelEntry) {
+  const stripped = modelEntry.replace(/\([^()]+\)\s*$/, "").trim();
+  const slash = stripped.indexOf("/");
+  if (slash === -1) return null;
+  const provider = stripped.slice(0, slash);
+  const modelId = stripped.slice(slash + 1);
+  const levels = getThinkingLevels(provider, modelId);
+  if (!levels) return null;
+  const capLevels = THINKING_ORDER.filter((l) => levels.includes(l));
+  return capLevels.length ? capLevels : null;
+}
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -646,7 +664,7 @@ function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps }) 
   );
 }
 
-function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMoveDown, onRemove }) {
+function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMoveDown, onRemove, maxThinking, onMaxThinkingChange }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({ id });
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -712,6 +730,25 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
         </div>
       )}
 
+      {/* Thinking cap */}
+      {(() => {
+        const capLevels = getCapLevelsForEntry(model);
+        if (!capLevels) return null;
+        return (
+          <select
+            value={maxThinking || ""}
+            onChange={(e) => onMaxThinkingChange(e.target.value || null)}
+            className="shrink-0 rounded border border-black/10 bg-transparent px-1 py-0.5 text-[10px] text-text-muted dark:border-white/10"
+            title="Cap max thinking level for this model"
+          >
+            <option value="">no cap</option>
+            {capLevels.map((level) => (
+              <option key={level} value={level}>{level}</option>
+            ))}
+          </select>
+        );
+      })()}
+
       {/* Priority arrows */}
       <div className="flex shrink-0 items-center gap-0.5">
         <button
@@ -748,6 +785,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   // Initialize state with combo values - key prop on parent handles reset on remount
   const [name, setName] = useState(combo?.name || "");
   const [models, setModels] = useState(combo?.models || []);
+  const [modelOptions, setModelOptions] = useState(combo?.modelOptions || {});
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -819,7 +857,17 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   };
 
   const handleRemoveModel = (index) => {
+    const removed = models[index];
     setModels(models.filter((_, i) => i !== index));
+    // Drop the cap entry too — an orphaned modelOptions[model] for a model no
+    // longer in the combo is dead data that would silently resurface if the
+    // same model string is ever re-added.
+    setModelOptions((prev) => {
+      if (!(removed in prev)) return prev;
+      const next = { ...prev };
+      delete next[removed];
+      return next;
+    });
   };
 
   const handleMoveUp = (index) => {
@@ -840,7 +888,11 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
     if (!validateName(name)) return;
     setSaving(true);
     // Only an admin sends an owner; for everyone else the server stamps their own.
-    await onSave({ name: name.trim(), models, ...(canAssignOwner ? { owner: owner.trim() || null } : {}) });
+    await onSave({
+      name: name.trim(), models,
+      modelOptions: Object.keys(modelOptions).length ? modelOptions : null,
+      ...(canAssignOwner ? { owner: owner.trim() || null } : {}),
+    });
     setSaving(false);
   };
 
@@ -908,10 +960,29 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
                         const updated = [...models];
                         updated[index] = newVal;
                         setModels(updated);
+                        // Model-string edits carry the cap entry to its new key —
+                        // otherwise a rename silently drops (or leaves orphaned) a cap.
+                        setModelOptions((prev) => {
+                          if (!(model in prev)) return prev;
+                          const next = { ...prev };
+                          const opt = next[model];
+                          delete next[model];
+                          next[newVal] = opt;
+                          return next;
+                        });
                       }}
                       onMoveUp={() => handleMoveUp(index)}
                       onMoveDown={() => handleMoveDown(index)}
                       onRemove={() => handleRemoveModel(index)}
+                      maxThinking={modelOptions[model]?.maxThinking}
+                      onMaxThinkingChange={(level) => {
+                        setModelOptions((prev) => {
+                          const next = { ...prev };
+                          if (level) next[model] = { maxThinking: level };
+                          else delete next[model];
+                          return next;
+                        });
+                      }}
                     />
                   ))}
                 </div>

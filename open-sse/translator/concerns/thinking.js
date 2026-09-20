@@ -5,6 +5,12 @@
 // Discrete effort levels, ordered low→high.
 export const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
+// Full cap-comparable ordering (adds "none" at the bottom), used by combo
+// per-model thinking caps to clamp a requested level down. "auto"/"ultra" are
+// deliberately absent — adaptive intent is never clamped, and "ultra" has no
+// defined position relative to the others.
+export const THINKING_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
 // Web-standard level → budget_tokens (Anthropic/Gemini docs).
 export const LEVEL_TO_BUDGET = {
   none: 0,

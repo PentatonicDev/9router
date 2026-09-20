@@ -178,6 +178,7 @@ describe("MiniMax-M3 multi-transport routing", () => {
       expect.anything(),
       "test-connection",
       null,
+      null, // maxThinkingLevel — not set by this test
     );
     expect(executeMock).toHaveBeenCalledTimes(1);
     const requestBody = executeMock.mock.calls[0][0].body;

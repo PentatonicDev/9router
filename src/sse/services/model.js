@@ -92,3 +92,12 @@ export async function getComboModels(modelStr, comboOwner = undefined) {
   }
   return null;
 }
+
+// Per-model thinking cap for a combo, keyed by the literal model-entry string
+// (as stored in combo.models[]), or null when the combo has none. modelStr
+// here is the combo NAME (same argument getComboModels takes), not an entry.
+export async function getComboModelOptions(modelStr, comboOwner = undefined) {
+  if (modelStr.includes("/")) return null;
+  const combo = await getComboByName(modelStr, comboOwner);
+  return combo?.modelOptions || null;
+}

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getComboById, updateCombo, deleteCombo, getComboByName } from "@/lib/localDb";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import { canSee, getRequestIdentity, getScopeFilter, normalizeOwnerInput } from "@/lib/auth/resourceScope";
+import { isValidModelOptions } from "@/app/api/combos/route.js";
 
 // A shared combo (no owner) is usable by everyone but only an admin may change it.
 async function denyWrite(combo) {
@@ -55,6 +56,10 @@ export async function PUT(request, { params }) {
       if (existing && existing.id !== id && (existing.owner ?? null) === (prev.owner ?? null)) {
         return NextResponse.json({ error: "Combo name already exists" }, { status: 400 });
       }
+    }
+
+    if (!isValidModelOptions(body.modelOptions)) {
+      return NextResponse.json({ error: "Invalid modelOptions: unknown maxThinking level" }, { status: 400 });
     }
 
     const patch = { ...body };
