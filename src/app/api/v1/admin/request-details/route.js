@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { adminApiGuard } from "@/lib/auth/adminApiGuard.js";
+import { requestDetailsAuth } from "@/lib/auth/requestDetailsAuth.js";
+import { getUsageVisibilityForFilter } from "@/lib/auth/usageScope.js";
 import { getRequestDetails } from "@/lib/db/index.js";
 
 // Bulky fields dropped from each row unless ?full=1 is given. `response` is
@@ -21,13 +22,17 @@ function sanitizeDetail(detail, full) {
 }
 
 /**
- * GET /api/v1/admin/request-details — raw request-details rows for an admin
- * API key, gated by settings.enableObservability. Same query params as the
- * dashboard's /api/usage/request-details, minus its dashboard-session scoping.
+ * GET /api/v1/admin/request-details — raw request-details rows for any
+ * active, owned API key, gated by requireLogin+enableObservability. Same
+ * query params as the dashboard's /api/usage/request-details, minus its
+ * dashboard-session scoping — an owner sees only its own connections/keys;
+ * the admin owner sees everything. Full bodies are returned for every row
+ * here (unlike the dashboard route) since non-visible rows are excluded
+ * before serialization, not redacted after.
  */
 export async function GET(request) {
-  const guardError = await adminApiGuard(request);
-  if (guardError) return guardError;
+  const auth = await requestDetailsAuth(request);
+  if (auth.error) return auth.error;
 
   try {
     const { searchParams } = new URL(request.url);
@@ -48,6 +53,12 @@ export async function GET(request) {
     for (const key of ["provider", "model", "connectionId", "status", "startDate", "endDate"]) {
       const value = searchParams.get(key);
       if (value) filter[key] = value;
+    }
+
+    const visibility = await getUsageVisibilityForFilter(auth.scopeFilter);
+    if (visibility) {
+      filter.apiKeys = [...visibility.apiKeys];
+      filter.connectionIds = [...visibility.connectionIds];
     }
 
     const full = searchParams.get("full") === "1";

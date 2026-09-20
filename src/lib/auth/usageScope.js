@@ -6,9 +6,11 @@ import { maskApiKey } from "@/lib/db/helpers/maskKey.js";
  * The connection ids and raw key values the caller may see, or null when
  * unrestricted. Usage rows are labelled with account and key names, so the
  * aggregates have to be filtered with the same predicate as the resources.
+ * Parameterized on an already-resolved scope filter (rather than reading the
+ * cookie-based session itself) so an API-key-authenticated caller with no
+ * dashboard session can reuse the same visibility computation.
  */
-export async function getUsageVisibility() {
-  const filter = await getScopeFilter();
+export async function getUsageVisibilityForFilter(filter) {
   if (!filter) return null;
   const [connections, keys] = await Promise.all([getProviderConnections(), getApiKeys()]);
   return {
@@ -17,6 +19,10 @@ export async function getUsageVisibility() {
     // Aggregates key their rows by the masked form, never the raw value.
     maskedApiKeys: new Set(keys.filter((k) => canSee(k, filter)).map((k) => maskApiKey(k.key))),
   };
+}
+
+export async function getUsageVisibility() {
+  return getUsageVisibilityForFilter(await getScopeFilter());
 }
 
 // Rows with no account and no key are local/unattributed traffic: visible to all.

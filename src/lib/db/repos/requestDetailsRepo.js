@@ -189,6 +189,17 @@ export async function getRequestDetails(filter = {}) {
     if (filter.model) q = q.where("model", "=", filter.model);
     if (filter.connectionId) q = q.where("connectionId", "=", filter.connectionId);
     if (filter.apiKey) q = q.where("apiKey", "=", filter.apiKey);
+    // Visibility scoping (owner-restricted callers): both forms coexist, the
+    // single-value ones above stay for the dashboard route's explicit query params.
+    // NULL apiKey/connectionId means unattributed/local traffic, which
+    // canSeeUsageRow() treats as visible to everyone — so NULL rows must pass
+    // this filter too, not just rows matching the visible id list.
+    if (filter.apiKeys?.length) {
+      q = q.where((eb) => eb.or([eb("apiKey", "is", null), eb("apiKey", "in", filter.apiKeys)]));
+    }
+    if (filter.connectionIds?.length) {
+      q = q.where((eb) => eb.or([eb("connectionId", "is", null), eb("connectionId", "in", filter.connectionIds)]));
+    }
     if (filter.status) q = q.where("status", "=", filter.status);
     if (filter.startDate) q = q.where("timestamp", ">=", new Date(filter.startDate).toISOString());
     if (filter.endDate) q = q.where("timestamp", "<=", new Date(filter.endDate).toISOString());

@@ -68,7 +68,15 @@ export async function GET(request) {
     if (status) filter.status = status;
     if (startDate) filter.startDate = startDate;
     if (endDate) filter.endDate = endDate;
-    
+
+    // Push visibility into the SQL filter so pagination totals reflect the
+    // visible set, not the full table (the post-read canSeeUsageRow filter
+    // below stays as a belt-and-suspenders pass for the masked-key-only edge case).
+    if (visibility) {
+      filter.apiKeys = [...visibility.apiKeys];
+      filter.connectionIds = [...visibility.connectionIds];
+    }
+
     const result = await getRequestDetails(filter);
 
     // The stored details include full request bodies (user prompts, tool calls)
