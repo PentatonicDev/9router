@@ -22,6 +22,19 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
     organization: "",
   });
   const [cloudflareData, setCloudflareData] = useState({ accountId: "" });
+  // Credential fields start blank — "leave blank to keep the current
+  // credential" (same convention as the generic apiKey field above), never
+  // pre-filled from the stored secret (GET already strips it).
+  const [bedrockData, setBedrockData] = useState({
+    authMethod: "api_key",
+    region: "",
+    homeRegion: "",
+    inferenceProfilePrefix: "",
+    endpoint: "",
+    accessKeyId: "",
+    secretAccessKey: "",
+    sessionToken: "",
+  });
   const [region, setRegion] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -60,6 +73,19 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
       if (connection.provider === "cloudflare-ai" && connection.providerSpecificData) {
         setCloudflareData({ accountId: connection.providerSpecificData.accountId || "" });
       }
+      if (connection.provider === "bedrock") {
+        const psd = connection.providerSpecificData || {};
+        setBedrockData({
+          authMethod: psd.authMethod === "iam" ? "iam" : "api_key",
+          region: psd.region || "us-east-1",
+          homeRegion: psd.homeRegion || "",
+          inferenceProfilePrefix: psd.inferenceProfilePrefix || "",
+          endpoint: psd.endpoint || "",
+          accessKeyId: "",
+          secretAccessKey: "",
+          sessionToken: "",
+        });
+      }
       // Load region for providers that support it (e.g. xiaomi-tokenplan)
       const providerCfg = AI_PROVIDERS?.[connection.provider];
       if (providerCfg?.regions) {
@@ -74,6 +100,9 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const isOAuth = connection?.authType === "oauth";
   const isAzure = connection?.provider === "azure";
   const isCloudflareAi = connection?.provider === "cloudflare-ai";
+  const isBedrock = connection?.provider === "bedrock";
+  const isBedrockIam = isBedrock && bedrockData.authMethod === "iam";
+  const isBedrockGlobal = isBedrock && bedrockData.region.trim().toLowerCase() === "global";
   const isCompatible = connection
     ? (isOpenAICompatibleProvider(connection.provider) || isAnthropicCompatibleProvider(connection.provider))
     : false;
@@ -84,6 +113,27 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
     if (providerRegions && region) return { ...((connection?.providerSpecificData) || {}), region };
     return undefined;
   };
+
+  // IAM credential fields are optional on edit — blank means "keep the
+  // current value" (route.js PUT merges this onto the existing
+  // providerSpecificData, so an omitted key survives untouched). Region/
+  // prefix/endpoint are ordinary editable fields and always sent.
+  const buildBedrockSpecificData = () => {
+    const next = {
+      authMethod: bedrockData.authMethod,
+      region: bedrockData.region.trim() || "us-east-1",
+      inferenceProfilePrefix: bedrockData.inferenceProfilePrefix,
+      endpoint: bedrockData.endpoint.trim(),
+      ...(isBedrockGlobal ? { homeRegion: bedrockData.homeRegion.trim() } : {}),
+    };
+    if (isBedrockIam) {
+      if (bedrockData.accessKeyId.trim()) next.accessKeyId = bedrockData.accessKeyId.trim();
+      if (bedrockData.secretAccessKey.trim()) next.secretAccessKey = bedrockData.secretAccessKey.trim();
+      if (bedrockData.sessionToken.trim()) next.sessionToken = bedrockData.sessionToken.trim();
+    }
+    return next;
+  };
+  const bedrockIamCredsReady = isBedrockIam && !!bedrockData.accessKeyId.trim() && !!bedrockData.secretAccessKey.trim();
 
   const handleTest = async () => {
     if (!connection?.provider) return;
@@ -100,29 +150,43 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
     }
   };
 
-  const handleValidate = async () => {
-    if (!connection?.provider || !formData.apiKey) return;
+  // Shared by the generic "Check" button (api-key providers, including
+  // bedrock's api_key mode) and bedrock's own IAM "Validate" button below —
+  // the two differ only in whether a fresh apiKey is required.
+  const buildValidatePayload = () => ({
+    provider: connection.provider,
+    apiKey: formData.apiKey,
+    ...(isAzure ? { providerSpecificData: azureData } : {}),
+    ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
+    ...(isBedrock ? { providerSpecificData: buildBedrockSpecificData() } : {}),
+    ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
+  });
+
+  const runValidate = async () => {
     setValidating(true);
     setValidationResult(null);
     try {
       const res = await fetch("/api/providers/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: connection.provider,
-          apiKey: formData.apiKey,
-          ...(isAzure ? { providerSpecificData: azureData } : {}),
-          ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
-          ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
-        }),
+        body: JSON.stringify(buildValidatePayload()),
       });
       const data = await res.json();
-      setValidationResult(data.valid ? "success" : "failed");
+      const isValid = !!data.valid;
+      setValidationResult(isValid ? "success" : "failed");
+      return isValid;
     } catch {
       setValidationResult("failed");
+      return false;
     } finally {
       setValidating(false);
     }
+  };
+
+  const handleValidate = async () => {
+    if (!connection?.provider) return;
+    if (isBedrockIam ? !bedrockIamCredsReady : !formData.apiKey) return;
+    await runValidate();
   };
 
   const handleSubmit = async () => {
@@ -133,40 +197,18 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
         name: formData.name,
         priority: formData.priority,
       };
-      if (!isOAuth && formData.apiKey) {
-        updates.apiKey = formData.apiKey;
+      const hasNewCredential = !isOAuth && (isBedrockIam ? bedrockIamCredsReady : !!formData.apiKey);
+      if (!isOAuth && formData.apiKey) updates.apiKey = formData.apiKey;
+      if (hasNewCredential) {
         let isValid = validationResult === "success";
-        if (!isValid) {
-          try {
-            setValidating(true);
-            setValidationResult(null);
-            const res = await fetch("/api/providers/validate", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                provider: connection.provider,
-                apiKey: formData.apiKey,
-                ...(isAzure ? { providerSpecificData: azureData } : {}),
-                ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
-                ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
-              }),
-            });
-            const data = await res.json();
-            isValid = !!data.valid;
-            setValidationResult(isValid ? "success" : "failed");
-          } catch {
-            setValidationResult("failed");
-          } finally {
-            setValidating(false);
-          }
-        }
+        if (!isValid) isValid = await runValidate();
         if (isValid) {
           updates.testStatus = "active";
           updates.lastError = null;
           updates.lastErrorAt = null;
         }
       }
-      
+
       // Add Azure-specific data if this is an Azure connection
       if (isAzure) {
         updates.providerSpecificData = {
@@ -178,6 +220,9 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
       }
       if (isCloudflareAi) {
         updates.providerSpecificData = { accountId: cloudflareData.accountId };
+      }
+      if (isBedrock) {
+        updates.providerSpecificData = buildBedrockSpecificData();
       }
       // Persist updated region for region-aware providers
       if (providerRegions && region) {
@@ -226,11 +271,11 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
           />
         )}
 
-        {!isOAuth && (
+        {!isOAuth && !isBedrockIam && (
           <>
             <div className="flex gap-2">
               <Input
-                label="API Key"
+                label={isBedrock ? "Bedrock API key (bearer token)" : "API Key"}
                 type="password"
                 value={formData.apiKey}
                 onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
@@ -250,6 +295,84 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
               </Badge>
             )}
           </>
+        )}
+
+        {isBedrock && (
+          <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-semibold text-sm">Amazon Bedrock Configuration</h3>
+              <Badge variant="default">{isBedrockIam ? "IAM (SigV4)" : "API key"}</Badge>
+            </div>
+            <div className="flex flex-col gap-3">
+              {isBedrockIam && (
+                <>
+                  <Input
+                    label="AWS Access Key ID"
+                    value={bedrockData.accessKeyId}
+                    onChange={(e) => setBedrockData({ ...bedrockData, accessKeyId: e.target.value })}
+                    placeholder="AKIA..."
+                    hint="Leave blank to keep the current Access Key ID."
+                  />
+                  <Input
+                    label="AWS Secret Access Key"
+                    type="password"
+                    value={bedrockData.secretAccessKey}
+                    onChange={(e) => setBedrockData({ ...bedrockData, secretAccessKey: e.target.value })}
+                    hint="Leave blank to keep the current Secret Access Key."
+                  />
+                  <Input
+                    label="Session Token (optional)"
+                    type="password"
+                    value={bedrockData.sessionToken}
+                    onChange={(e) => setBedrockData({ ...bedrockData, sessionToken: e.target.value })}
+                    hint="Leave blank to keep the current session token (if any)."
+                  />
+                  <div className="flex items-center gap-3">
+                    <Button onClick={handleValidate} disabled={!bedrockIamCredsReady || validating || saving} variant="secondary">
+                      {validating ? "Validating..." : "Validate"}
+                    </Button>
+                    {validationResult && (
+                      <Badge variant={validationResult === "success" ? "success" : "error"}>
+                        {validationResult === "success" ? "Valid" : "Invalid"}
+                      </Badge>
+                    )}
+                  </div>
+                </>
+              )}
+              <Input
+                label="Region"
+                value={bedrockData.region}
+                onChange={(e) => setBedrockData({ ...bedrockData, region: e.target.value })}
+                placeholder="us-east-1"
+              />
+              {isBedrockGlobal && (
+                <Input
+                  label="Home Region"
+                  value={bedrockData.homeRegion}
+                  onChange={(e) => setBedrockData({ ...bedrockData, homeRegion: e.target.value })}
+                  placeholder="Defaults to us-east-1 — set this to wherever your account has Bedrock control-plane access"
+                />
+              )}
+              <Select
+                label="Cross-Region Inference Profile"
+                value={bedrockData.inferenceProfilePrefix}
+                onChange={(e) => setBedrockData({ ...bedrockData, inferenceProfilePrefix: e.target.value })}
+                options={[
+                  { value: "", label: "None (use the model id as-is)" },
+                  { value: "us.", label: "US" },
+                  { value: "eu.", label: "EU" },
+                  { value: "apac.", label: "APAC" },
+                  { value: "global.", label: "Global" },
+                ]}
+              />
+              <Input
+                label="Endpoint Override (optional)"
+                value={bedrockData.endpoint}
+                onChange={(e) => setBedrockData({ ...bedrockData, endpoint: e.target.value })}
+                placeholder="For a VPC endpoint or GovCloud — leave blank otherwise"
+              />
+            </div>
+          </div>
         )}
 
         {isAzure && (

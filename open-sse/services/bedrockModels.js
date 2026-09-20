@@ -238,6 +238,30 @@ async function discoverBedrockModels(credentials) {
   return { at, region: apiRegion, mode, items, errors };
 }
 
+const INVALID_CREDENTIAL_ERRORS = new Set([
+  "AccessDeniedException",
+  "UnrecognizedClientException",
+  "InvalidSignatureException",
+  "ExpiredTokenException",
+]);
+
+// Cheap control-plane call used to validate a Bedrock credential in either
+// authMethod, shared by /api/providers/validate and the per-connection
+// "Test connection" (testUtils.js) — same client config bedrockClient.js
+// already centralizes for the executor and discovery.
+export async function probeBedrockCredential(credentials) {
+  const client = createBedrockControlPlaneClient(credentials);
+  try {
+    await client.send(new ListFoundationModelsCommand({ byOutputModality: "TEXT" }));
+    return { valid: true, error: null };
+  } catch (err) {
+    if (INVALID_CREDENTIAL_ERRORS.has(err?.name)) {
+      return { valid: false, error: "Invalid credentials" };
+    }
+    return { valid: false, error: err?.message || "Bedrock request failed" };
+  }
+}
+
 function cacheKeyFor(credentials) {
   const psd = credentials?.providerSpecificData || {};
   const secret = psd.authMethod === "iam" ? (psd.accessKeyId || "") : (credentials?.apiKey || "");

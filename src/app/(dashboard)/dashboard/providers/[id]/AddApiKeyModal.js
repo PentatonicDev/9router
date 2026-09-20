@@ -5,6 +5,7 @@ import PropTypes from "prop-types";
 import { Button, Badge, Input, Modal, Select } from "@/shared/components";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { planBulkAdd } from "@/shared/utils/bulkAdd";
+import { summarizeDiscoveryItems } from "@/shared/utils/bedrockDiscovery";
 
 const BULK_PLACEHOLDER = `name1|sk-key1\nname2|sk-key2\nsk-key-only-auto-named`;
 
@@ -501,17 +502,11 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
                 <Button onClick={handleDiscoverBedrockModels} disabled={!canDiscoverBedrock || bedrockDiscovery?.loading} variant="secondary" size="sm">
                   {bedrockDiscovery?.loading ? "Discovering..." : "Discover models"}
                 </Button>
-                {bedrockDiscovery?.discovery && (() => {
-                  const items = bedrockDiscovery.discovery.items || [];
-                  const modelCount = items.filter((i) => i.kind === "model").length;
-                  const profileCount = items.filter((i) => i.kind === "profile").length;
-                  const grantedCount = items.filter((i) => i.access === "granted").length;
-                  return (
-                    <span className="text-xs text-text-muted">
-                      {modelCount} model{modelCount === 1 ? "" : "s"}, {profileCount} profile{profileCount === 1 ? "" : "s"} · {grantedCount} with access granted
-                    </span>
-                  );
-                })()}
+                {bedrockDiscovery?.discovery && (
+                  <span className="text-xs text-text-muted">
+                    {summarizeDiscoveryItems(bedrockDiscovery.discovery.items)}
+                  </span>
+                )}
               </div>
               {bedrockDiscovery?.error && (
                 <p className="text-xs text-red-500 break-words">{bedrockDiscovery.error}</p>

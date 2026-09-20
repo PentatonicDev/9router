@@ -39,6 +39,19 @@ export const AI_MODELS = Object.entries(MODELS).flatMap(([alias, models]) =>
 
 export const getModelKind = (m, fallback = null) => m?.kind || m?.type || fallback;
 
+// Bedrock discovery (open-sse/services/bedrockModels.js) reuses `kind` for
+// "model" vs "profile" (invocation shape — a raw foundation model vs a
+// system-defined inference profile wrapping one), which collides with this
+// same field meaning content type ("llm"/"embedding"/"tts") everywhere else.
+// ListFoundationModels there is always byOutputModality: TEXT, so every
+// bedrock-discovered item is chat/llm regardless of that value — only for
+// bedrock do "model"/"profile" also count as llm.
+export const isLlmKindForProvider = (m, providerId) => {
+  const k = getModelKind(m);
+  if (!k || k === "llm") return true;
+  return providerId === "bedrock" && (k === "model" || k === "profile");
+};
+
 // Capacity metadata for UI badges — icon + label + color per capability.
 export const CAPACITY_META = {
   vision: { icon: "visibility", label: "Vision", desc: "Supports image input", color: "text-blue-500" },

@@ -19,6 +19,7 @@ import {
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { probeBedrockCredential } from "open-sse/services/bedrockModels.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -807,6 +808,15 @@ case "llm7": {
           headers: { Authorization: `Bearer ${connection.apiKey}` },
         }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key or base URL" };
+      }
+      case "bedrock": {
+        // Both authMethod modes (bearer api_key / IAM sigv4) resolve through
+        // the same shared client config — see bedrockClient.js.
+        const result = await probeBedrockCredential({
+          apiKey: connection.apiKey,
+          providerSpecificData: connection.providerSpecificData,
+        });
+        return { valid: result.valid, error: result.error };
       }
       case "kimchi": {
         // Dual-auth: same validation endpoint as the OAuth flow — the token (API key

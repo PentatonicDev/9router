@@ -5,6 +5,7 @@ import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from "open-sse/config/providers.js";
 import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
+import { probeBedrockCredential } from "open-sse/services/bedrockModels.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
@@ -89,7 +90,11 @@ export async function POST(request) {
     const { apiKey, providerSpecificData } = body;
 
     const isNoAuth = AI_PROVIDERS[provider]?.noAuth === true;
-    if (!provider || (!apiKey && provider !== "ollama-local" && !isNoAuth)) {
+    // IAM mode authenticates via providerSpecificData.{accessKeyId,secretAccessKey}
+    // (or the SDK's default credential chain) — same "no apiKey" carve-out
+    // POST /api/providers already applies (src/app/api/providers/route.js).
+    const isBedrockIam = provider === "bedrock" && providerSpecificData?.authMethod === "iam";
+    if (!provider || (!apiKey && provider !== "ollama-local" && !isBedrockIam && !isNoAuth)) {
       return NextResponse.json({ error: "Provider and API key required" }, { status: 400 });
     }
 
@@ -203,6 +208,11 @@ export async function POST(request) {
           valid: isValid,
           error: isValid ? null : "Invalid API token or Account ID",
         });
+      }
+
+      if (provider === "bedrock") {
+        const result = await probeBedrockCredential({ apiKey, providerSpecificData });
+        return NextResponse.json({ valid: result.valid, error: result.error });
       }
 
       if (provider === "azure") {

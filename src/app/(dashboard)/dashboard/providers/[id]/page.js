@@ -7,13 +7,14 @@ import Image from "next/image";
 import { getProviderIconSrc, markProviderIconMissing } from "@/shared/utils/providerIcon";
 import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, XiaomiMimoAuthModal, IFlowCookieModal, GitLabAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
-import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
+import { getModelsByProviderId, isLlmKindForProvider } from "@/shared/constants/models";
 import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { translate } from "@/i18n/runtime";
 import { fetchSuggestedModels } from "@/shared/utils/providerModelsFetcher";
 import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
+import { summarizeDiscoveryItems } from "@/shared/utils/bedrockDiscovery";
 import ModelRow from "./ModelRow";
 import PassthroughModelsSection from "./PassthroughModelsSection";
 import CompatibleModelsSection from "./CompatibleModelsSection";
@@ -86,6 +87,11 @@ export default function ProviderDetailPage() {
   const [oneByOneResults, setOneByOneResults] = useState({});
   const [oneByOneSummary, setOneByOneSummary] = useState(null);
   const stopOneByOneRef = useRef(false);
+  // Per-connection inline message under the "Discover" button (bedrock only) —
+  // { text, isError } keyed by connection id, auto-cleared after 8s or on the
+  // next discover click for that same connection.
+  const [discoveryMessages, setDiscoveryMessages] = useState({});
+  const discoveryMessageTimersRef = useRef({});
   const [importingQoderModels, setImportingQoderModels] = useState(false);
   const [importingClineModels, setImportingClineModels] = useState(false);
   const { copied, copy } = useCopyToClipboard();
@@ -1022,6 +1028,23 @@ export default function ProviderDetailPage() {
   };
 
 
+  const DISCOVERY_MESSAGE_TIMEOUT_MS = 8000;
+
+  const setDiscoveryMessage = (connectionId, message) => {
+    clearTimeout(discoveryMessageTimersRef.current[connectionId]);
+    setDiscoveryMessages((prev) => ({ ...prev, [connectionId]: message }));
+    if (message) {
+      discoveryMessageTimersRef.current[connectionId] = setTimeout(() => {
+        setDiscoveryMessages((prev) => ({ ...prev, [connectionId]: null }));
+      }, DISCOVERY_MESSAGE_TIMEOUT_MS);
+    }
+  };
+
+  useEffect(() => {
+    const timers = discoveryMessageTimersRef.current;
+    return () => Object.values(timers).forEach(clearTimeout);
+  }, []);
+
   const isSelected = (connectionId) => selectedConnectionIds.includes(connectionId);
 
   // Owners come from the accounts themselves, so the filter cannot offer a value
@@ -1103,21 +1126,28 @@ export default function ProviderDetailPage() {
                 }}
                 onDelete={() => handleDelete(conn.id)}
                 onDiscoverModels={providerId === "bedrock" ? async () => {
+                  setDiscoveryMessage(conn.id, null);
                   try {
                     const res = await fetch(`/api/providers/${conn.id}/discover`, { method: "POST" });
                     const data = await res.json().catch(() => null);
                     if (!res.ok) {
-                      alert(data?.error || "Failed to discover Bedrock models");
+                      setDiscoveryMessage(conn.id, { text: data?.error || "Failed to discover Bedrock models", isError: true });
                       return;
                     }
-                    if (data?.discovery?.errors?.length) {
-                      alert(data.discovery.errors.join(" "));
-                    }
+                    const items = data?.discovery?.items || [];
+                    const errors = data?.discovery?.errors || [];
+                    const summaryText = `Discovered ${summarizeDiscoveryItems(items)}`;
+                    setDiscoveryMessage(conn.id, {
+                      text: errors.length ? `${summaryText} — ${errors.join(" ")}` : summaryText,
+                      isError: false,
+                    });
                     await fetchConnections();
                   } catch (error) {
                     console.log("Error discovering Bedrock models:", error);
+                    setDiscoveryMessage(conn.id, { text: "Failed to reach the discovery endpoint", isError: true });
                   }
                 } : undefined}
+                discoveryMessage={discoveryMessages[conn.id] || null}
                 oneByOneStatus={oneByOneResults[conn.id] || null}
               />
             </div>
@@ -1221,7 +1251,7 @@ export default function ProviderDetailPage() {
     const allModels = [
       ...models,
       ...kiloFreeModels.filter((fm) => !models.some((m) => m.id === fm.id)),
-    ].filter((m) => { const k = getModelKind(m); return !k || k === "llm"; });
+    ].filter((m) => isLlmKindForProvider(m, providerId));
     const disabledSet = new Set(disabledModelIds);
     const displayModels = allModels.filter((m) => !disabledSet.has(m.id));
     const disabledDisplayModels = allModels.filter((m) => disabledSet.has(m.id));
@@ -1817,7 +1847,7 @@ export default function ProviderDetailPage() {
             const allIds = [
               ...models,
               ...kiloFreeModels.filter((fm) => !models.some((m) => m.id === fm.id)),
-            ].filter((m) => { const k = getModelKind(m); return !k || k === "llm"; }).map((m) => m.id);
+            ].filter((m) => isLlmKindForProvider(m, providerId)).map((m) => m.id);
             const activeIds = allIds.filter((id) => !disabledModelIds.includes(id));
             return (
               <div className="flex gap-2">
