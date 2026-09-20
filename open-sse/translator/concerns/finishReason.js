@@ -42,6 +42,24 @@ export function toOpenAIFinish(reason, format) {
         case "max_tokens": return OPENAI_FINISH.LENGTH;
         default: return OPENAI_FINISH.STOP;
       }
+    // Bedrock Converse StopReason: end_turn|tool_use|max_tokens|stop_sequence|
+    // content_filtered|guardrail_intervened|malformed_model_output|
+    // malformed_tool_use|model_context_window_exceeded. Only the first 5 have an
+    // obvious OpenAI equivalent — the rest fall through to the default+warning
+    // below so a real occurrence is visible instead of silently becoming "stop".
+    case "bedrock":
+      switch (reason) {
+        case "end_turn": return OPENAI_FINISH.STOP;
+        case "tool_use": return OPENAI_FINISH.TOOL_CALLS;
+        case "max_tokens": return OPENAI_FINISH.LENGTH;
+        case "stop_sequence": return OPENAI_FINISH.STOP;
+        case "content_filtered": return OPENAI_FINISH.CONTENT_FILTER;
+        default:
+          if (reason && reason !== "end_turn") {
+            console.warn(`[bedrock] unmapped StopReason "${reason}" — defaulting finish_reason to "stop"`);
+          }
+          return OPENAI_FINISH.STOP;
+      }
     default:
       return reason || OPENAI_FINISH.STOP;
   }

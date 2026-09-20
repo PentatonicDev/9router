@@ -1,0 +1,222 @@
+/**
+ * OpenAI → Bedrock Converse request translator
+ *
+ * Converse/ConverseStream schema (verified against @aws-sdk/client-bedrock-runtime
+ * dist-types, models_0.d.ts — see reader notes for line refs):
+ *   { messages: [{role, content: ContentBlock[]}], system: [{text}]?,
+ *     inferenceConfig: {maxTokens,temperature,topP,stopSequences}?,
+ *     toolConfig: {tools:[{toolSpec:{name,description,inputSchema:{json}}}], toolChoice}? }
+ *
+ * Gotchas (confirmed from SDK types, not guessed):
+ *  - ImageBlock.source.bytes wants raw Uint8Array, NOT a base64 string like
+ *    OpenAI/Anthropic — must Buffer.from(b64, "base64").
+ *  - ToolUseBlock.input on the request side is a parsed object (__DocumentType),
+ *    not a JSON string — OpenAI's tool_calls[].function.arguments (a string) must
+ *    be JSON.parse()d; malformed JSON is tolerated (falls back to {}) rather than
+ *    thrown, since a client can echo back a truncated/garbled arguments string.
+ *  - No topK in InferenceConfiguration — a client-sent top_k is silently dropped.
+ */
+import { register } from "../index.js";
+import { FORMATS } from "../formats.js";
+import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
+import { DEFAULT_MAX_TOKENS } from "../../config/runtimeConfig.js";
+import { parseDataUri } from "../concerns/image.js";
+
+const MIME_TO_BEDROCK_IMAGE_FORMAT = {
+  "image/png": "png",
+  "image/jpeg": "jpeg",
+  "image/jpg": "jpeg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
+function safeParseJson(s) {
+  if (s == null) return {};
+  if (typeof s !== "string") return s;
+  try {
+    const parsed = JSON.parse(s);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function flattenText(content) {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p) => (typeof p === "string" ? p : (typeof p?.text === "string" ? p.text : "")))
+      .join("\n");
+  }
+  return String(content);
+}
+
+// OpenAI image_url/image/Claude-style image block -> Converse image content block.
+// Returns null (block dropped) when the source isn't a decodable base64 data URI —
+// Converse has no fetch-by-URL image source, unlike OpenAI's image_url.
+function toBedrockImageBlock(part) {
+  if (!part || typeof part !== "object") return null;
+
+  let mimeType, base64;
+  if (part.type === OPENAI_BLOCK.IMAGE_URL) {
+    const url = typeof part.image_url === "string" ? part.image_url : part.image_url?.url;
+    const parsed = parseDataUri(url);
+    if (!parsed) return null;
+    ({ mimeType, base64 } = parsed);
+  } else if (part.type === OPENAI_BLOCK.IMAGE && typeof part.image === "string") {
+    const parsed = parseDataUri(part.image);
+    if (!parsed) return null;
+    mimeType = part.mimeType || parsed.mimeType;
+    base64 = parsed.base64;
+  } else if (part.type === CLAUDE_BLOCK.IMAGE && part.source?.type === "base64" && typeof part.source.data === "string") {
+    mimeType = part.source.media_type || "image/png";
+    base64 = part.source.data;
+  } else {
+    return null;
+  }
+
+  const format = MIME_TO_BEDROCK_IMAGE_FORMAT[mimeType?.toLowerCase()];
+  if (!format) return null; // unsupported mime — drop rather than send a request Bedrock will reject
+
+  return { image: { format, source: { bytes: Buffer.from(base64, "base64") } } };
+}
+
+function toContentBlocks(content) {
+  if (content == null) return [{ text: "" }];
+  if (typeof content === "string") return [{ text: content }];
+  if (!Array.isArray(content)) return [{ text: String(content) }];
+
+  const blocks = [];
+  for (const part of content) {
+    if (typeof part === "string") {
+      blocks.push({ text: part });
+      continue;
+    }
+    if (!part || typeof part !== "object") continue;
+    if (part.type === OPENAI_BLOCK.TEXT && typeof part.text === "string") {
+      blocks.push({ text: part.text });
+      continue;
+    }
+    const image = toBedrockImageBlock(part);
+    if (image) blocks.push(image);
+    else if (typeof part.text === "string") blocks.push({ text: part.text });
+  }
+  return blocks.length ? blocks : [{ text: "" }];
+}
+
+// role:"tool" OpenAI message -> Converse toolResult content block. `status` mirrors
+// the same is_error/status:"error" signal RTK already reads (open-sse/rtk/).
+function toToolResultBlock(msg) {
+  const isError = msg.is_error === true || msg.status === "error";
+  return {
+    toolResult: {
+      toolUseId: msg.tool_call_id || "",
+      content: [{ text: flattenText(msg.content) }],
+      status: isError ? "error" : "success",
+    },
+  };
+}
+
+function convertMessages(messages = []) {
+  const out = [];
+  const systemTexts = [];
+
+  for (const m of messages) {
+    if (!m) continue;
+
+    if (m.role === ROLE.SYSTEM || m.role === ROLE.DEVELOPER) {
+      const t = flattenText(m.content);
+      if (t) systemTexts.push(t);
+      continue;
+    }
+
+    if (m.role === ROLE.TOOL) {
+      out.push({ role: ROLE.USER, content: [toToolResultBlock(m)] });
+      continue;
+    }
+
+    if (m.role === ROLE.ASSISTANT) {
+      const blocks = toContentBlocks(m.content).filter((b) => !("text" in b) || b.text !== "");
+      if (Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          const fn = tc.function || {};
+          blocks.push({
+            toolUse: {
+              toolUseId: tc.id || "",
+              name: fn.name || "",
+              input: safeParseJson(fn.arguments),
+            },
+          });
+        }
+      }
+      out.push({ role: ROLE.ASSISTANT, content: blocks.length ? blocks : [{ text: "" }] });
+      continue;
+    }
+
+    out.push({ role: ROLE.USER, content: toContentBlocks(m.content) });
+  }
+
+  return { messages: out, system: systemTexts.length ? [{ text: systemTexts.join("\n\n") }] : undefined };
+}
+
+function convertTools(tools) {
+  if (!Array.isArray(tools) || tools.length === 0) return undefined;
+  const toolSpecs = [];
+  for (const t of tools) {
+    if (!t) continue;
+    if (t.type === OPENAI_BLOCK.FUNCTION && t.function) {
+      toolSpecs.push({
+        toolSpec: {
+          name: t.function.name,
+          description: t.function.description,
+          inputSchema: { json: t.function.parameters || { type: "object", properties: {} } },
+        },
+      });
+    }
+  }
+  return toolSpecs.length ? toolSpecs : undefined;
+}
+
+function convertToolChoice(choice) {
+  if (!choice || choice === "none") return undefined;
+  if (choice === "auto") return { auto: {} };
+  if (choice === "required" || choice === "any") return { any: {} };
+  if (typeof choice === "object" && choice.type === OPENAI_BLOCK.FUNCTION && choice.function?.name) {
+    return { tool: { name: choice.function.name } };
+  }
+  return undefined;
+}
+
+export function openaiToBedrockConverseRequest(model, body, stream /* , credentials */) {
+  const { messages, system } = convertMessages(body.messages);
+
+  const result = { messages };
+  if (system) result.system = system;
+
+  const inferenceConfig = {};
+  if (body.max_tokens != null || body.max_output_tokens != null) {
+    inferenceConfig.maxTokens = body.max_tokens ?? body.max_output_tokens ?? DEFAULT_MAX_TOKENS;
+  } else {
+    inferenceConfig.maxTokens = DEFAULT_MAX_TOKENS;
+  }
+  if (body.temperature != null) inferenceConfig.temperature = body.temperature;
+  if (body.top_p != null) inferenceConfig.topP = body.top_p;
+  // Converse has no topK — dropped silently (matches other providers' handling of
+  // fields their target format doesn't support).
+  if (body.stop != null) {
+    inferenceConfig.stopSequences = Array.isArray(body.stop) ? body.stop : [body.stop];
+  }
+  result.inferenceConfig = inferenceConfig;
+
+  const tools = convertTools(body.tools);
+  if (tools) {
+    result.toolConfig = { tools };
+    const toolChoice = convertToolChoice(body.tool_choice);
+    if (toolChoice) result.toolConfig.toolChoice = toolChoice;
+  }
+
+  return result;
+}
+
+register(FORMATS.OPENAI, FORMATS.BEDROCK_CONVERSE, openaiToBedrockConverseRequest, null);

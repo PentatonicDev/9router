@@ -130,8 +130,19 @@ export async function POST(request) {
     if (!provider || !isValidProvider) {
       return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
     }
-    if (!apiKey && provider !== "ollama-local") {
+    // Bedrock IAM mode authenticates via providerSpecificData.{accessKeyId,secretAccessKey},
+    // not a bearer apiKey — same "no apiKey" carve-out ollama-local already has.
+    const isBedrockIam = provider === "bedrock" && body.providerSpecificData?.authMethod === "iam";
+    if (!apiKey && provider !== "ollama-local" && !isBedrockIam) {
       return NextResponse.json({ error: `${isWebCookieProvider ? "Cookie value" : "API Key"} is required` }, { status: 400 });
+    }
+    // accessKeyId without secretAccessKey isn't "use the default provider
+    // chain instead" (that's the case with neither field set) — it's a half
+    // configured credential the SDK would only fail on later, at call time.
+    // The dashboard modal already gates on both; enforce it here too so a
+    // direct API call can't skip it.
+    if (isBedrockIam && !!body.providerSpecificData?.accessKeyId !== !!body.providerSpecificData?.secretAccessKey) {
+      return NextResponse.json({ error: "AWS Access Key ID and Secret Access Key must be provided together" }, { status: 400 });
     }
     const connectionName = name || displayName || AI_PROVIDERS[provider]?.name;
     if (!connectionName) {

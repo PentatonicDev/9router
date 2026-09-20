@@ -362,6 +362,18 @@ const PROVIDER_MODELS_CONFIG = {
     },
   },
 
+  // Bedrock has no "list models live" call cheap enough to run on every page
+  // load (ListFoundationModels + per-model GetFoundationModelAvailability) —
+  // surface whatever POST /api/providers/[id]/discover last persisted instead
+  // of re-discovering here.
+  bedrock: {
+    customResolver: async (connection) => {
+      const discovered = connection.providerSpecificData?.discoveredModels;
+      if (discovered?.items?.length) return { models: discovered.items };
+      return { models: [], warning: "No discovered models yet — use \"Discover models\" to fetch the account's catalog." };
+    },
+  },
+
   // Custom resolvers (non-OpenAI-shaped APIs / token-refresh flows)
   kiro: {
     customResolver: async (connection) => {

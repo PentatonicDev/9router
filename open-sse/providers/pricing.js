@@ -152,6 +152,36 @@ export const PROVIDER_PRICING = {
   gh: {
     "gpt-5.3-codex": { input: 1.75, output: 14.00, cached: 0.175, reasoning: 14.00, cache_creation: 1.75 },
   },
+  // Amazon Bedrock — keyed by the full provider id (chatCore.js passes entry.id,
+  // not entry.alias, through to appendRequestLog -> usageRepo.calculateCost ->
+  // getPricingForModel). Anthropic-on-Bedrock rates mirror the direct API 1:1
+  // (AWS publishes the same $/1M tiers). Every other vendor's numbers below are
+  // AWS list prices at the time of writing, NOT fetched live in this pass —
+  // verify against https://aws.amazon.com/bedrock/pricing/ before trusting them
+  // for a real spend cap (open-sse/services/auth.js Track S).
+  bedrock: {
+    "anthropic.claude-opus-4-1-20250805-v1:0": { input: 5.00, output: 25.00, cached: 0.50, reasoning: 37.50, cache_creation: 5.00 },
+    "anthropic.claude-opus-4-5-20251101-v1:0": { input: 5.00, output: 25.00, cached: 0.50, reasoning: 25.00, cache_creation: 6.25 },
+    "anthropic.claude-sonnet-4-5-20250929-v1:0": { input: 3.00, output: 15.00, cached: 0.30, reasoning: 15.00, cache_creation: 3.75 },
+    "anthropic.claude-haiku-4-5-20251001-v1:0": { input: 1.00, output: 5.00, cached: 0.10, reasoning: 5.00, cache_creation: 1.25 },
+    // ponytail: Nova/Llama/Mistral/DeepSeek/Qwen/Cohere numbers below are
+    // AWS-published list prices at time of writing (training knowledge), not
+    // live-fetched — same caveat as the model ids in registry/bedrock.js.
+    "amazon.nova-micro-v1:0": { input: 0.035, output: 0.14 },
+    "amazon.nova-lite-v1:0": { input: 0.06, output: 0.24 },
+    "amazon.nova-pro-v1:0": { input: 0.80, output: 3.20 },
+    "amazon.nova-premier-v1:0": { input: 2.50, output: 12.50 },
+    "meta.llama3-3-70b-instruct-v1:0": { input: 0.72, output: 0.72 },
+    "meta.llama4-scout-17b-instruct-v1:0": { input: 0.17, output: 0.66 },
+    "meta.llama4-maverick-17b-instruct-v1:0": { input: 0.24, output: 0.97 },
+    "mistral.mistral-large-2407-v1:0": { input: 4.00, output: 12.00 },
+    "mistral.pixtral-large-2502-v1:0": { input: 2.00, output: 6.00 },
+    "deepseek.r1-v1:0": { input: 1.35, output: 5.40 },
+    "deepseek.v3-v1:0": { input: 0.58, output: 1.68 },
+    "qwen.qwen3-32b-v1:0": { input: 0.15, output: 0.60 },
+    "qwen.qwen3-coder-480b-a35b-v1:0": { input: 0.22, output: 0.90 },
+    "cohere.command-r-plus-v1:0": { input: 3.00, output: 15.00 },
+  },
   // TokenRouter — exact rates from https://api.tokenrouter.com/api/pricing ($1/1M tokens).
   // Ratio→USD: input = model_ratio×2, output = model_ratio×completion_ratio×2.
   // These override the canonical MODEL_PRICING/PATTERN_PRICING, whose rates often

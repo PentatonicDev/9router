@@ -1,5 +1,10 @@
 import PropTypes from "prop-types";
-import { CapacityBadges } from "@/shared/components";
+import { Badge, CapacityBadges } from "@/shared/components";
+
+// Bedrock discovery is the only source that puts `kind` ("model"/"profile")
+// and `access` ("granted"/"denied"/"unknown") on a model entry — badges are a
+// no-op for every other provider's plain {id, name} objects.
+const ACCESS_BADGE_VARIANT = { granted: "success", denied: "error", unknown: "default" };
 
 export default function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting, onDisable, caps, thinkingSuffix }) {
   const displayModel = thinkingSuffix ? `${fullModel}(${thinkingSuffix})` : fullModel;
@@ -28,6 +33,12 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
           <code className="max-w-[72vw] truncate rounded bg-sidebar px-1.5 py-0.5 font-mono text-xs text-text-muted sm:max-w-[360px]">{displayModel}</code>
           <span className="flex min-w-0 items-center text-[9px] gap-1 pl-1">
             {model.name && <span className="truncate text-[9px] italic text-text-muted/70">{model.name}</span>}
+            {model.kind === "profile" && <Badge size="sm">profile</Badge>}
+            {model.access && (
+              <Badge size="sm" variant={ACCESS_BADGE_VARIANT[model.access] || "default"}>
+                {model.access}
+              </Badge>
+            )}
             <CapacityBadges caps={caps} colorOverride="text-text-muted/70" size={12} />
           </span>
         </div>

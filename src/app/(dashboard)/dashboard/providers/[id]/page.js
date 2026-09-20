@@ -158,7 +158,7 @@ export default function ProviderDetailPage() {
   const supportsApiKeyAuth = !!APIKEY_PROVIDERS[providerId] || authModes.includes("apikey");
   const isFreeNoAuth = !!FREE_PROVIDERS[providerId]?.noAuth;
   const staticModels = getModelsByProviderId(providerId);
-  const models = (providerId === "cursor" || providerId === "zed") && liveModels.length > 0
+  const models = (providerId === "cursor" || providerId === "zed" || providerId === "bedrock") && liveModels.length > 0
     ? liveModels
     : staticModels;
   const providerAlias = getProviderAlias(providerId);
@@ -484,7 +484,7 @@ export default function ProviderDetailPage() {
   // the provider id or connection list changes — no polling, no loop.
   // Cursor path is statement-identical to before; zed adds error surfacing.
   useEffect(() => {
-    const isLiveCatalog = providerId === "cursor" || providerId === "zed";
+    const isLiveCatalog = providerId === "cursor" || providerId === "zed" || providerId === "bedrock";
     if (!isLiveCatalog) {
       setLiveModels([]);
       return;
@@ -1102,6 +1102,22 @@ export default function ProviderDetailPage() {
                   setShowEditModal(true);
                 }}
                 onDelete={() => handleDelete(conn.id)}
+                onDiscoverModels={providerId === "bedrock" ? async () => {
+                  try {
+                    const res = await fetch(`/api/providers/${conn.id}/discover`, { method: "POST" });
+                    const data = await res.json().catch(() => null);
+                    if (!res.ok) {
+                      alert(data?.error || "Failed to discover Bedrock models");
+                      return;
+                    }
+                    if (data?.discovery?.errors?.length) {
+                      alert(data.discovery.errors.join(" "));
+                    }
+                    await fetchConnections();
+                  } catch (error) {
+                    console.log("Error discovering Bedrock models:", error);
+                  }
+                } : undefined}
                 oneByOneStatus={oneByOneResults[conn.id] || null}
               />
             </div>

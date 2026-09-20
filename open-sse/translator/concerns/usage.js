@@ -59,6 +59,12 @@ const USAGE_EXTRACTORS = {
     const total = typeof raw.totalTokens === "number" ? raw.totalTokens : input + output;
     return { promptTokens: input, completionTokens: output, totalTokens: total };
   },
+  bedrock(raw) {
+    const input = n(raw.inputTokens), output = n(raw.outputTokens);
+    const total = typeof raw.totalTokens === "number" ? raw.totalTokens : input + output;
+    const cacheRead = n(raw.cacheReadInputTokens), cacheCreate = n(raw.cacheWriteInputTokens);
+    return { promptTokens: input, completionTokens: output, totalTokens: total, cachedTokens: cacheRead, cacheCreationTokens: cacheCreate };
+  },
 };
 
 // Convert provider-native usage object → OpenAI usage. Returns null if no extractor/raw.

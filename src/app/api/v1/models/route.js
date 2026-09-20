@@ -117,6 +117,14 @@ const LIVE_MODEL_RESOLVERS = {
     }, { log: console });
     return result?.models?.length ? { models: result.models } : null;
   },
+  // Bedrock's live catalog is per-connection discovery (POST .../discover),
+  // not fetched on every /v1/models call — surface the last persisted result
+  // when there is one, else fall through to the registry's seeded models.
+  bedrock: async (conn) => {
+    const items = conn.providerSpecificData?.discoveredModels?.items;
+    if (!items?.length) return null;
+    return { models: items.map((m) => ({ id: m.id, name: m.name })) };
+  },
   zed: async (conn) => {
     const result = await resolveZedModels({
       accessToken: conn.accessToken,

@@ -3,6 +3,7 @@ import { canSee, getRequestIdentity, getScopeFilter, normalizeOwnerInput } from 
 import { isScopeEnabled } from "@/lib/auth/resourceScope";
 import { getSettings } from "@/lib/localDb";
 import { setAccountDisabled } from "@/lib/db/repos/disabledAccountsRepo.js";
+import { normalizeProviderSpecificData } from "@/lib/providerNormalization";
 
 // A shared account (no owner) is the admin's to change. Everyone else may use
 // it and switch it off for themselves, but editing or deleting it would affect
@@ -144,6 +145,18 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: proxyPoolResult.error }, { status: 400 });
     }
 
+    // Same pairing rule POST enforces on create (src/app/api/providers/route.js):
+    // an edit that leaves exactly one of the two IAM secret fields set is a half
+    // configured credential, checked against the post-merge state so an edit
+    // that only touches one of the pair (the other carried over from before)
+    // is judged on the resulting whole, not just the incoming diff.
+    if (existing.provider === "bedrock" && providerSpecificData !== undefined) {
+      const mergedPsd = { ...(existing.providerSpecificData || {}), ...providerSpecificData };
+      if (mergedPsd.authMethod === "iam" && !!mergedPsd.accessKeyId !== !!mergedPsd.secretAccessKey) {
+        return NextResponse.json({ error: "AWS Access Key ID and Secret Access Key must be provided together" }, { status: 400 });
+      }
+    }
+
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (priority !== undefined) updateData.priority = priority;
@@ -184,6 +197,16 @@ export async function PUT(request, { params }) {
         } else {
           updateData.providerSpecificData.proxyPoolId = proxyPoolResult.proxyPoolId;
         }
+      }
+
+      // Only when providerSpecificData is actually part of this edit — a
+      // proxy-only or proxyPool-only PUT leaves it untouched. Providers with
+      // no normalizer branch (everything but ollama-local/bedrock) pass
+      // through unchanged (see normalizeProviderSpecificData).
+      if (providerSpecificData !== undefined) {
+        updateData.providerSpecificData = normalizeProviderSpecificData(
+          existing.provider, body, updateData.providerSpecificData
+        ) || updateData.providerSpecificData;
       }
     }
 

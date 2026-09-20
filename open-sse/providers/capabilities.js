@@ -280,6 +280,34 @@ export const PROVIDER_CAPABILITIES = {
   "ollama": {
     "deepseek-v4.1-flash:cloud": { vision: true, reasoning: true, thinkingFormat: "deepseek", contextWindow: 1000000, maxOutput: 384000 },
   },
+  // Amazon Bedrock — one generic executor for every vendor, so capabilities are
+  // keyed by Bedrock's own model id (not a shared PATTERN, to avoid a Bedrock id
+  // accidentally matching an unrelated pattern meant for another provider's
+  // naming convention). Claude-on-Bedrock ids get reasoning via the
+  // "bedrock-converse" thinkingFormat (additionalModelRequestFields.thinking —
+  // see thinkingUnified.js). ponytail: the field name/shape is per AWS Converse
+  // docs for Claude, mocked-stream tested only — needs one live confirmation
+  // against a real Anthropic-on-Bedrock ConverseStream call before prod rollout.
+  "bedrock": {
+    "anthropic.claude-opus-4-1-20250805-v1:0": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 200000, maxOutput: 32000 },
+    "anthropic.claude-opus-4-5-20251101-v1:0": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
+    "anthropic.claude-sonnet-4-5-20250929-v1:0": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
+    "anthropic.claude-haiku-4-5-20251001-v1:0": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 200000, maxOutput: 64000 },
+    "amazon.nova-micro-v1:0": { contextWindow: 128000, maxOutput: 10000 },
+    "amazon.nova-lite-v1:0": { vision: true, contextWindow: 300000, maxOutput: 10000 },
+    "amazon.nova-pro-v1:0": { vision: true, contextWindow: 300000, maxOutput: 10000 },
+    "amazon.nova-premier-v1:0": { vision: true, contextWindow: 1000000, maxOutput: 10000 },
+    "meta.llama3-3-70b-instruct-v1:0": { contextWindow: 128000, maxOutput: 8192 },
+    "meta.llama4-scout-17b-instruct-v1:0": { vision: true, contextWindow: 328000, maxOutput: 8192 },
+    "meta.llama4-maverick-17b-instruct-v1:0": { vision: true, contextWindow: 1000000, maxOutput: 8192 },
+    "mistral.mistral-large-2407-v1:0": { contextWindow: 128000, maxOutput: 8192 },
+    "mistral.pixtral-large-2502-v1:0": { vision: true, contextWindow: 128000, maxOutput: 8192 },
+    "deepseek.r1-v1:0": { contextWindow: 128000, maxOutput: 8192 },
+    "deepseek.v3-v1:0": { contextWindow: 128000, maxOutput: 8192 },
+    "qwen.qwen3-32b-v1:0": { contextWindow: 128000, maxOutput: 8192 },
+    "qwen.qwen3-coder-480b-a35b-v1:0": { contextWindow: 256000, maxOutput: 8192 },
+    "cohere.command-r-plus-v1:0": { contextWindow: 128000, maxOutput: 4096 },
+  },
 };
 
 /**

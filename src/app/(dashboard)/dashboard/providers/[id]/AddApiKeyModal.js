@@ -16,10 +16,11 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   const credentialLabel = isCookie ? "Cookie Value" : provider === "qoder" ? "Personal Access Token (PAT)" : "API Key";
   const credentialPlaceholder = isCookie
     ? (provider === "grok-web" ? "sso=xxxxx... or just the raw value" : "eyJhbGciOi...")
-    : (isXaiApiKey ? "xai-..." : provider === "qoder" ? "pt-..." : "");
+    : (isXaiApiKey ? "xai-..." : provider === "qoder" ? "pt-..." : provider === "bedrock" ? "Bedrock API key (bearer token)" : "");
 
   const isAzure = provider === "azure";
   const isCloudflareAi = provider === "cloudflare-ai";
+  const isBedrock = provider === "bedrock";
   const providerRegions = AI_PROVIDERS?.[provider]?.regions || null;
   const defaultRegion = AI_PROVIDERS?.[provider]?.defaultRegion || providerRegions?.[0]?.id || "";
 
@@ -38,6 +39,22 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     organization: "",
   });
   const [cloudflareData, setCloudflareData] = useState({ accountId: "" });
+  const [bedrockData, setBedrockData] = useState({
+    authMethod: "api_key",
+    region: "us-east-1",
+    homeRegion: "",
+    inferenceProfilePrefix: "",
+    endpoint: "",
+    accessKeyId: "",
+    secretAccessKey: "",
+    sessionToken: "",
+  });
+  const isBedrockIam = isBedrock && bedrockData.authMethod === "iam";
+  const isBedrockGlobal = isBedrock && bedrockData.region.trim().toLowerCase() === "global";
+  // null = never run, else { loading, discovery: {items,errors} | null, error: string | null }
+  const [bedrockDiscovery, setBedrockDiscovery] = useState(null);
+  const canDiscoverBedrock = isBedrock && !!bedrockData.region.trim()
+    && (isBedrockIam ? !!bedrockData.accessKeyId.trim() && !!bedrockData.secretAccessKey.trim() : !!formData.apiKey);
   const [region, setRegion] = useState(defaultRegion);
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
@@ -67,6 +84,34 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     if (isCloudflareAi) {
       return { accountId: cloudflareData.accountId };
     }
+    if (isBedrock) {
+      const base = {
+        authMethod: bedrockData.authMethod,
+        region: bedrockData.region.trim() || "us-east-1",
+        inferenceProfilePrefix: bedrockData.inferenceProfilePrefix,
+        ...(bedrockData.endpoint.trim() ? { endpoint: bedrockData.endpoint.trim() } : {}),
+        ...(isBedrockGlobal && bedrockData.homeRegion.trim() ? { homeRegion: bedrockData.homeRegion.trim() } : {}),
+      };
+      // Carries over whatever "Discover models" last found so the connection
+      // is saved with those items already in place (see requirement 3/4b) —
+      // never re-fetched here, just the last preview result.
+      if (bedrockDiscovery?.discovery?.items?.length) {
+        base.discoveredModels = {
+          at: bedrockDiscovery.discovery.at,
+          items: bedrockDiscovery.discovery.items,
+          errors: bedrockDiscovery.discovery.errors,
+        };
+      }
+      if (bedrockData.authMethod === "iam") {
+        return {
+          ...base,
+          accessKeyId: bedrockData.accessKeyId.trim(),
+          secretAccessKey: bedrockData.secretAccessKey.trim(),
+          ...(bedrockData.sessionToken.trim() ? { sessionToken: bedrockData.sessionToken.trim() } : {}),
+        };
+      }
+      return base;
+    }
     if (providerRegions && region) {
       return { region };
     }
@@ -90,9 +135,29 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     }
   };
 
+  const handleDiscoverBedrockModels = async () => {
+    setBedrockDiscovery({ loading: true, discovery: null, error: null });
+    try {
+      const res = await fetch("/api/providers/bedrock/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: formData.apiKey, providerSpecificData: buildProviderSpecificData() }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setBedrockDiscovery({ loading: false, discovery: null, error: data?.error || "Discovery failed" });
+        return;
+      }
+      setBedrockDiscovery({ loading: false, discovery: data.discovery, error: null });
+    } catch {
+      setBedrockDiscovery({ loading: false, discovery: null, error: "Failed to reach the discovery endpoint" });
+    }
+  };
+
   const handleSubmit = async () => {
     if (!provider) return;
-    if (!isOllamaLocal && !formData.apiKey) return;
+    if (!isOllamaLocal && !isBedrockIam && !formData.apiKey) return;
+    if (isBedrockIam && (!bedrockData.accessKeyId.trim() || !bedrockData.secretAccessKey.trim())) return;
     if (!isOllamaLocal) {
       // Non-ollama providers require a name
       if (!formData.name) return;
@@ -249,7 +314,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             </div>
           </div>
         )}
-        {!isOllamaLocal && (
+        {!isOllamaLocal && !isBedrockIam && (
           <div className="flex gap-2">
             <Input
               label={credentialLabel}
@@ -364,6 +429,100 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
           </div>
         )}
 
+        {isBedrock && (
+          <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
+            <h3 className="font-semibold mb-3 text-sm">Amazon Bedrock Configuration</h3>
+            <div className="flex flex-col gap-3">
+              <Select
+                label="Auth Method"
+                value={bedrockData.authMethod}
+                onChange={(e) => setBedrockData({ ...bedrockData, authMethod: e.target.value })}
+                options={[
+                  { value: "api_key", label: "API key (bearer token)" },
+                  { value: "iam", label: "IAM access key / secret" },
+                ]}
+              />
+              {isBedrockIam && (
+                <>
+                  <Input
+                    label="AWS Access Key ID"
+                    value={bedrockData.accessKeyId}
+                    onChange={(e) => setBedrockData({ ...bedrockData, accessKeyId: e.target.value })}
+                    placeholder="AKIA..."
+                  />
+                  <Input
+                    label="AWS Secret Access Key"
+                    type="password"
+                    value={bedrockData.secretAccessKey}
+                    onChange={(e) => setBedrockData({ ...bedrockData, secretAccessKey: e.target.value })}
+                  />
+                  <Input
+                    label="Session Token (optional)"
+                    type="password"
+                    value={bedrockData.sessionToken}
+                    onChange={(e) => setBedrockData({ ...bedrockData, sessionToken: e.target.value })}
+                    placeholder="Only needed for temporary/STS credentials"
+                  />
+                </>
+              )}
+              <Input
+                label="Region"
+                value={bedrockData.region}
+                onChange={(e) => setBedrockData({ ...bedrockData, region: e.target.value })}
+                placeholder="us-east-1, eu-west-1, global, ..."
+              />
+              {isBedrockGlobal && (
+                <Input
+                  label="Home Region (control-plane calls for Discover models)"
+                  value={bedrockData.homeRegion}
+                  onChange={(e) => setBedrockData({ ...bedrockData, homeRegion: e.target.value })}
+                  placeholder="Defaults to us-east-1 — set this to wherever your account has Bedrock control-plane access"
+                />
+              )}
+              <Select
+                label="Cross-Region Inference Profile"
+                value={bedrockData.inferenceProfilePrefix}
+                onChange={(e) => setBedrockData({ ...bedrockData, inferenceProfilePrefix: e.target.value })}
+                options={[
+                  { value: "", label: "None (use the model id as-is)" },
+                  { value: "us.", label: "US" },
+                  { value: "eu.", label: "EU" },
+                  { value: "apac.", label: "APAC" },
+                  { value: "global.", label: "Global" },
+                ]}
+              />
+              <Input
+                label="Endpoint Override (optional)"
+                value={bedrockData.endpoint}
+                onChange={(e) => setBedrockData({ ...bedrockData, endpoint: e.target.value })}
+                placeholder="For a VPC endpoint or GovCloud — leave blank otherwise"
+              />
+              <div className="flex items-center gap-2">
+                <Button onClick={handleDiscoverBedrockModels} disabled={!canDiscoverBedrock || bedrockDiscovery?.loading} variant="secondary" size="sm">
+                  {bedrockDiscovery?.loading ? "Discovering..." : "Discover models"}
+                </Button>
+                {bedrockDiscovery?.discovery && (() => {
+                  const items = bedrockDiscovery.discovery.items || [];
+                  const modelCount = items.filter((i) => i.kind === "model").length;
+                  const profileCount = items.filter((i) => i.kind === "profile").length;
+                  const grantedCount = items.filter((i) => i.access === "granted").length;
+                  return (
+                    <span className="text-xs text-text-muted">
+                      {modelCount} model{modelCount === 1 ? "" : "s"}, {profileCount} profile{profileCount === 1 ? "" : "s"} · {grantedCount} with access granted
+                    </span>
+                  );
+                })()}
+              </div>
+              {bedrockDiscovery?.error && (
+                <p className="text-xs text-red-500 break-words">{bedrockDiscovery.error}</p>
+              )}
+              {!!bedrockDiscovery?.discovery?.errors?.length && (
+                <p className="text-xs text-yellow-500 break-words">{bedrockDiscovery.discovery.errors.join(" ")}</p>
+              )}
+            </div>
+          </div>
+        )}
+
         <Input
           label="Priority"
           type="number"
@@ -393,7 +552,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         </p>
 
         <div className="flex gap-2">
-          <Button onClick={handleSubmit} fullWidth disabled={saving || (!isOllamaLocal && (!formData.name || !formData.apiKey)) || (isCompatible && !formData.defaultModel.trim()) || (isAzure && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization)) || (isCloudflareAi && !cloudflareData.accountId)}>
+          <Button onClick={handleSubmit} fullWidth disabled={saving || (!isOllamaLocal && !isBedrockIam && (!formData.name || !formData.apiKey)) || (isBedrockIam && (!formData.name || !bedrockData.accessKeyId.trim() || !bedrockData.secretAccessKey.trim())) || (isCompatible && !formData.defaultModel.trim()) || (isAzure && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization)) || (isCloudflareAi && !cloudflareData.accountId)}>
             {saving ? "Saving..." : "Save"}
           </Button>
           <Button onClick={onClose} variant="ghost" fullWidth>

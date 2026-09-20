@@ -20,6 +20,7 @@ const FORMAT_LEVELS = {
   openai: L.openai,
   "claude-adaptive": L.levelMax,
   "claude-budget": L.budgetX,
+  "bedrock-converse": L.budgetX,
   "gemini-level": L.gemini,
   "gemini-budget": L.base,
   zai: L.onOff,

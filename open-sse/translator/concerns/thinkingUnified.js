@@ -6,6 +6,7 @@ import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 import { getThinkingLevels } from "../../providers/thinkingLevels.js";
 import { PROVIDERS } from "../../providers/index.js";
 import { LEVEL_TO_BUDGET, THINKING_ORDER, budgetToLevel, effortToBudget, effortToThinkingLevel } from "./thinking.js";
+import { DEFAULT_MAX_TOKENS } from "../../config/runtimeConfig.js";
 
 // Map a target wire-format to its native thinking format (when capability has none).
 const FORMAT_TO_NATIVE = {
@@ -277,6 +278,36 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
       if (none && canDisable) { body.thinking = { type: "disabled" }; break; }
       const budget = toBudget(eff, caps.thinkingRange);
       body.thinking = budget === -1 ? { type: "enabled", ...(display ? { display } : {}) } : { type: "enabled", budget_tokens: budget || 8192, ...(display ? { display } : {}) };
+      break;
+    }
+    case "bedrock-converse": {
+      // additionalModelRequestFields.thinking is Bedrock Converse's passthrough
+      // for Claude's native `thinking` field — same shape as claude-budget's
+      // body.thinking, just nested one level deeper (see translator/request/
+      // openai-to-bedrock-converse.js, which must not clobber this field).
+      if (none && canDisable) {
+        if (body.additionalModelRequestFields) delete body.additionalModelRequestFields.thinking;
+        break;
+      }
+      const budget = toBudget(eff, caps.thinkingRange);
+      const budgetTokens = budget === -1 ? undefined : (budget || 8192);
+      if (!body.additionalModelRequestFields) body.additionalModelRequestFields = {};
+      body.additionalModelRequestFields.thinking = budgetTokens
+        ? { type: "enabled", budget_tokens: budgetTokens }
+        : { type: "enabled" };
+      // Anthropic-on-Bedrock requires inferenceConfig.maxTokens strictly greater
+      // than budget_tokens (else 400) — same reconciliation as the direct Claude
+      // API path (prepareClaudeRequest in formats/claude.js).
+      if (budgetTokens) {
+        if (!body.inferenceConfig) body.inferenceConfig = {};
+        const ceiling = caps.maxOutput || DEFAULT_MAX_TOKENS;
+        if (!(body.inferenceConfig.maxTokens > budgetTokens)) {
+          body.inferenceConfig.maxTokens = Math.min(budgetTokens + 1024, ceiling);
+          if (budgetTokens >= body.inferenceConfig.maxTokens) {
+            body.additionalModelRequestFields.thinking.budget_tokens = Math.max(1024, body.inferenceConfig.maxTokens - 1024);
+          }
+        }
+      }
       break;
     }
     case "gemini-level": {
