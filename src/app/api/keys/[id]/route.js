@@ -40,7 +40,7 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { isActive, allowedConnectionIds, name, tags, owner } = body;
+    const { isActive, allowedConnectionIds, name, tags, owner, management } = body;
 
     const filter = await getScopeFilter();
     const existing = await getApiKeyById(id);
@@ -70,9 +70,14 @@ export async function PUT(request, { params }) {
       if (validated.error) return NextResponse.json({ error: validated.error }, { status: 400 });
       updateData.allowedConnectionIds = validated.ids;
     }
-    // Reassigning an owner is an admin action; other callers keep the current one.
-    if (owner !== undefined && (await getRequestIdentity()).isAdmin) {
-      updateData.owner = normalizeOwnerInput(owner);
+    // Reassigning an owner, or granting/revoking management, is an admin action;
+    // a non-admin caller's value is silently ignored, never a 400.
+    if (owner !== undefined || management !== undefined) {
+      const { isAdmin } = await getRequestIdentity();
+      if (isAdmin) {
+        if (owner !== undefined) updateData.owner = normalizeOwnerInput(owner);
+        if (management !== undefined) updateData.management = !!management;
+      }
     }
 
     const updated = await updateApiKey(id, updateData);

@@ -53,6 +53,17 @@ async function hasValidCliToken(headerValue) {
   return headerValue === cachedCliToken;
 }
 
+// Header-only, never a query string: a management key in a URL ends up in
+// server logs, browser history and Referer headers. dashboardGuard.js's own
+// extractApiKey (query-string + x-goog-api-key) is deliberately not reused
+// here — that one also serves the public /v1 LLM gate and must keep accepting
+// those forms; this is the stricter contract for admin/management identity.
+function extractHeaderApiKey(headerStore) {
+  const auth = headerStore.get("authorization");
+  if (auth?.startsWith("Bearer ")) return auth.slice(7);
+  return headerStore.get("x-api-key") || null;
+}
+
 // Request-scoped APIs throw outside a request (boot, background refresh, CLI).
 // Those callers are trusted server-side paths, not impersonation risks, so the
 // absence of a request reads as "no identity" rather than an error.
@@ -63,6 +74,7 @@ async function readRequestContext() {
     return {
       token: cookieStore.get("auth_token")?.value || null,
       cliToken: headerStore.get(CLI_TOKEN_HEADER) || null,
+      apiKey: extractHeaderApiKey(headerStore),
     };
   } catch {
     return null;
@@ -81,6 +93,24 @@ export async function getRequestIdentity() {
   // The CLI destraps lockouts (reset auth mode) without a dashboard session;
   // treating it as admin keeps that escape hatch working once settings are gated.
   if (await hasValidCliToken(ctx.cliToken)) return { isAdmin: true, owner: null };
+
+  if (ctx.apiKey) {
+    // Dynamic import: apiKeysRepo.js imports normalizeOwnerInput/resolveDefaultOwner
+    // from this file, so a static import here would deadlock the ESM graph.
+    const { getApiKeyRoutingContext } = await import("@/lib/db/repos/apiKeysRepo.js");
+    const keyCtx = await getApiKeyRoutingContext(ctx.apiKey);
+    if (keyCtx.valid && keyCtx.owner && keyCtx.management) {
+      const settings = await getSettings();
+      return {
+        isAdmin: keyCtx.owner === ADMIN_OWNER || ssoAdminsFor(settings).includes(keyCtx.owner),
+        owner: keyCtx.owner,
+      };
+    }
+    // Invalid / unmanaged / unowned key on this header: fall through to the
+    // session check below — never escalate, never short-circuit to ANONYMOUS
+    // from this branch alone (a routing key mistakenly sent to a dashboard
+    // route must not lock out a real, separate session).
+  }
 
   const session = await getDashboardAuthSession(ctx.token);
   if (!session) return ANONYMOUS;

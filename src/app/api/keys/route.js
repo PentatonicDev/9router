@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getApiKeys, createApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
-import { getScopeFilter, ownerForCreate, scopeVisible } from "@/lib/auth/resourceScope";
+import { getRequestIdentity, getScopeFilter, ownerForCreate, scopeVisible } from "@/lib/auth/resourceScope";
 
 export const dynamic = "force-dynamic";
 
@@ -33,9 +33,13 @@ export async function POST(request) {
 
     // Always get machineId from server
     const machineId = await getConsistentMachineId();
+    // Only an admin may mint a management key; silently dropped for anyone
+    // else rather than rejected, same treatment as an unauthorized owner.
+    const management = body.management !== undefined && (await getRequestIdentity()).isAdmin
+      ? !!body.management : false;
     const apiKey = await createApiKey(
       name.trim().slice(0, MAX_NAME_LENGTH), machineId, tags ?? null,
-      await ownerForCreate(body.owner),
+      await ownerForCreate(body.owner), management,
     );
 
     return NextResponse.json({
@@ -45,6 +49,7 @@ export async function POST(request) {
       machineId: apiKey.machineId,
       tags: apiKey.tags,
       owner: apiKey.owner,
+      management: apiKey.management,
     }, { status: 201 });
   } catch (error) {
     console.log("Error creating key:", error);

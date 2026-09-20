@@ -7,6 +7,8 @@ const sessionMock = vi.fn();
 const cookieMock = vi.fn();
 const headerMock = vi.fn();
 
+const apiKeyRoutingContextMock = vi.fn();
+
 vi.mock("@/lib/localDb", () => ({ getSettings: () => settingsMock() }));
 vi.mock("@/lib/auth/dashboardSession", () => ({
   getDashboardAuthSession: (token) => sessionMock(token),
@@ -18,6 +20,12 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({ get: (name) => cookieMock(name) }),
   headers: async () => ({ get: (name) => headerMock(name) }),
 }));
+// apiKeysRepo.js imports normalizeOwnerInput/resolveDefaultOwner from this same
+// module, so resourceScope.js reaches it with a dynamic import (see the comment
+// at its call site) — mock the whole module rather than only that one export.
+vi.mock("@/lib/db/repos/apiKeysRepo.js", () => ({
+  getApiKeyRoutingContext: (key) => apiKeyRoutingContextMock(key),
+}));
 
 const {
   ADMIN_OWNER, canSee, canEdit, normalizeOwner, normalizeOwnerInput,
@@ -28,11 +36,24 @@ const {
 const ALICE = "alice@corp.com";
 const BOB = "bob@corp.com";
 
-function session({ scope = true, email = null, admins = [], cliToken = null, authMode = "sso" } = {}) {
+// headerMock stands in for the real per-name Headers.get: route each header
+// name to its own value instead of one shared return, so setting a CLI token
+// doesn't also leak into the unrelated Authorization/x-api-key reads below.
+function session({
+  scope = true, email = null, admins = [], cliToken = null, authMode = "sso",
+  authorization = null, apiKeyHeader = null, noSession = false,
+} = {}) {
   settingsMock.mockResolvedValue({ scopeResourcesByUser: scope, ssoAdminEmails: admins, authMode });
-  sessionMock.mockResolvedValue(email ? { oidcEmail: email } : { authenticated: true });
-  cookieMock.mockReturnValue({ value: "token" });
-  headerMock.mockReturnValue(cliToken);
+  // noSession: no dashboard cookie at all — distinct from `email: null`, which
+  // is the password-login session (still authenticated, just no SSO e-mail).
+  sessionMock.mockResolvedValue(noSession ? null : email ? { oidcEmail: email } : { authenticated: true });
+  cookieMock.mockReturnValue(noSession ? undefined : { value: "token" });
+  headerMock.mockImplementation((name) => {
+    if (name === "x-9r-cli-token") return cliToken;
+    if (name === "authorization") return authorization;
+    if (name === "x-api-key") return apiKeyHeader;
+    return null;
+  });
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -145,6 +166,87 @@ describe("identity", () => {
   it("a wrong CLI token grants nothing", async () => {
     session({ email: ALICE, admins: [], cliToken: "not-the-token" });
     expect((await getRequestIdentity()).isAdmin).toBe(false);
+  });
+});
+
+describe("identity via a management API key (header-only, no dashboard session)", () => {
+  it("an active, owned, management key authenticates as its owner", async () => {
+    session({ email: null, authorization: "Bearer mgmt-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, management: true });
+
+    expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: ALICE });
+  });
+
+  it("also reads the key from x-api-key when Authorization is absent", async () => {
+    session({ email: null, apiKeyHeader: "mgmt-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, management: true });
+
+    expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: ALICE });
+  });
+
+  // Mutation-proof for a dropped/flipped `keyCtx.management` check: only this
+  // flag differs from the passing case above, and falls through to "no session"
+  // (ANONYMOUS) rather than escalating.
+  it("falls through to ANONYMOUS when management is false, even if otherwise valid+owned", async () => {
+    session({ noSession: true, authorization: "Bearer routing-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, management: false });
+
+    expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: null });
+  });
+
+  // Mutation-proof for a dropped `keyCtx.owner` check: only owner differs.
+  it("falls through to ANONYMOUS for a shared (owner: null) key even with management: true", async () => {
+    session({ noSession: true, authorization: "Bearer shared-mgmt-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: null, management: true });
+
+    expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: null });
+    // {isAdmin:false, owner:null} is also what a dropped `keyCtx.owner` check
+    // would produce by taking the apiKey branch anyway (owner null resolves
+    // isAdmin to false too) — settingsMock is only touched by that branch, so
+    // its call count is what actually distinguishes "fell through" from "took
+    // the branch and got the same-looking answer by luck".
+    expect(settingsMock).not.toHaveBeenCalled();
+  });
+
+  it("falls through to ANONYMOUS for an inactive, owned, management key", async () => {
+    session({ noSession: true, authorization: "Bearer inactive-mgmt-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: false, owner: ALICE, management: true });
+
+    expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: null });
+  });
+
+  it("an @admin-owned management key is admin", async () => {
+    session({ email: null, authorization: "Bearer admin-mgmt-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ADMIN_OWNER, management: true });
+
+    expect(await getRequestIdentity()).toEqual({ isAdmin: true, owner: ADMIN_OWNER });
+  });
+
+  it("a management key owned by a designated SSO admin is admin", async () => {
+    session({ email: null, authorization: "Bearer alice-mgmt-key", admins: [ALICE] });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, management: true });
+
+    expect(await getRequestIdentity()).toEqual({ isAdmin: true, owner: ALICE });
+  });
+
+  // A key that fails the management check never short-circuits to ANONYMOUS on
+  // its own — a real dashboard session presented alongside it still resolves.
+  it("an invalid management key does not shadow a real session presented alongside it", async () => {
+    session({ email: BOB, authorization: "Bearer routing-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: false, owner: null, management: false });
+
+    expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: BOB });
+  });
+
+  it("a query-string-only key is not read by this header-only path", async () => {
+    // No Authorization/x-api-key header set — a would-be management key sitting
+    // in the URL never reaches ctx.apiKey, so the ordinary password-login
+    // session (no oidcEmail) resolves exactly as it would without any key.
+    session({ email: null });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, management: true });
+
+    expect(await getRequestIdentity()).toEqual({ isAdmin: true, owner: ADMIN_OWNER });
+    expect(apiKeyRoutingContextMock).not.toHaveBeenCalled();
   });
 });
 

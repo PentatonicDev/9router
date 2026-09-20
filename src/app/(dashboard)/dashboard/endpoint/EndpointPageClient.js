@@ -729,8 +729,11 @@ export default function APIPageClient({ machineId }) {
     try {
       const payload = { name: name.trim(), tags: parseTagInput(tags) };
       // Reassigning drops bindings to accounts the new owner cannot reach, so
-      // only send it when it is actually editable here.
-      if (canAssignOwner) payload.owner = owner?.trim() || null;
+      // only send it (and the management flag next to it) when actually editable here.
+      if (canAssignOwner) {
+        payload.owner = owner?.trim() || null;
+        payload.management = !!editKeyState.management;
+      }
       const res = await fetch(`/api/keys/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1194,7 +1197,7 @@ export default function APIPageClient({ machineId }) {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setEditKeyState({ id: key.id, name: key.name || "", tags: (key.tags || []).join(", "), owner: key.owner || "", error: null })}
+                    onClick={() => setEditKeyState({ id: key.id, name: key.name || "", tags: (key.tags || []).join(", "), owner: key.owner || "", management: !!key.management, error: null })}
                     className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
                     title="Rename and edit tags"
                   >
@@ -1313,6 +1316,21 @@ export default function APIPageClient({ machineId }) {
                 Leave empty to share with everyone, or use &ldquo;@admin&rdquo; to keep it to the password
                 login. Accounts the new owner cannot reach are unbound from this key.
               </p>
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+                <div>
+                  <p className="text-sm font-medium">Can manage dashboard</p>
+                  <p className="text-xs text-text-muted">
+                    Lets this key drive the dashboard REST API (combos, providers, keys,
+                    settings) as its owner, instead of only routing LLM requests.
+                  </p>
+                </div>
+                <Toggle
+                  size="sm"
+                  checked={!!editKeyState?.management}
+                  onChange={(checked) => setEditKeyState((prev) => ({ ...prev, management: checked }))}
+                  title="Can manage dashboard"
+                />
+              </div>
             </>
           )}
           {editKeyState?.error && <p className="text-sm text-red-500">{editKeyState.error}</p>}

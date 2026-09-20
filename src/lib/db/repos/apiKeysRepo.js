@@ -41,6 +41,7 @@ function rowToKey(row) {
     name: row.name,
     machineId: row.machineId,
     isActive: row.isActive === 1 || row.isActive === true,
+    management: row.management === 1 || row.management === true,
     allowedConnectionIds: normalizeAllowed(parseJson(row.allowedConnectionIds, null)),
     tags: normalizeTags(parseJson(row.tags, null)) || [],
     owner: row.owner ?? null,
@@ -60,7 +61,7 @@ export async function getApiKeyById(id) {
   return rowToKey(row);
 }
 
-export async function createApiKey(name, machineId, tags = null, owner = undefined) {
+export async function createApiKey(name, machineId, tags = null, owner = undefined, management = false) {
   if (!machineId) throw new Error("machineId is required");
   const db = await getDb();
   const { generateApiKeyWithMachine } = await import("@/shared/utils/apiKey");
@@ -71,6 +72,7 @@ export async function createApiKey(name, machineId, tags = null, owner = undefin
     key: result.key,
     machineId,
     isActive: true,
+    management: !!management,
     allowedConnectionIds: null,
     tags: normalizeTags(tags) || [],
     owner: owner === undefined ? await resolveDefaultOwner() : normalizeOwnerInput(owner),
@@ -78,7 +80,7 @@ export async function createApiKey(name, machineId, tags = null, owner = undefin
   };
   await db.insertInto("apiKeys").values({
     id: apiKey.id, key: apiKey.key, name: apiKey.name, machineId: apiKey.machineId,
-    isActive: 1, allowedConnectionIds: null,
+    isActive: 1, management: apiKey.management ? 1 : 0, allowedConnectionIds: null,
     tags: apiKey.tags.length ? stringifyJson(apiKey.tags) : null,
     owner: apiKey.owner, createdAt: apiKey.createdAt,
   }).execute();
@@ -117,9 +119,11 @@ export async function updateApiKey(id, data) {
     }
     const tags = normalizeTags(merged.tags);
     merged.tags = tags || [];
+    merged.management = !!merged.management;
     await trx.updateTable("apiKeys").set({
       key: merged.key, name: merged.name, machineId: merged.machineId,
       isActive: merged.isActive ? 1 : 0,
+      management: merged.management ? 1 : 0,
       allowedConnectionIds: merged.allowedConnectionIds ? stringifyJson(merged.allowedConnectionIds) : null,
       tags: tags ? stringifyJson(tags) : null,
       owner: merged.owner ?? null,
@@ -152,15 +156,16 @@ export async function getApiKeyAllowedConnectionIds(key) {
 // each call is a Postgres round trip; keeping validity, ownership, bindings and
 // label together avoids re-reading the same row four times before dispatch.
 export async function getApiKeyRoutingContext(key) {
-  if (!key) return { valid: false, owner: null, name: null, allowedConnectionIds: null };
+  if (!key) return { valid: false, owner: null, name: null, management: false, allowedConnectionIds: null };
   const db = await getDb();
   const row = await db.selectFrom("apiKeys")
-    .select(["isActive", "owner", "name", "allowedConnectionIds"])
+    .select(["isActive", "owner", "name", "management", "allowedConnectionIds"])
     .where("key", "=", key).executeTakeFirst();
   return {
     valid: row ? row.isActive === 1 || row.isActive === true : false,
     owner: row?.owner ?? null,
     name: row?.name ?? null,
+    management: row?.management === 1 || row?.management === true,
     allowedConnectionIds: normalizeAllowed(parseJson(row?.allowedConnectionIds, null)),
   };
 }

@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { getSettings, validateApiKey } from "@/lib/localDb";
+import { getApiKeyRoutingContext, getSettings, validateApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
 import { hasTrustedPeerHeaders } from "@/lib/auth/trustedPeer";
 import { getDashboardAuthSession } from "@/lib/auth/dashboardSession";
-import { isScopeEnabled, normalizeOwner, ssoAdminsFor } from "@/lib/auth/resourceScope";
+import { ADMIN_OWNER, isScopeEnabled, normalizeOwner, ssoAdminsFor } from "@/lib/auth/resourceScope";
 
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
 const CLI_TOKEN_SALT = "9r-cli-auth";
@@ -47,28 +47,6 @@ const ALWAYS_PROTECTED = [
   "/api/version/update",
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
-];
-
-// Require auth, but allow through if requireLogin is disabled
-const PROTECTED_API_PATHS = [
-  "/api/headroom",
-  "/api/settings",
-  "/api/keys",
-  "/api/providers",
-  "/api/provider-nodes",
-  "/api/proxy-pools",
-  "/api/combos",
-  "/api/models",
-  "/api/usage",
-  "/api/oauth",
-  "/api/cloud",
-  "/api/media-providers",
-  "/api/pricing",
-  "/api/tags",
-  "/api/cli-tools",
-  "/api/mcp",
-  "/api/translator",
-  "/api/tunnel",
 ];
 
 // Routes that spawn child processes or read host secrets — restrict to localhost.
@@ -168,6 +146,24 @@ function extractApiKey(request) {
   return request.nextUrl.searchParams?.get("key") || null;
 }
 
+// Header-only, never query string or x-goog-api-key — deliberately stricter
+// than extractApiKey above, which stays as-is for the public /v1 LLM gate
+// (query keys are how e.g. Gemini clients pass them there). A management key
+// in a URL ends up in server logs, browser history and Referer headers.
+function extractManagementApiKey(request) {
+  const authHeader = request.headers.get("Authorization");
+  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+  return request.headers.get("x-api-key") || null;
+}
+
+async function managementKeyContext(request) {
+  const key = extractManagementApiKey(request);
+  if (!key) return null;
+  const ctx = await getApiKeyRoutingContext(key);
+  if (!ctx.valid || !ctx.owner || !ctx.management) return null;
+  return ctx;
+}
+
 async function hasValidApiKey(request) {
   const apiKey = extractApiKey(request);
   if (!apiKey) return false;
@@ -191,6 +187,8 @@ async function canAccessLocalOnlyRoute(request) {
 // in hand rather than the request-scoped cookies()/headers() helpers.
 async function isAdminRequest(request, settings) {
   if (await hasValidCliToken(request)) return true;
+  const mgmt = await managementKeyContext(request);
+  if (mgmt) return mgmt.owner === ADMIN_OWNER || ssoAdminsFor(settings).includes(mgmt.owner);
   const session = await getDashboardAuthSession(request.cookies.get("auth_token")?.value);
   if (!session) return false;
   const owner = normalizeOwner(session.oidcEmail || session.samlEmail);
@@ -212,6 +210,10 @@ async function loadSettings() {
   }
 }
 
+// Session/requireLogin only, deliberately — canAccessLocalOnlyRoute also calls
+// this, and LOCAL_ONLY_PATHS (process-spawning / host-secret routes) must stay
+// session/CLI-token only, never opened up by a management API key. The generic
+// /api/* deny-by-default gate below checks managementKeyContext separately.
 async function isAuthenticated(request) {
   if (await hasValidToken(request)) return true;
   const settings = await loadSettings();
@@ -228,6 +230,7 @@ export const __test__ = {
   isLocalRequest,
   isPublicLlmApi,
   extractApiKey,
+  extractManagementApiKey,
   canAccessPublicLlmApi,
   canAccessLocalOnlyRoute,
 };
@@ -263,10 +266,13 @@ export async function proxy(request) {
     return NextResponse.json({ error: "API key required for remote API access" }, { status: 401 });
   }
 
-  // Deny-by-default for /api/* — public allow-list bypasses, everything else requires auth.
+  // Deny-by-default for /api/* — public allow-list bypasses, everything else requires
+  // auth. This is the real gate every non-public /api/* route sits behind (there is no
+  // separate per-route allow-list); a management key authenticates here as its owner,
+  // same reach as that owner's dashboard session.
   if (pathname.startsWith("/api/")) {
     if (isPublicApi(pathname)) return NextResponse.next();
-    if (await hasValidCliToken(request) || await isAuthenticated(request))
+    if (await hasValidCliToken(request) || await isAuthenticated(request) || await managementKeyContext(request))
       return NextResponse.next();
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
