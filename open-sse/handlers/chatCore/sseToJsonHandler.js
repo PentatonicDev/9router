@@ -155,7 +155,9 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
       saveRequestDetail(buildRequestDetail({
         ...ctx,
-        latency: { ttft: totalLatency, total: totalLatency },
+        // No streaming happened, so there is no first-token time to report. Writing
+      // total here made a non-streamed call look like an instant TTFT.
+      latency: { ttft: null, total: totalLatency },
         tokens: { prompt_tokens: inTokensForLog, completion_tokens: usage.output_tokens || 0 },
         response: { content: textContent, thinking: null, finish_reason: jsonResponse.status || "unknown" },
         status: "success"
@@ -255,7 +257,9 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
     const totalLatency = Date.now() - requestStartTime;
     saveRequestDetail(buildRequestDetail({
       ...ctx,
-      latency: { ttft: totalLatency, total: totalLatency },
+      // No streaming happened, so there is no first-token time to report. Writing
+      // total here made a non-streamed call look like an instant TTFT.
+      latency: { ttft: null, total: totalLatency },
       tokens: usage,
       response: {
         content: parsed.choices?.[0]?.message?.content || null,

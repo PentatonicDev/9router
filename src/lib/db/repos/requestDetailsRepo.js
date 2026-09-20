@@ -112,6 +112,11 @@ async function flushToDatabase() {
             timestamp: item.timestamp,
             status: item.status || null,
             latency: item.latency || {},
+            // Per-stage timings and the combo the request resolved through. Small
+            // and flat, so they skip truncateField: losing them to a size cap would
+            // defeat the point of measuring them.
+            phases: item.phases || undefined,
+            comboName: item.comboName || undefined,
             tokens: item.tokens || {},
             request: truncateField(item.request, config.maxJsonSize),
             providerRequest: truncateField(item.providerRequest, config.maxJsonSize),

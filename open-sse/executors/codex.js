@@ -294,6 +294,7 @@ export class CodexExecutor extends BaseExecutor {
             headers: result.response.headers,
           });
         }
+        result.phases = { ...(result.phases || {}), peek_ms: peek.peekMs, peek_bytes: peek.peekBytes };
         return result;
       }
       if (peek.accountFallback) {
@@ -317,18 +318,28 @@ export class CodexExecutor extends BaseExecutor {
   // Returns { matched: string|null, message: string|null, accountFallback: boolean, replacementBody: ReadableStream|null }.
   // Caller must use replacementBody when no error matched (original body has been read).
   async _peekSseTransientError(response) {
-    if (!response || !response.ok || !response.body) return { matched: null, message: null, accountFallback: false, replacementBody: null };
+    const peekT0 = Date.now();
+    if (!response || !response.ok || !response.body) return { matched: null, message: null, accountFallback: false, replacementBody: null, peekMs: 0, peekBytes: 0 };
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     const chunks = [];
     let text = "";
     let matched = null;
     let accountFallback = false;
+    let peekBytes = 0;
+    // A healthy stream opens with response.created, which echoes the whole request
+    // (~145KB of tools + instructions on a real Codex turn), so waiting for
+    // output_text.delta meant draining CODEX_SSE_PEEK_BYTES in full and holding the
+    // client's first byte until then. On reasoning models the delta only lands after
+    // the thinking phase, so TTFT absorbed prefill + reasoning + the 256KB drain.
+    // An in-band error arrives as the very first event instead, so releasing at the
+    // end of the first complete event keeps the detection and drops the wait.
     try {
       while (text.length < CODEX_SSE_PEEK_BYTES) {
         const { done, value } = await reader.read();
         if (done) break;
         chunks.push(value);
+        peekBytes += value.length;
         text += decoder.decode(value, { stream: true });
         const lowerText = text.toLowerCase();
         const accountHit = CODEX_SSE_ACCOUNT_FALLBACK_PATTERNS.find(p => lowerText.includes(p));
@@ -336,15 +347,20 @@ export class CodexExecutor extends BaseExecutor {
         const retryHit = CODEX_SSE_RETRY_PATTERNS.find(p => lowerText.includes(p));
         if (retryHit) { matched = retryHit; break; }
         if (CODEX_SSE_USER_OUTPUT_PATTERNS.some(p => lowerText.includes(p))) break;
+        // Blank line closes an SSE event. Payload JSON is compact, so a real
+        // blank line only ever appears at an event boundary — one non-error
+        // event is enough to conclude the stream is healthy.
+        if (text.includes("\n\n")) break;
       }
     } catch (e) {
       dbg("CODEX", `peek read error: ${e.message}`);
     }
+    const peekMs = Date.now() - peekT0;
 
     if (matched) {
       try { await reader.cancel(); } catch { /* noop */ }
       try { reader.releaseLock(); } catch { /* noop */ }
-      return { matched, message: extractSseErrorMessage(text, matched), accountFallback, replacementBody: null };
+      return { matched, message: extractSseErrorMessage(text, matched), accountFallback, replacementBody: null, peekMs, peekBytes };
     }
 
     reader.releaseLock();
@@ -368,7 +384,7 @@ export class CodexExecutor extends BaseExecutor {
         try { upstreamReader?.cancel(reason); } catch { /* noop */ }
       },
     });
-    return { matched: null, message: null, accountFallback: false, replacementBody };
+    return { matched: null, message: null, accountFallback: false, replacementBody, peekMs, peekBytes };
   }
 
   // Parse Codex usage_limit_reached to extract precise resetsAtMs; fallback to default otherwise

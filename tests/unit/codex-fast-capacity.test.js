@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { CodexExecutor } from "../../open-sse/executors/codex.js";
 
+// Delivers the body in fixed-size chunks, like a socket read would, so a peeking
+// consumer that waits for a later marker must actually pull more chunks.
+function streamFromChunks(text, chunkSize) {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (let i = 0; i < text.length; i += chunkSize) {
+        controller.enqueue(encoder.encode(text.slice(i, i + chunkSize)));
+      }
+      controller.close();
+    },
+  });
+}
+
 function streamFromText(text) {
   const encoder = new TextEncoder();
   return new ReadableStream({
@@ -50,6 +64,53 @@ describe("Codex fast tier and capacity handling", () => {
     const peek = await executor._peekSseTransientError(response);
     expect(peek.accountFallback).toBe(true);
     expect(peek.message).toBe("Selected model is at capacity. Please try a different model.");
+  });
+
+  // Codex opens a real turn with response.created, which echoes the whole request
+  // (~145KB of tools + instructions). Waiting for output_text.delta meant draining
+  // CODEX_SSE_PEEK_BYTES in full and holding the client's first byte until then.
+  it("releases after the first event instead of draining the 256KB cap", async () => {
+    const executor = new CodexExecutor();
+    // The echo lands in response.created; the reasoning events that follow are what
+    // the healthy-output markers do not recognise, so a peek keyed on
+    // output_text.delta has to wait until output starts and hits the byte cap.
+    const echo = "x".repeat(150 * 1024);
+    const created = `event: response.created\ndata: {"type":"response.created","response":{"instructions":"${echo}"}}\n\n`;
+    const reasoning = Array.from({ length: 60 }, (_, i) =>
+      `event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","delta":"${"r".repeat(2048)}${i}"}\n\n`
+    ).join("");
+    const output = [
+      "event: response.output_text.delta",
+      'data: {"type":"response.output_text.delta","delta":"OK"}',
+      "",
+      "",
+    ].join("\n");
+    const full = created + reasoning + output;
+    expect(full.length).toBeGreaterThan(256 * 1024);
+
+    // 8KB chunks, like a socket read, so waiting for a later marker costs reads.
+    const response = new Response(streamFromChunks(full, 8 * 1024), {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+
+    const peek = await executor._peekSseTransientError(response);
+    expect(peek.matched).toBeNull();
+    expect(peek.peekBytes).toBeLessThan(200 * 1024);
+    await expect(new Response(peek.replacementBody).text()).resolves.toBe(full);
+  });
+
+  it("still catches an in-band error after a healthy first event", async () => {
+    const executor = new CodexExecutor();
+    const created = 'event: response.created\ndata: {"type":"response.created","response":{}}\n\n';
+    const err = 'event: error\ndata: {"error":{"message":"server_is_overloaded"}}\n\n';
+    const response = new Response(streamFromText(created + err), {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+
+    const peek = await executor._peekSseTransientError(response);
+    expect(peek.matched).toBe("server_is_overloaded");
   });
 
   it("reassembles normal SSE after peeking", async () => {

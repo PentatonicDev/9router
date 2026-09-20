@@ -70,8 +70,12 @@ export function buildRequestDetail(base, overrides = {}) {
     model: base.model || "unknown",
     connectionId: base.connectionId || undefined,
     apiKey: base.apiKey || undefined,
+    comboName: base.comboName || undefined,
     timestamp: new Date().toISOString(),
     latency: base.latency || { ttft: 0, total: 0 },
+    // Per-stage timings in ms from t0 (epoch). An absent key means the stage did not
+    // run — never write 0, which would read as a measured zero.
+    phases: base.phases || undefined,
     tokens: base.tokens || { prompt_tokens: 0, completion_tokens: 0 },
     request: base.request,
     providerRequest: base.providerRequest || null,

@@ -5,6 +5,7 @@ import { TABLES, buildCreateTableSql, SCHEMA_VERSION } from "./schema.js";
 import { MIGRATIONS, latestVersion } from "./migrations/index.js";
 import { getMetaSync, setMetaSync } from "./helpers/metaStore.js";
 import { makeBackupDir, backupFile, backupDbLite, pruneOldBackups } from "./backup.js";
+import { pruneOldRequestLogs } from "open-sse/utils/logRetention.js";
 import { getAppVersion } from "./version.js";
 import { stringifyJson } from "./helpers/jsonCol.js";
 
@@ -223,6 +224,15 @@ export async function runMigrationOnce(adapter) {
 
   // Prune stale backups every boot so old oversized backups shrink to KEEP.
   pruneOldBackups();
+
+  // Request logs carry full bodies and grow unbounded when logging is on; bound
+  // them on the same boot path. Best-effort, never blocks startup.
+  try {
+    const { removed } = pruneOldRequestLogs();
+    if (removed) console.log(`[LOGS] Pruned ${removed} old request log session(s)`);
+  } catch {
+    // Log retention must never break boot.
+  }
 
   // Bootstrap _meta so we can read the stored backup schema version below
   // (runVersionedMigrations also ensures this, but we need it earlier here).

@@ -58,9 +58,12 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, errorContext = {}, onCredentialsRefreshed, onRequestSuccess, onDisconnect, signal, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, errorContext = {}, onCredentialsRefreshed, onRequestSuccess, onDisconnect, signal, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, entryPhases, comboName }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
+  // Phases measured before this point (handler entry, auth, routing) plus the ones
+  // collected here, carried to saveRequestDetail. Missing key = step did not run.
+  const phases = { ...(entryPhases || {}), t0: (entryPhases && entryPhases.t0) || requestStartTime };
   // Stable per-session color so all lines of one CLI conversation share a tag
   const sessionSeed = (() => {
     try {
@@ -183,7 +186,9 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     // Normalize newer Cowork/CC beta shapes (adaptive thinking, mid-conversation system) the API rejects
     if (clientTool === "claude") normalizeClaudePassthrough(translatedBody, translatedBody.model);
   } else {
+    const translateT0 = Date.now();
     translatedBody = translateRequest(sourceFormat, targetFormat, upstreamModel, body, stream, credentials, provider, reqLogger, stripList, connectionId, clientTool);
+    phases.translate_ms = Date.now() - translateT0;
     if (!translatedBody) {
       trackPendingRequest(model, provider, connectionId, false, true);
       return createErrorResult(HTTP_STATUS.BAD_REQUEST, `Failed to translate request for ${sourceFormat} → ${targetFormat}`, undefined, errorContext);
@@ -253,6 +258,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
   // coordinated rather than stacked — RTK takes structured output, Headroom the
   // unstructured text it cannot read (see rtk/route.js).
   const headroomActive = tokenSaverEnabled && headroomEnabled;
+  const preprocessT0 = Date.now();
   const rtkStats = compressMessages(translatedBody, tokenSaverEnabled && rtkEnabled, { headroomEnabled: headroomActive });
   const rtkLine = formatRtkLog(rtkStats);
   if (rtkLine) console.log(rtkLine);
@@ -302,6 +308,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     if (pxpipeSummary?.applied) xf.push(`PXPIPE:${pxpipeSummary.imageCount}img`);
     try { onPxpipeEvent?.({ provider, model, ...pxpipeSummary }); } catch { /* stats must not break requests */ }
   }
+
+  phases.preprocess_ms = Date.now() - preprocessT0;
 
   if (xf.length && log?.line) log.line(reqTag, "⚙", xf.join(" · "));
 
@@ -384,6 +392,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     providerHeaders = result.headers;
     finalBody = result.transformedBody;
     providerResponseFormat = result.responseFormat || targetFormat;
+    Object.assign(phases, result.phases || {});
     reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
   } catch (error) {
     trackPendingRequest(model, provider, connectionId, false, true);
@@ -483,7 +492,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     return createErrorResult(statusCode, errMsg, resetsAtMs, { ...errorContext, provider, model });
   }
 
-  const sharedCtx = { provider, model, body, stream, errorContext, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log };
+  const sharedCtx = { provider, model, body, stream, errorContext, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log, phases, comboName };
   const appendLog = (extra) => appendRequestLog({ model, provider, connectionId, ...extra }).catch(() => { });
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);
 

@@ -33,6 +33,8 @@ import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
  * Format detection and translation handled by translator
  */
 export async function handleChat(request, clientRawRequest = null, options = {}) {
+  const t0 = Date.now();
+  const entryPhases = { t0 };
   const errorContext = createErrorContext(request, options);
   let body;
   try {
@@ -41,6 +43,7 @@ export async function handleChat(request, clientRawRequest = null, options = {})
     log.warn("CHAT", "Invalid JSON body");
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body", errorContext);
   }
+  entryPhases.parse_ms = Date.now() - t0;
 
   // Build clientRawRequest for logging (if not provided)
   if (!clientRawRequest) {
@@ -76,6 +79,7 @@ export async function handleChat(request, clientRawRequest = null, options = {})
     getApiKeyRoutingContext(apiKey),
   ]);
   const settings = await resolveScopedSettings(rawSettings, apiKey, apiKeyContext.owner);
+  entryPhases.auth_ms = Date.now() - t0 - (entryPhases.parse_ms || 0);
   // undefined (not null) keeps the legacy combo lookup: name alone, ignoring ownership.
   const comboOwner = rawSettings.scopeResourcesByUser === true ? apiKeyContext.owner : undefined;
   if (settings.requireApiKey) {
@@ -100,7 +104,7 @@ export async function handleChat(request, clientRawRequest = null, options = {})
 
   const route = (signal) => routeChat({
     body, modelStr, settings, comboOwner, apiKeyContext,
-    clientRawRequest, request, apiKey, errorContext, signal,
+    clientRawRequest, request, apiKey, errorContext, signal, entryPhases,
   });
   const pathname = new URL(request.url).pathname;
   const clientFormat = detectFormatByEndpoint(pathname, body) || FORMATS.OPENAI;
@@ -119,13 +123,14 @@ export async function handleChat(request, clientRawRequest = null, options = {})
   return route(request.signal);
 }
 
-async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, clientRawRequest, request, apiKey, errorContext, signal }) {
+async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, clientRawRequest, request, apiKey, errorContext, signal, entryPhases }) {
   // Reuse request-scoped reads across model/account fallback. In distributed mode
   // these are Postgres round trips; re-reading the same settings/owner for every
   // candidate adds latency without changing the answer inside one request.
-  const routingContext = { settings, comboOwner, apiKeyContext };
+  const routingContext = { settings, comboOwner, apiKeyContext, entryPhases };
   const requiredCapabilities = detectRequiredCapabilities(body);
   const comboModels = await getComboModels(modelStr, comboOwner);
+  if (comboModels) routingContext.comboName = modelStr;
   if (comboModels) {
     const comboStrategies = settings.comboStrategies || {};
     const comboSpecificStrategy = comboStrategies[modelStr]?.fallbackStrategy;
@@ -256,11 +261,28 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   }
 
   const { provider, model } = modelInfo;
+  const entryPhases = routingContext.entryPhases || {};
+  if (entryPhases.t0 && entryPhases.routing_ms === undefined) {
+    // Delta of this stage alone: the earlier stages are already counted, and a
+    // cumulative value here would double-count them in any sum.
+    entryPhases.routing_ms = Date.now() - entryPhases.t0 - (entryPhases.parse_ms || 0) - (entryPhases.auth_ms || 0);
+  }
 
   // Routing shown in the unified "▶" line (client model → provider/model)
 
   // Extract userAgent from request
   const userAgent = request?.headers?.get("user-agent") || "";
+
+  // Forward the client's session headers to the executor. Without these the Codex
+  // cache key falls back to a per-connection id shared by every conversation on the
+  // account, so each turn rotates the cached prefix. Claude Code / the Hermes CLI
+  // send x-claude-code-session-id, which is exactly the conversation identity the
+  // prefix cache needs.
+  const clientSessionHeaders = {};
+  for (const name of ["x-claude-code-session-id", "x-session-id", "session-id", "session_id", "x-amp-thread-id", "x-client-request-id"]) {
+    const v = request?.headers?.get(name);
+    if (v) clientSessionHeaders[name] = v;
+  }
 
   // Try with available accounts (fallback on errors)
   const excludeConnectionIds = new Set();
@@ -300,7 +322,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     const result = await handleChatCore({
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
-      credentials: refreshedCredentials,
+      credentials: Object.keys(clientSessionHeaders).length
+        ? { ...refreshedCredentials, rawHeaders: clientSessionHeaders }
+        : refreshedCredentials,
       log,
       clientRawRequest,
       connectionId: credentials.connectionId,
@@ -326,6 +350,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       onPxpipeEvent: appendPxpipeEvent,
       providerThinking,
       errorContext,
+      entryPhases,
+      comboName: routingContext.comboName,
       signal,
       // Detect source format by endpoint + body
       sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,

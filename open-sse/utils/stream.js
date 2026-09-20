@@ -68,6 +68,9 @@ export function createSSEStream(options = {}) {
   let accumulatedContent = "";
   let accumulatedThinking = "";
   let ttftAt = null;
+  // First chunk carrying real output, as opposed to the first chunk at all: the
+  // opener (response.created / role-only delta) proves nothing about model latency.
+  let firstContentAt = null;
   let sseLineCount = 0;
   let sseEmittedCount = 0;
   const eventTypeCounts = {};
@@ -85,6 +88,9 @@ export function createSSEStream(options = {}) {
   const finalizeStream = () => {
     if (finalized) return;
     finalized = true;
+    // Terminal Responses events may call finalizeStream from inside transform(),
+    // before the transform epilogue below records the first useful payload.
+    if (!firstContentAt && (accumulatedContent || accumulatedThinking)) firstContentAt = Date.now();
 
     const isPassthrough = mode === STREAM_MODE.PASSTHROUGH;
     let finalUsage = isPassthrough ? usage : state?.usage;
@@ -104,7 +110,7 @@ export function createSSEStream(options = {}) {
       onStreamComplete({
         content: accumulatedContent,
         thinking: accumulatedThinking
-      }, finalUsage, ttftAt);
+      }, finalUsage, ttftAt, firstContentAt);
     }
   };
 
@@ -258,6 +264,13 @@ export function createSSEStream(options = {}) {
           ? getOpenAIResponsesEventName(currentOpenAIResponsesEvent, parsed)
           : null;
 
+        // Responses translators may not accumulate output in this layer. Mark the
+        // native output event itself so TTFT means first useful provider content.
+        if (!firstContentAt && parsed?.delta && (
+          openAIResponsesEventName === "response.output_text.delta"
+          || openAIResponsesEventName === "response.function_call_arguments.delta"
+        )) firstContentAt = Date.now();
+
         if (isOpenAIResponsesStream && isOpenAIResponsesTerminalEvent(openAIResponsesEventName, parsed)) {
           openAIResponsesTerminalSeen = true;
         }
@@ -395,6 +408,7 @@ export function createSSEStream(options = {}) {
           }
         }
       }
+      if (!firstContentAt && (accumulatedContent || accumulatedThinking)) firstContentAt = Date.now();
     },
 
     flush(controller) {

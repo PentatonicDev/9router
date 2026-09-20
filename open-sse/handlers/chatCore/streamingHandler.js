@@ -129,20 +129,29 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
 /**
  * Build onStreamComplete callback for streaming usage tracking.
  */
-export function buildOnStreamComplete({ provider, model, connectionId, apiKey, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest, pxpipe, reqTag, log }) {
+export function buildOnStreamComplete({ provider, model, connectionId, apiKey, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest, pxpipe, reqTag, log, phases: entryPhases, comboName }) {
   const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
-  const onStreamComplete = (contentObj, usage, ttftAt) => {
+  const onStreamComplete = (contentObj, usage, ttftAt, firstContentAt) => {
+    const now = Date.now();
     const latency = {
-      ttft: ttftAt ? ttftAt - requestStartTime : Date.now() - requestStartTime,
-      total: Date.now() - requestStartTime
+      // TTFT means first useful content. The opening SSE frame is tracked
+      // separately as phases.ttfb_client_ms.
+      ttft: firstContentAt ? firstContentAt - requestStartTime : null,
+      total: now - requestStartTime
     };
+    const phases = { ...(entryPhases || {}) };
+    if (ttftAt) phases.ttfb_client_ms = ttftAt - (phases.t0 || requestStartTime);
+    if (firstContentAt) phases.ttft_content_ms = firstContentAt - (phases.t0 || requestStartTime);
+    phases.client_complete_ms = now - (phases.t0 || requestStartTime);
     const safeContent = contentObj?.content || "[Empty streaming response]";
     const safeThinking = contentObj?.thinking || null;
 
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId, apiKey,
       latency,
+      phases,
+      comboName,
       tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
       request: extractRequestConfig(body, stream),
       providerRequest: finalBody || translatedBody || null,

@@ -257,7 +257,9 @@ export async function handleNonStreamingResponse({ providerResponse, provider, e
   const totalLatency = Date.now() - requestStartTime;
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId, apiKey,
-    latency: { ttft: totalLatency, total: totalLatency },
+    // No streaming happened, so there is no first-token time to report. Writing
+    // total here made a non-streamed call look like an instant TTFT.
+    latency: { ttft: null, total: totalLatency },
     tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
     request: extractRequestConfig(body, stream),
     providerRequest: finalBody || translatedBody || null,

@@ -8,6 +8,77 @@ import Pagination from "@/shared/components/Pagination";
 import { cn } from "@/shared/utils/cn";
 import { AI_PROVIDERS, getProviderByAlias } from "@/shared/constants/providers";
 
+// Stages recorded per request, all as per-stage deltas. connect_ms is the upstream
+// handshake; the gap between it and client_complete_ms is model generation plus the
+// streaming relay, derived here rather than stored so the segments always sum to the
+// measured total. A key absent from `phases` means the stage did not run.
+const PHASE_LADDER = [
+  ["parse_ms", "Parse", "bg-slate-400"],
+  ["auth_ms", "Auth", "bg-sky-500"],
+  ["routing_ms", "Routing", "bg-indigo-500"],
+  ["translate_ms", "Translate", "bg-violet-500"],
+  ["preprocess_ms", "Preprocess", "bg-purple-500"],
+  ["connect_ms", "Connect", "bg-amber-500"],
+  ["peek_ms", "Peek", "bg-orange-500"],
+];
+
+const PHASE_EXTRAS = ["ttfb_client_ms", "ttft_content_ms", "peek_bytes"];
+
+function fmtMs(v) {
+  if (typeof v !== "number" || Number.isNaN(v)) return null;
+  return v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${Math.round(v)}ms`;
+}
+
+function phaseSegments(phases) {
+  if (!phases) return [];
+  const out = [];
+  let accounted = 0;
+  for (const [key, label, color] of PHASE_LADDER) {
+    const value = phases[key];
+    if (typeof value !== "number" || value <= 0) continue;
+    out.push({ key, label, color, ms: value });
+    accounted += value;
+  }
+  const firstContent = phases.ttft_content_ms;
+  if (typeof firstContent === "number") {
+    const generation = firstContent - accounted;
+    if (generation > 5) out.push({ key: "generation", label: "Generation", color: "bg-emerald-500", ms: generation });
+    accounted = firstContent;
+  }
+  const total = phases.client_complete_ms;
+  if (typeof total === "number") {
+    const stream = total - accounted;
+    // Tolerance: milestone marks are read at slightly different instants than the
+    // total, so a few ms of drift is measurement noise, not a stage.
+    if (stream > 5) out.push({ key: "stream", label: "Stream", color: "bg-teal-500", ms: stream });
+  }
+  return out;
+}
+
+function PhaseBar({ phases }) {
+  const rows = phaseSegments(phases);
+  if (!rows.length) return null;
+  const sum = rows.reduce((a, r) => a + r.ms, 0);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex h-2 w-full overflow-hidden rounded-full bg-surface-hover">
+        {rows.map(r => (
+          <div key={r.key} className={cn(r.color, "h-full")} style={{ width: `${(r.ms / sum) * 100}%` }} />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {rows.map(r => (
+          <span key={r.key} className="flex items-center gap-1.5 text-xs text-text-muted">
+            <span className={cn("h-2 w-2 rounded-full", r.color)} />
+            {r.label}
+            <span className="font-mono text-text-main">{fmtMs(r.ms)}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 let providerNameCache = null;
 let providerNodesCache = null;
 
@@ -83,7 +154,11 @@ function CollapsibleSection({ title, children, defaultOpen = false, icon = null 
 }
 
 function getCachedTokens(tokens) {
-  return tokens?.cached_tokens || tokens?.cache_read_input_tokens || 0;
+  return tokens?.cached_tokens
+    || tokens?.cache_read_input_tokens
+    || tokens?.prompt_tokens_details?.cached_tokens
+    || tokens?.input_tokens_details?.cached_tokens
+    || 0;
 }
 
 function getCacheCreationTokens(tokens) {
@@ -345,7 +420,7 @@ export default function RequestDetailsTab() {
                     </td>
                     <td className="p-4 text-sm text-text-muted">
                       <div className="flex flex-col gap-0.5">
-                        <div>TTFT: <span className="font-mono">{detail.latency?.ttft || 0}ms</span></div>
+                        <div>TTFT: <span className="font-mono">{detail.latency?.ttft != null ? `${detail.latency.ttft}ms` : "n/a"}</span></div>
                         <div>Total: <span className="font-mono">{detail.latency?.total || 0}ms</span></div>
                       </div>
                     </td>
@@ -415,9 +490,27 @@ export default function RequestDetailsTab() {
               <div>
                 <span className="text-text-muted">Latency:</span>{" "}
                 <span className="text-text-main font-mono">
-                  TTFT {selectedDetail.latency?.ttft || 0}ms / Total {selectedDetail.latency?.total || 0}ms
+                  {selectedDetail.latency?.ttft != null
+                    ? `TTFT ${selectedDetail.latency.ttft}ms`
+                    : "TTFT n/a"}{" "}
+                  / Total {selectedDetail.latency?.total || 0}ms
                 </span>
               </div>
+              {selectedDetail.phases && (
+                <div className="col-span-2 flex flex-col gap-2 rounded-lg border border-border p-3">
+                  <span className="text-text-muted text-sm">Where the time went</span>
+                  <PhaseBar phases={selectedDetail.phases} />
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-text-muted">
+                    {PHASE_EXTRAS.map(k =>
+                      selectedDetail.phases[k] != null ? (
+                        <span key={k}>
+                          {k}: <span className="text-text-main">{k === "peek_bytes" ? selectedDetail.phases[k] : fmtMs(selectedDetail.phases[k])}</span>
+                        </span>
+                      ) : null
+                    )}
+                  </div>
+                </div>
+              )}
               <div>
                 <span className="text-text-muted">Input Tokens:</span>{" "}
                 <span className="text-text-main font-mono">

@@ -26,7 +26,9 @@ const nextConfig = {
   },
   outputFileTracingRoot: tracingRoot,
   outputFileTracingExcludes: {
-    "*": ["./gitbook/**/*"]
+    // Runtime request logs are mutable and may contain credentials; never copy
+    // them into a standalone build. Generated .next output must not trace itself.
+    "*": ["./gitbook/**/*", "./logs/**/*", "./.next/**/*"]
   },
   images: {
     unoptimized: true

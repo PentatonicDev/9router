@@ -69,25 +69,26 @@ function writeJsonFile(sessionPath, filename, data) {
   }
 }
 
-// Mask sensitive data in headers (DISABLED - keep full token for testing)
+// Header names that carry a credential. Matched as substrings so provider-specific
+// spellings (x-amz-sso-bearer, openai-organization tokens) are covered too.
+const SENSITIVE_HEADER_KEYS = [
+  "authorization", "x-api-key", "api-key", "apikey", "cookie",
+  "token", "bearer", "secret", "password", "credential",
+];
+
+// Logs outlive the request and sit unencrypted under logs/, so the token value must
+// never reach disk. Length is kept as a fingerprint for debugging truncation bugs.
 function maskSensitiveHeaders(headers) {
   if (!headers) return {};
-  return { ...headers };
-  
-  // Old masking code (disabled):
-  // const masked = { ...headers };
-  // const sensitiveKeys = ["authorization", "x-api-key", "cookie", "token"];
-  // 
-  // for (const key of Object.keys(masked)) {
-  //   const lowerKey = key.toLowerCase();
-  //   if (sensitiveKeys.some(sk => lowerKey.includes(sk))) {
-  //     const value = masked[key];
-  //     if (value && value.length > 20) {
-  //       masked[key] = value.slice(0, 10) + "..." + value.slice(-5);
-  //     }
-  //   }
-  // }
-  // return masked;
+  const masked = { ...headers };
+  for (const key of Object.keys(masked)) {
+    const lowerKey = key.toLowerCase();
+    if (!SENSITIVE_HEADER_KEYS.some(sk => lowerKey.includes(sk))) continue;
+    const value = masked[key];
+    if (typeof value !== "string" || !value) continue;
+    masked[key] = value.length > 8 ? `***redacted(len=${value.length})` : "***redacted";
+  }
+  return masked;
 }
 
 // No-op logger when logging is disabled
