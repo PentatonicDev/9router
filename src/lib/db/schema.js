@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -192,6 +192,16 @@ export const TABLES = {
       "CREATE INDEX IF NOT EXISTS idx_rd_conn ON requestDetails(connectionId)",
       "CREATE INDEX IF NOT EXISTS idx_rd_apikey ON requestDetails(apiKey)",
     ],
+  },
+  // Cross-process/cross-instance mutex for background jobs (see src/lib/db/leases.js).
+  // `id` is the job/task name; only one holder may own it at a time.
+  jobLeases: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      holder: "TEXT NOT NULL",
+      expiresAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
   },
 };
 

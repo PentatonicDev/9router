@@ -79,7 +79,15 @@ async function initAdapter() {
 
 export async function getAdapter() {
   if (state.instance) return state.instance;
-  if (!state.initPromise) state.initPromise = initAdapter().then((a) => { state.instance = a; return a; });
+  // Reset on failure (mirrors kysely.js's getDb()) so a transient init error —
+  // e.g. two processes racing the first-boot migration on the same file and
+  // one hitting SQLITE_BUSY — doesn't wedge every future call behind the same
+  // rejected promise for the rest of the process's life.
+  if (!state.initPromise) {
+    state.initPromise = initAdapter()
+      .then((a) => { state.instance = a; return a; })
+      .catch((e) => { state.initPromise = null; throw e; });
+  }
   return state.initPromise;
 }
 
