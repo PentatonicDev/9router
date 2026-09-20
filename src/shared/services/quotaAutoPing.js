@@ -11,9 +11,20 @@ import { proxyAwareFetch } from "open-sse/utils/proxyFetch.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { refreshAndUpdateCredentials } from "@/app/api/usage/[connectionId]/route.js";
 import { QUOTA_AUTOPING_CONFIG } from "@/shared/constants/config";
+import { withLease } from "@/lib/db/leases.js";
+import { isNonServerRuntime } from "@/lib/runtimeEnv.js";
+import * as log from "@/sse/utils/logger.js";
 
 const C = QUOTA_AUTOPING_CONFIG;
 const CLAUDE_PING_URL = "https://api.anthropic.com/v1/messages?beta=true";
+
+// Leases guard only the external ping call, not the whole tick — claiming it
+// any earlier would block one connection's ping behind another's in the same
+// tick. Claude's ping is one non-streamed call; Codex's streams until the
+// model finishes reasoning, the slower of the two. 45s covers either under
+// load; TTL is double that so a lease never expires mid-ping and gets
+// re-claimed by a retrying instance while the first ping is still in flight.
+const PING_LEASE_TTL_MS = 90_000;
 
 const providerHandlers = {
   claude: {
@@ -38,10 +49,15 @@ function cacheKey(provider, connectionId) {
   return `${provider}:${connectionId}`;
 }
 
-function normalizeResetKey(resetAt) {
+export function normalizeResetKey(resetAt) {
   const ms = new Date(resetAt).getTime();
   if (!Number.isFinite(ms)) return resetAt;
   return new Date(Math.floor(ms / 60000) * 60000).toISOString();
+}
+
+// Exported so tests can pre-claim the exact id a real ping would use.
+export function pingLeaseId(connectionId, resetKey) {
+  return `quota-ping:${connectionId}:${resetKey}`;
 }
 
 function getResetDriftMs(previousResetAt, nextResetAt) {
@@ -210,7 +226,17 @@ async function pingConnection(conn, provider, providerConfig, handler, deps, sta
   if (wasPingedRecently(connection, providerConfig.minPingIntervalMs, now)) return;
   if (lastPingedResetKey === resetKey) return;
 
-  const ok = await handler.sendPing(connection, providerConfig, proxyOptions, deps);
+  const leaseId = pingLeaseId(connection.id, resetKey);
+  const { ran, result: ok } = await withLease(
+    leaseId,
+    PING_LEASE_TTL_MS,
+    () => handler.sendPing(connection, providerConfig, proxyOptions, deps),
+    { onSkip: () => log.debug("AutoPing", `${provider}:${connection.id}: another instance is pinging reset ${resetKey}, skip`) }
+  );
+  // Lost the claim: another instance owns this reset window. Leave local
+  // state untouched (not failureCache, not lastPingedResetKey) so a later
+  // tick re-checks instead of assuming the ping happened or failed.
+  if (!ran) return;
   if (!ok) {
     // Do not mark reset as pinged unless upstream accepted the tiny request.
     state.failureCache[key] = Date.now();
@@ -272,6 +298,7 @@ export async function runQuotaAutoPingTick(deps = createDefaultDeps(), state = g
 }
 
 export function startQuotaAutoPing() {
+  if (isNonServerRuntime()) return;
   if (g.interval) return;
   console.log("[AutoPing] scheduler started");
   runQuotaAutoPingTick().catch(() => {});

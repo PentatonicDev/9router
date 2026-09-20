@@ -11,6 +11,7 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
 import { SSE_DONE } from "../utils/sseConstants.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
+import { coordinateRefresh } from "../services/oauthCredentialManager.js";
 import crypto from "crypto";
 
 export class GithubExecutor extends BaseExecutor {
@@ -401,7 +402,12 @@ export class GithubExecutor extends BaseExecutor {
     let copilotResult = await this.refreshCopilotToken(credentials.accessToken, log, proxyOptions);
 
     if (!copilotResult && credentials.refreshToken) {
-      const githubTokens = await this.refreshGitHubToken(credentials.refreshToken, log, proxyOptions);
+      // GitHub OAuth App refresh tokens rotate on use, so the actual token
+      // exchange (not the copilot-token derivation above) needs coordination
+      // against a sibling instance rotating the same refresh token.
+      const githubTokens = await coordinateRefresh(this.provider, credentials, log, (creds) =>
+        this.refreshGitHubToken(creds.refreshToken, log, proxyOptions)
+      );
       if (githubTokens?.accessToken) {
         copilotResult = await this.refreshCopilotToken(githubTokens.accessToken, log, proxyOptions);
         if (copilotResult) {

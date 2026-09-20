@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("open-sse/index.js", () => ({}), { virtual: true });
 
@@ -64,11 +67,36 @@ const FREE_QUOTAS = {
   },
 };
 
+// runQuotaUnlockTick now claims a real cross-instance lease (src/lib/db/leases.js)
+// around its body, so it needs a real (throwaway) sqlite db instead of the
+// mocked deps used for everything else here — never the real ~/.9router one.
+const originalDataDir = process.env.DATA_DIR;
+let tempDir;
+let closeDb;
+
 describe("quota unlock", () => {
   let buildQuotaUnlockUpdate;
   let runQuotaUnlockTick;
+  let UNLOCK_LEASE_ID;
+  let claimLease;
+  let releaseLease;
   let deps;
   let state;
+
+  beforeAll(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-quota-unlock-"));
+    process.env.DATA_DIR = tempDir;
+    const kysely = await import("@/lib/db/kysely.js");
+    closeDb = kysely.closeDb;
+    await kysely.getDb(); // force schema creation before any test runs
+  });
+
+  afterAll(async () => {
+    await closeDb();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+  });
 
   beforeEach(async () => {
     vi.resetModules();
@@ -78,7 +106,8 @@ describe("quota unlock", () => {
     delete global.__quotaUnlock;
 
     ({ buildQuotaUnlockUpdate } = await import("../../src/shared/services/quotaUnlockRules.js"));
-    ({ runQuotaUnlockTick } = await import("../../src/shared/services/quotaUnlock.js"));
+    ({ runQuotaUnlockTick, UNLOCK_LEASE_ID } = await import("../../src/shared/services/quotaUnlock.js"));
+    ({ claimLease, releaseLease } = await import("@/lib/db/leases.js"));
 
     deps = {
       getProviderConnections: vi.fn().mockResolvedValue([]),
@@ -181,5 +210,60 @@ describe("quota unlock", () => {
 
     expect(deps.updateProviderConnection).toHaveBeenCalledTimes(1);
     expect(deps.updateProviderConnection).toHaveBeenCalledWith("conn-1", expect.anything());
+  });
+
+  describe("cross-instance lease", () => {
+    beforeEach(() => {
+      deps.getProviderConnections.mockResolvedValue([lockedCodex()]);
+    });
+
+    it("skips entirely when another instance already holds the lease", async () => {
+      const foreignHolder = await claimLease(UNLOCK_LEASE_ID, 60_000, { holder: "other-instance:1" });
+      expect(foreignHolder).toBe("other-instance:1");
+
+      try {
+        await runQuotaUnlockTick(deps, state);
+
+        expect(deps.getProviderConnections).not.toHaveBeenCalled();
+        expect(deps.getUsageForProvider).not.toHaveBeenCalled();
+        expect(deps.updateProviderConnection).not.toHaveBeenCalled();
+      } finally {
+        await releaseLease(UNLOCK_LEASE_ID, "other-instance:1");
+      }
+    });
+
+    it("runs and releases the lease when free, so a subsequent claim wins", async () => {
+      await runQuotaUnlockTick(deps, state);
+
+      expect(deps.getUsageForProvider).toHaveBeenCalledTimes(1);
+
+      const next = await claimLease(UNLOCK_LEASE_ID, 60_000, { holder: "next-claimant" });
+      expect(next).toBe("next-claimant");
+      await releaseLease(UNLOCK_LEASE_ID, "next-claimant");
+    });
+
+    it("stops the loop instead of double-processing once another instance steals the lease mid-run", async () => {
+      deps.getProviderConnections.mockResolvedValue([lockedCodex({ id: "conn-1" }), lockedCodex({ id: "conn-2" })]);
+      // Simulate the lease outliving its TTL mid-loop (clock skew / a slow
+      // reconcile) and a rival instance winning the now-expired row while
+      // conn-1 is still being reconciled — renew() for conn-2 must then see
+      // it no longer owns the lease.
+      deps.getUsageForProvider.mockImplementationOnce(async (...args) => {
+        vi.setSystemTime(new Date(NOW.getTime() + 700_000));
+        const rival = await claimLease(UNLOCK_LEASE_ID, 60_000, { holder: "rival-instance" });
+        expect(rival).toBe("rival-instance");
+        return FREE_QUOTAS;
+      });
+
+      try {
+        await runQuotaUnlockTick(deps, state);
+
+        expect(deps.getUsageForProvider).toHaveBeenCalledTimes(1);
+        expect(deps.updateProviderConnection).toHaveBeenCalledTimes(1);
+        expect(deps.updateProviderConnection).toHaveBeenCalledWith("conn-1", expect.anything());
+      } finally {
+        await releaseLease(UNLOCK_LEASE_ID, "rival-instance");
+      }
+    });
   });
 });

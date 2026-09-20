@@ -1,6 +1,7 @@
 import { createErrorResult } from "../utils/error.js";
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
 import { refreshTokenByProvider } from "../services/tokenRefresh.js";
+import { coordinateRefresh } from "../services/oauthCredentialManager.js";
 import { PROVIDER_MEDIA } from "../providers/index.js";
 import { getVideoAdapter } from "./videoProviders/index.js";
 
@@ -153,7 +154,9 @@ export async function handleVideoProxyCore({
   ) {
     let refreshed = null;
     try {
-      refreshed = await refreshTokenByProvider(provider, credentials, log);
+      refreshed = await coordinateRefresh(provider, credentials, log, (creds) =>
+        refreshTokenByProvider(provider, creds, log)
+      );
     } catch (error) {
       log?.warn?.("TOKEN", `${provider} | video refresh error: ${sanitizeSecrets(error.message, credentials)}`);
     }

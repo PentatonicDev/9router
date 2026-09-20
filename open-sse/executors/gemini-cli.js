@@ -1,6 +1,7 @@
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 import { OAUTH_ENDPOINTS, GEMINI_CLI_API_CLIENT, geminiCLIUserAgent } from "../config/appConstants.js";
+import { coordinateRefresh } from "../services/oauthCredentialManager.js";
 
 export class GeminiCLIExecutor extends BaseExecutor {
   constructor() {
@@ -57,28 +58,30 @@ export class GeminiCLIExecutor extends BaseExecutor {
     if (!credentials.refreshToken) return null;
 
     try {
-      const response = await fetch(OAUTH_ENDPOINTS.google.token, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: credentials.refreshToken,
-          client_id: this.config.clientId,
-          client_secret: this.config.clientSecret
-        })
+      return await coordinateRefresh(this.provider, credentials, log, async (creds) => {
+        const response = await fetch(OAUTH_ENDPOINTS.google.token, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: creds.refreshToken,
+            client_id: this.config.clientId,
+            client_secret: this.config.clientSecret
+          })
+        });
+
+        if (!response.ok) return null;
+
+        const tokens = await response.json();
+        log?.info?.("TOKEN", "Gemini CLI refreshed");
+
+        return {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token || creds.refreshToken,
+          expiresIn: tokens.expires_in,
+          projectId: creds.projectId
+        };
       });
-
-      if (!response.ok) return null;
-
-      const tokens = await response.json();
-      log?.info?.("TOKEN", "Gemini CLI refreshed");
-
-      return {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token || credentials.refreshToken,
-        expiresIn: tokens.expires_in,
-        projectId: credentials.projectId
-      };
     } catch (error) {
       log?.error?.("TOKEN", `Gemini CLI refresh error: ${error.message}`);
       return null;

@@ -5,6 +5,7 @@ import { OAUTH_ENDPOINTS, ANTIGRAVITY_HEADERS, AG_DEFAULT_TOOLS, AG_TOOL_SUFFIX,
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
 import { resolveSessionId, toNumericSessionId } from "../utils/sessionManager.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
+import { coordinateRefresh } from "../services/oauthCredentialManager.js";
 import { cleanJSONSchemaForAntigravity, normalizeGeminiContents } from "../translator/formats/gemini.js";
 import { DEFAULT_THINKING_AG_SIGNATURE } from "../config/defaultThinkingSignature.js";
 import { getGeminiThoughtSignatureSync } from "../services/thoughtSignatureStore.js";
@@ -308,28 +309,30 @@ export class AntigravityExecutor extends BaseExecutor {
     if (!credentials.refreshToken) return null;
 
     try {
-      const response = await proxyAwareFetch(OAUTH_ENDPOINTS.google.token, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: credentials.refreshToken,
-          client_id: this.config.clientId,
-          client_secret: this.config.clientSecret
-        })
-      }, proxyOptions);
+      return await coordinateRefresh(this.provider, credentials, log, async (creds) => {
+        const response = await proxyAwareFetch(OAUTH_ENDPOINTS.google.token, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: creds.refreshToken,
+            client_id: this.config.clientId,
+            client_secret: this.config.clientSecret
+          })
+        }, proxyOptions);
 
-      if (!response.ok) return null;
+        if (!response.ok) return null;
 
-      const tokens = await response.json();
-      log?.info?.("TOKEN", "Antigravity refreshed");
+        const tokens = await response.json();
+        log?.info?.("TOKEN", "Antigravity refreshed");
 
-      return {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token || credentials.refreshToken,
-        expiresIn: tokens.expires_in,
-        projectId: credentials.projectId
-      };
+        return {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token || creds.refreshToken,
+          expiresIn: tokens.expires_in,
+          projectId: creds.projectId
+        };
+      });
     } catch (error) {
       log?.error?.("TOKEN", `Antigravity refresh error: ${error.message}`);
       return null;

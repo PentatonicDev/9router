@@ -115,7 +115,7 @@ export async function refreshAccessToken(provider, refreshToken, credentials, lo
         status: response.status,
         error: errorText,
       });
-      return null;
+      return toRefreshErrorResult(classifyOAuthRefreshError(errorText, response.status));
     }
 
     const tokens = await response.json();
@@ -171,7 +171,7 @@ export async function refreshClineToken(refreshToken, log) {
           status: response.status,
           error: errorText,
         });
-        return null;
+        return toRefreshErrorResult(classifyOAuthRefreshError(errorText, response.status));
       }
 
       const body = await response.json();
@@ -220,7 +220,7 @@ export async function refreshGoogleToken(refreshToken, clientId, clientSecret, l
     if (!response.ok) {
       const errorText = await response.text();
       log?.error?.("TOKEN_REFRESH", "Failed to refresh Google token", { status: response.status, error: errorText });
-      return null;
+      return toRefreshErrorResult(classifyOAuthRefreshError(errorText, response.status));
     }
 
     const tokens = await response.json();
@@ -254,6 +254,18 @@ export function classifyOAuthRefreshError(errorText = "", status = 0) {
   return { status, code, description, permanent };
 }
 
+// Shape mergeRefreshedCredentials/isUnrecoverableRefreshError already understand
+// ({ error: "invalid_grant", ... }) — built from a non-OK refresh response so a
+// dead refresh token surfaces as a real failure instead of a silent `null` that
+// looks identical to "nothing to do".
+function toRefreshErrorResult({ code, description, permanent, status }) {
+  return {
+    error: permanent ? "unrecoverable_refresh_error" : (code || `http_${status}`),
+    ...(description ? { error_description: description } : {}),
+    status,
+  };
+}
+
 export async function refreshCodexToken(refreshToken, log) {
   if (!refreshToken) return null;
   return dedupRefresh("codex", refreshToken, async () => {
@@ -279,16 +291,15 @@ export async function refreshCodexToken(refreshToken, log) {
             status: response.status,
             code: failure.code,
           });
-          return { error: "unrecoverable_refresh_error", code: failure.code };
+        } else {
+          log?.error?.("TOKEN_REFRESH", "Failed to refresh Codex token", {
+            status: response.status,
+            error: errorText,
+            code: failure.code,
+            permanent: failure.permanent,
+          });
         }
-
-        log?.error?.("TOKEN_REFRESH", "Failed to refresh Codex token", {
-          status: response.status,
-          error: errorText,
-          code: failure.code,
-          permanent: failure.permanent,
-        });
-        return null;
+        return toRefreshErrorResult(failure);
       }
 
       const tokens = await response.json();
@@ -355,7 +366,7 @@ export async function refreshKiroToken(refreshToken, providerSpecificData, log, 
         status: response.status,
         error: errorText,
       });
-      return null;
+      return toRefreshErrorResult(classifyOAuthRefreshError(errorText, response.status));
     }
 
     const tokens = await response.json();
@@ -400,7 +411,7 @@ export async function refreshKiroToken(refreshToken, providerSpecificData, log, 
         status: response.status,
         error: errorText,
       });
-      return null;
+      return toRefreshErrorResult(classifyOAuthRefreshError(errorText, response.status));
     }
 
     const tokens = await response.json();
@@ -436,7 +447,7 @@ export async function refreshKiroToken(refreshToken, providerSpecificData, log, 
       status: response.status,
       error: errorText,
     });
-    return null;
+    return toRefreshErrorResult(classifyOAuthRefreshError(errorText, response.status));
   }
 
   const tokens = await response.json();
@@ -481,6 +492,11 @@ export async function refreshCopilotToken(githubAccessToken, log) {
     });
 
     if (!response.ok) {
+      // Not part of the refreshTokenByProvider() dispatch table oauthCredentialManager.js
+      // understands: callers here (checkAndRefreshToken's Copilot leg, copilotModels.js)
+      // check truthiness and read `.token` directly, with no isUnrecoverableRefreshError
+      // gate — an error-object result would look like success and persist an undefined
+      // copilotToken over a good one. Keep the plain-null contract.
       const errorText = await response.text();
       log?.error?.("TOKEN_REFRESH", "Failed to refresh Copilot token", {
         status: response.status,
@@ -537,7 +553,7 @@ export async function refreshCodebuddyToken(refreshToken, log) {
         status: response.status,
         error: errorText,
       });
-      return null;
+      return toRefreshErrorResult(classifyOAuthRefreshError(errorText, response.status));
     }
 
     const data = await response.json();
@@ -588,7 +604,7 @@ export async function refreshCodebuddyIntlToken(refreshToken, log) {
         status: response.status,
         error: errorText,
       });
-      return null;
+      return toRefreshErrorResult(classifyOAuthRefreshError(errorText, response.status));
     }
 
     const data = await response.json();
@@ -648,7 +664,7 @@ export async function refreshTraeToken(refreshToken, credentials, log) {
           status: response.status,
           error: errorText,
         });
-        return null;
+        return toRefreshErrorResult(classifyOAuthRefreshError(errorText, response.status));
       }
 
       const payload = await response.json();

@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("open-sse/index.js", () => ({}), { virtual: true });
 
@@ -70,15 +73,42 @@ vi.mock("open-sse/executors/index.js", () => ({
   getExecutor: vi.fn(),
 }));
 
+// pingConnection now claims a real cross-instance lease (src/lib/db/leases.js)
+// around the external ping call, so it needs a real (throwaway) sqlite db
+// instead of the mocked deps used for everything else here — never the real
+// ~/.9router one.
+const originalDataDir = process.env.DATA_DIR;
+let tempDir;
+let closeDb;
+
 describe("quota auto-ping", () => {
   let runQuotaAutoPingTick;
   let configureQuotaAutoPing;
+  let normalizeResetKey;
+  let pingLeaseId;
+  let claimLease;
+  let releaseLease;
   let deps;
   let state;
   let getCodexUsage;
   let getClaudeUsage;
   let getExecutor;
   let codexResponseText;
+
+  beforeAll(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-quota-autoping-"));
+    process.env.DATA_DIR = tempDir;
+    const kysely = await import("@/lib/db/kysely.js");
+    closeDb = kysely.closeDb;
+    await kysely.getDb(); // force schema creation before any test runs
+  });
+
+  afterAll(async () => {
+    await closeDb();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+  });
 
   beforeEach(async () => {
     vi.resetModules();
@@ -89,7 +119,8 @@ describe("quota auto-ping", () => {
     ({ getCodexUsage } = await import("open-sse/services/usage/codex.js"));
     ({ getClaudeUsage } = await import("open-sse/services/usage/claude.js"));
     ({ getExecutor } = await import("open-sse/executors/index.js"));
-    ({ runQuotaAutoPingTick, configureQuotaAutoPing } = await import("../../src/shared/services/quotaAutoPing.js"));
+    ({ runQuotaAutoPingTick, configureQuotaAutoPing, normalizeResetKey, pingLeaseId } = await import("../../src/shared/services/quotaAutoPing.js"));
+    ({ claimLease, releaseLease } = await import("@/lib/db/leases.js"));
 
     deps = {
       getSettings: vi.fn(),
@@ -367,6 +398,48 @@ describe("quota auto-ping", () => {
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1,
       messages: [{ role: "user", content: "hi" }],
+    });
+  });
+
+  describe("cross-instance lease", () => {
+    beforeEach(() => {
+      deps.getSettings.mockResolvedValue({ codexAutoPing: { connections: { "codex-1": true } } });
+      deps.getProviderConnections.mockImplementation(async ({ provider }) => (
+        provider === "codex" ? [{ id: "codex-1", provider: "codex", authType: "oauth", accessToken: "token" }] : []
+      ));
+      state.resetCache["codex:codex-1"] = "2026-01-01T17:00:00.000Z";
+      getCodexUsage.mockResolvedValue({
+        quotas: { session: { used: 1, total: 100, remaining: 99, resetAt: "2026-01-01T17:01:00.000Z" } },
+      });
+    });
+
+    it("skips the ping when another instance already owns this reset window", async () => {
+      const resetKey = normalizeResetKey("2026-01-01T17:01:00.000Z");
+      const leaseId = pingLeaseId("codex-1", resetKey);
+      const foreignHolder = await claimLease(leaseId, 60_000, { holder: "other-instance:1" });
+      expect(foreignHolder).toBe("other-instance:1");
+
+      try {
+        await runQuotaAutoPingTick(deps, state);
+
+        expect(deps.getExecutor).not.toHaveBeenCalled();
+        expect(deps.updateProviderConnection).not.toHaveBeenCalled();
+      } finally {
+        await releaseLease(leaseId, "other-instance:1");
+      }
+    });
+
+    it("pings and releases the lease when free, so a subsequent claim wins", async () => {
+      await runQuotaAutoPingTick(deps, state);
+
+      const executor = deps.getExecutor.mock.results[0].value;
+      expect(executor.execute).toHaveBeenCalledTimes(1);
+
+      const resetKey = normalizeResetKey("2026-01-01T17:01:00.000Z");
+      const leaseId = pingLeaseId("codex-1", resetKey);
+      const next = await claimLease(leaseId, 60_000, { holder: "next-claimant" });
+      expect(next).toBe("next-claimant");
+      await releaseLease(leaseId, "next-claimant");
     });
   });
 });

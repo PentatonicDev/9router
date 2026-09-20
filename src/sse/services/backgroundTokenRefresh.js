@@ -4,6 +4,7 @@
 import * as log from "../utils/logger.js";
 import { getRefreshLeadMs } from "open-sse/services/tokenRefresh.js";
 import { getCredentialExpiryMs } from "open-sse/services/oauthCredentialManager.js";
+import { isNonServerRuntime } from "@/lib/runtimeEnv.js";
 
 /** Refresh when expiry is within 30 minutes (or the provider on-request lead, whichever larger). */
 export const BACKGROUND_REFRESH_LEAD_MS = 30 * 60 * 1000;
@@ -22,20 +23,6 @@ function isTruthyEnv(value) {
   return v === "1" || v === "true" || v === "yes" || v === "on";
 }
 
-function isNonServerRuntime() {
-  if (typeof window !== "undefined") return true;
-  const phase = process.env.NEXT_PHASE || "";
-  if (
-    phase === "phase-production-build" ||
-    phase === "phase-export" ||
-    phase === "phase-static"
-  ) {
-    return true;
-  }
-  // Next.js build / static generation markers
-  if (process.env.NEXT_RUNTIME === "edge") return true;
-  return false;
-}
 
 /**
  * Pure selection: OAuth connections with a refreshToken whose access token

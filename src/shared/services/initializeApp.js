@@ -107,20 +107,9 @@ async function runHeavyStartup() {
 
   configureTunnelMonitoring(settings);
 
-  if (hasQuotaAutoPingEnabled(settings)) {
-    import("@/shared/services/quotaAutoPing")
-      .then(({ startQuotaAutoPing }) => startQuotaAutoPing())
-      .catch((e) => console.log("[AutoPing] scheduler start failed:", e.message));
-  }
-
-  import("@/shared/services/quotaUnlock")
-    .then(({ startQuotaUnlock }) => startQuotaUnlock())
-    .catch((e) => console.log("[QuotaUnlock] scheduler start failed:", e.message));
-}
-
-function hasQuotaAutoPingEnabled(settings) {
-  return [settings?.claudeAutoPing, settings?.codexAutoPing]
-    .some((config) => Object.values(config?.connections || {}).some(Boolean));
+  // quotaAutoPing/quotaUnlock now start from instrumentation.js on process
+  // boot (see that file), not from here — this only ran on the first dashboard
+  // render, so an instance serving pure /v1 traffic never started them.
 }
 
 async function autoStartMitm(settings) {

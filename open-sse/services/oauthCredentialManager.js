@@ -70,6 +70,9 @@ export function mergeProviderSpecificData(existing, next) {
 export function mergeRefreshedCredentials(provider, currentCredentials, refreshedCredentials, nowMs = Date.now()) {
   if (!refreshedCredentials) return null;
   if (isUnrecoverableRefreshError(refreshedCredentials)) return refreshedCredentials;
+  // Recoverable failure (transient HTTP 5xx/429/etc.): let refreshWithRetry retry,
+  // same as before toRefreshErrorResult started returning a truthy object here.
+  if (refreshedCredentials.error) return null;
 
   const next = {};
   const nowIso = new Date(nowMs).toISOString();
@@ -120,6 +123,19 @@ export function mergeRefreshedCredentials(provider, currentCredentials, refreshe
   return next;
 }
 
+// DB-backed cross-process coordinator, installed by src/instrumentation.js at
+// boot via setRefreshCoordinator(). null by default so open-sse stays
+// DB-agnostic and unit tests that never install one keep today's behaviour.
+let _refreshCoordinator = null;
+
+/**
+ * @param {{ claim: (provider: string, credentials: object) => Promise<{won: boolean, release: () => Promise<void>}>,
+ *           reload: (provider: string, credentials: object) => Promise<object|null> } | null} coordinator
+ */
+export function setRefreshCoordinator(coordinator) {
+  _refreshCoordinator = coordinator;
+}
+
 function getRefreshLockKey(provider, credentials) {
   const stableId =
     credentials?.connectionId ||
@@ -146,11 +162,63 @@ export async function withCredentialRefreshLock(provider, credentials, refreshFn
   return pending;
 }
 
+// Generic cross-process-aware refresh, shared by refreshProviderCredentials
+// below and by every executor/handler that refreshes credentials directly
+// (default.js, kiro.js, videoCore.js, the models route's OAuth resolver).
+// Contract (see src/lib/db/leases.js header): the loser never waits — it
+// re-reads state and either adopts what the winner already wrote (returns
+// the reloaded row as-is) or defers (returns null) to the next tick/request;
+// the winner re-reads the row it is about to mutate and, if it still needs
+// refreshing, calls `refreshFn` with the RELOADED credentials (not the ones
+// it was called with, since those may already be stale — another instance
+// may have rotated the refresh token minutes ago). Without a coordinator
+// installed, it just runs `refreshFn(credentials)` under the in-process lock,
+// unchanged from before this existed.
+//
+// `refreshFn`'s return value is passed straight through on the winner path —
+// callers that want it merged onto their own credentials shape do that
+// merge inside `refreshFn` itself (see refreshProviderCredentials below),
+// using the `creds` argument it's called with rather than the outer
+// `credentials`, so the merge lands on the same fresher base the provider
+// call used.
+export async function coordinateRefresh(provider, credentials, log, refreshFn) {
+  return withCredentialRefreshLock(provider, credentials, async () => {
+    if (!_refreshCoordinator) {
+      return refreshFn(credentials);
+    }
+
+    let claim;
+    try {
+      claim = await _refreshCoordinator.claim(provider, credentials);
+    } catch (e) {
+      // A coordinator is expected to fail open internally (claimLease does);
+      // this is a last-resort guard against a broken coordinator implementation.
+      log?.warn?.("TOKEN_REFRESH", `refresh coordinator claim failed, failing open: ${e.message}`);
+      claim = { won: true, release: async () => {} };
+    }
+
+    if (!claim.won) {
+      const reloaded = await _refreshCoordinator.reload(provider, credentials);
+      return reloaded && !shouldRefreshCredentials(provider, reloaded) ? reloaded : null;
+    }
+
+    try {
+      const reloaded = await _refreshCoordinator.reload(provider, credentials);
+      if (reloaded && !shouldRefreshCredentials(provider, reloaded)) {
+        return reloaded;
+      }
+      return await refreshFn(reloaded || credentials);
+    } finally {
+      await claim.release();
+    }
+  });
+}
+
 export async function refreshProviderCredentials(provider, credentials, log) {
   if (!credentials) return null;
 
-  return withCredentialRefreshLock(provider, credentials, async () => {
-    const refreshed = await refreshTokenByProvider(provider, credentials, log);
-    return mergeRefreshedCredentials(provider, credentials, refreshed);
+  return coordinateRefresh(provider, credentials, log, async (creds) => {
+    const refreshed = await refreshTokenByProvider(provider, creds, log);
+    return mergeRefreshedCredentials(provider, creds, refreshed);
   });
 }

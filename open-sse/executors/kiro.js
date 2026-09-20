@@ -7,6 +7,7 @@ import {
 } from "../config/kiroConstants.js";
 import { v4 as uuidv4 } from "uuid";
 import { refreshKiroToken } from "../services/tokenRefresh.js";
+import { coordinateRefresh } from "../services/oauthCredentialManager.js";
 import { SSE_DONE, SSE_HEADERS } from "../utils/sseConstants.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { STREAM_FIRST_CHUNK_TIMEOUT_MS } from "../config/runtimeConfig.js";
@@ -1194,14 +1195,9 @@ export class KiroExecutor extends BaseExecutor {
 
     try {
       // Use centralized refreshKiroToken function (handles both AWS SSO OIDC and Social Auth)
-      const result = await refreshKiroToken(
-        credentials.refreshToken,
-        credentials.providerSpecificData,
-        log,
-        proxyOptions
+      return await coordinateRefresh(this.provider, credentials, log, (creds) =>
+        refreshKiroToken(creds.refreshToken, creds.providerSpecificData, log, proxyOptions)
       );
-
-      return result;
     } catch (error) {
       log?.error?.("TOKEN", `Kiro refresh error: ${error.message}`);
       return null;

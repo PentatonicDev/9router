@@ -10,8 +10,21 @@ import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { refreshAndUpdateCredentials } from "@/app/api/usage/[connectionId]/route.js";
 import { needsQuotaCheck, buildQuotaUnlockUpdate } from "@/shared/services/quotaUnlockRules";
 import { QUOTA_UNLOCK_CONFIG } from "@/shared/constants/config";
+import { withLease } from "@/lib/db/leases.js";
+import { isNonServerRuntime } from "@/lib/runtimeEnv.js";
+import * as log from "@/sse/utils/logger.js";
 
 const C = QUOTA_UNLOCK_CONFIG;
+
+// One instance reconciles a given tick across the whole deployment — otherwise
+// every instance would spend its own usage call per locked account. Realistic
+// duration: reconcileConnection costs at most one OAuth refresh + one forced
+// usage fetch per locked connection; a locked account is already the abnormal
+// case, so budgeting 15s/connection for up to ~20 simultaneously-locked
+// accounts bounds a realistic tick at 20 * 15s = 300s. TTL is double that so a
+// slow tick is never pre-empted mid-run by its own next-cycle claim.
+export const UNLOCK_LEASE_ID = "job:quota-unlock";
+const UNLOCK_LEASE_TTL_MS = 2 * 20 * 15_000; // 600_000ms
 
 // Survive Next.js hot reload and keep one scheduler per server process.
 const g = (global.__quotaUnlock ??= { interval: null, running: false });
@@ -60,14 +73,22 @@ export async function runQuotaUnlockTick(deps = createDefaultDeps(), state = g) 
   if (state.running) return;
   state.running = true;
   try {
-    const connections = await deps.getProviderConnections({ isActive: true });
-    for (const conn of connections.filter((c) => needsQuotaCheck(c))) {
-      try {
-        await reconcileConnection(conn, deps);
-      } catch (e) {
-        console.warn(`[QuotaUnlock] ${conn.provider}:${conn.id}: ${e.message}`);
+    await withLease(UNLOCK_LEASE_ID, UNLOCK_LEASE_TTL_MS, async ({ renew }) => {
+      const connections = await deps.getProviderConnections({ isActive: true });
+      for (const conn of connections.filter((c) => needsQuotaCheck(c))) {
+        try {
+          // Renew per connection, not just once for the whole tick — a run over
+          // many locked accounts can otherwise outlive the TTL and get pre-empted
+          // mid-loop by another instance's claim. If renew() reports we no longer
+          // hold the lease, another instance already won it — stop instead of
+          // continuing to process the same connections concurrently.
+          if (!(await renew())) break;
+          await reconcileConnection(conn, deps);
+        } catch (e) {
+          console.warn(`[QuotaUnlock] ${conn.provider}:${conn.id}: ${e.message}`);
+        }
       }
-    }
+    }, { onSkip: () => log.debug("QuotaUnlock", "lease held by another instance, skip") });
   } catch (e) {
     console.warn("[QuotaUnlock] tick error:", e.message);
   } finally {
@@ -76,6 +97,7 @@ export async function runQuotaUnlockTick(deps = createDefaultDeps(), state = g) 
 }
 
 export function startQuotaUnlock() {
+  if (isNonServerRuntime()) return;
   if (g.interval) return;
   console.log("[QuotaUnlock] scheduler started");
   runQuotaUnlockTick().catch(() => {});

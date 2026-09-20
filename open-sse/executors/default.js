@@ -9,6 +9,7 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { detectClientTool } from "../utils/clientDetector.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
+import { coordinateRefresh } from "../services/oauthCredentialManager.js";
 
 // Auth header descriptors — derived from registry transport.auth, fallback to hardcoded defaults.
 const BEARER = { combined: true, header: "Authorization", scheme: "bearer" };
@@ -313,27 +314,32 @@ export class DefaultExecutor extends BaseExecutor {
       : this.refreshWithForm(grant.url(), params, proxyOptions);
   }
 
+  // Built per credentials object (outer or coordinator-reloaded) so
+  // coordinateRefresh can call the provider with whichever one is current.
+  buildRefresher(creds, proxyOptions) {
+    return {
+      claude: () => this.refreshFromGrant(creds, proxyOptions),
+      codex: () => this.refreshFromGrant(creds, proxyOptions),
+      iflow: () => this.refreshIflow(creds.refreshToken, proxyOptions),
+      gemini: () => this.refreshFromGrant(creds, proxyOptions),
+      kiro: () => this.refreshKiro(creds.refreshToken, proxyOptions),
+      cline: () => this.refreshCline(creds.refreshToken, proxyOptions),
+      clinepass: () => this.refreshCline(creds.refreshToken, proxyOptions),
+      kimi: () => this.refreshKimi(creds, proxyOptions),
+      "kimi-coding": () => this.refreshKimi(creds, proxyOptions),
+      kilocode: () => this.refreshKilocode(creds.refreshToken, proxyOptions)
+    }[this.provider];
+  }
+
   async refreshCredentials(credentials, log, proxyOptions = null) {
     if (!credentials.refreshToken) return null;
-
-    const refreshers = {
-      claude: () => this.refreshFromGrant(credentials, proxyOptions),
-      codex: () => this.refreshFromGrant(credentials, proxyOptions),
-      iflow: () => this.refreshIflow(credentials.refreshToken, proxyOptions),
-      gemini: () => this.refreshFromGrant(credentials, proxyOptions),
-      kiro: () => this.refreshKiro(credentials.refreshToken, proxyOptions),
-      cline: () => this.refreshCline(credentials.refreshToken, proxyOptions),
-      clinepass: () => this.refreshCline(credentials.refreshToken, proxyOptions),
-      kimi: () => this.refreshKimi(credentials, proxyOptions),
-      "kimi-coding": () => this.refreshKimi(credentials, proxyOptions),
-      kilocode: () => this.refreshKilocode(credentials.refreshToken, proxyOptions)
-    };
-
-    const refresher = refreshers[this.provider];
-    if (!refresher) return null;
+    if (!this.buildRefresher(credentials, proxyOptions)) return null;
 
     try {
-      const result = await refresher();
+      const result = await coordinateRefresh(this.provider, credentials, log, (creds) => {
+        const refresher = this.buildRefresher(creds, proxyOptions);
+        return refresher ? refresher() : null;
+      });
       if (result) log?.info?.("TOKEN", `${this.provider} refreshed`);
       return result;
     } catch (error) {

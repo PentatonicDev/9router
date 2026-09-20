@@ -3,6 +3,7 @@ import { getProviderConnectionById } from "@/models";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { GEMINI_CONFIG, ZED_HOSTED_CONFIG } from "@/lib/oauth/constants/oauth";
 import { refreshGoogleToken, refreshCodexToken, updateProviderCredentials } from "@/sse/services/tokenRefresh";
+import { coordinateRefresh } from "open-sse/services/oauthCredentialManager.js";
 import { resolveOllamaLocalHost } from "open-sse/config/providers.js";
 import { getModelsByProviderId } from "open-sse/config/providerModels.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
@@ -99,7 +100,10 @@ const buildOAuthResolver = ({ refreshFn, fetchFn, parseFn, errorLabel }) => asyn
   try {
     let response = await fetchFn(accessToken, connection);
     if (!response.ok && (response.status === 401 || response.status === 403) && refreshToken) {
-      const refreshed = await refreshFn(connection);
+      const credentialsFromConnection = { connectionId: connection.id, accessToken, refreshToken };
+      const refreshed = await coordinateRefresh(connection.provider, credentialsFromConnection, console, (creds) =>
+        refreshFn(creds)
+      );
       if (refreshed?.accessToken) {
         await updateProviderCredentials(connection.id, {
           accessToken: refreshed.accessToken,

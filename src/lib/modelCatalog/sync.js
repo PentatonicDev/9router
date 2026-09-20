@@ -7,9 +7,26 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CATALOG_FILE, CATALOG_RAW_FILE, CATALOG_VERSION, invalidateCatalog, installCatalogSource } from "open-sse/providers/catalogOverride.js";
+import { withLease } from "@/lib/db/leases.js";
+import { makeKv } from "@/lib/db/helpers/kvStore.js";
 
 const CATALOG_URL = "https://models.dev/api.json";
 const FETCH_TIMEOUT_MS = 60000;
+
+// Only one instance should hit models.dev per sync. Realistic duration: the
+// fetch itself is bounded by FETCH_TIMEOUT_MS, and collectEntries()/build()/
+// the two writeAtomic() calls are in-memory JS + local disk I/O, well under
+// 10s even for the full 4.3MB catalog. TTL is double the worst case so a slow
+// fetch is never pre-empted by a retrying instance mid-write.
+export const CATALOG_LEASE_ID = "job:model-catalog-sync";
+const CATALOG_LEASE_TTL_MS = 2 * (FETCH_TIMEOUT_MS + 10_000);
+
+// Each instance has its own DATA_DIR/CATALOG_FILE, so a loser that only skips
+// the fetch never gets a catalog of its own. The winner also mirrors its
+// result into this shared kv row (works the same over SQLite and Postgres —
+// see src/lib/db/helpers/kvStore.js) and a loser adopts it locally instead of
+// calling models.dev itself.
+const catalogKv = makeKv("modelCatalog");
 
 export const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const STARTUP_DELAY_MS = 60 * 1000;   // let the server boot and serve first requests
@@ -38,7 +55,7 @@ export const PROVIDER_ALIASES = {
   "cloudflare-ai": "cloudflare-workers-ai",
 };
 
-let state = { running: false, lastSync: null, lastError: null, lastResult: null, etag: null, fileVersion: null };
+let state = { running: false, lastSync: null, lastError: null, lastResult: null, etag: null, fileVersion: null, syncedAt: null };
 let timer = null;
 
 export function getSyncState() {
@@ -181,51 +198,76 @@ async function collectEntries() {
   return entries;
 }
 
+// Talks to models.dev and writes CATALOG_FILE/CATALOG_RAW_FILE. Only ever runs
+// inside the lease in syncModelCatalog() below — this is the "winner" half.
+async function fetchAndWrite() {
+  const headers = { accept: "application/json" };
+  // A file written by an older schema has to be rebuilt even when upstream is
+  // unchanged, so only ask upstream for a 304 when the file is current.
+  if (state.etag && state.fileVersion === CATALOG_VERSION) headers["if-none-match"] = state.etag;
+  const response = await fetch(CATALOG_URL, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+
+  if (response.status === 304) return { status: "unchanged" };
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+  // ~23ms to parse, once a day, on a server that is otherwise idle at this
+  // point — not worth a worker thread.
+  const catalog = await response.json();
+  const etag = response.headers.get("etag") || null;
+  const entries = await collectEntries();
+  const { models, providers } = build(catalog, entries);
+  const payload = { v: CATALOG_VERSION, etag, syncedAt: Date.now(), models, providers };
+  const serialized = JSON.stringify(payload);
+
+  writeAtomic(CATALOG_FILE, serialized);
+  writeAtomic(CATALOG_RAW_FILE, JSON.stringify(slim(catalog)));
+  // Best-effort: a loser adopts this through adoptFromKv() below. A failure
+  // here just means the next winner's copy is what losers eventually pick up.
+  await catalogKv.set("catalog", payload).catch((e) => console.warn(`[modelCatalog] kv share failed: ${e.message}`));
+
+  state.etag = etag;
+  state.fileVersion = CATALOG_VERSION;
+  state.syncedAt = payload.syncedAt;
+  invalidateCatalog();
+  const result = {
+    status: "updated",
+    etag,
+    bytes: Buffer.byteLength(serialized),
+    models: Object.keys(models).length,
+    providers: Object.keys(providers).length,
+  };
+  console.log(`[modelCatalog] ${result.models} models, ${result.providers} providers, ${(result.bytes / 1024).toFixed(1)}KB`);
+  return result;
+}
+
+// Loser half: adopt the winning instance's already-fetched catalog from kv
+// instead of calling models.dev itself. No-op when kv has nothing newer than
+// what this instance already has on disk (including the very first tick
+// across the whole fleet, before anyone has won yet).
+async function adoptFromKv() {
+  const shared = await catalogKv.get("catalog").catch(() => null);
+  if (!shared?.syncedAt || shared.syncedAt <= (state.syncedAt || 0)) return { status: "unchanged" };
+
+  writeAtomic(CATALOG_FILE, JSON.stringify(shared));
+  state.etag = shared.etag || null;
+  state.fileVersion = shared.v || CATALOG_VERSION;
+  state.syncedAt = shared.syncedAt;
+  invalidateCatalog();
+  return { status: "adopted", etag: state.etag };
+}
+
 // Run one sync. Returns a summary, or null when it could not complete.
 export async function syncModelCatalog() {
   if (state.running) return null;
   state.running = true;
   try {
-    const headers = { accept: "application/json" };
-    // A file written by an older schema has to be rebuilt even when upstream is
-    // unchanged, so only ask upstream for a 304 when the file is current.
-    if (state.etag && state.fileVersion === CATALOG_VERSION) headers["if-none-match"] = state.etag;
-    const response = await fetch(CATALOG_URL, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-
-    let result;
-    if (response.status === 304) {
-      result = { status: "unchanged" };
-    } else if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    } else {
-      // ~23ms to parse, once a day, on a server that is otherwise idle at this
-      // point — not worth a worker thread.
-      const catalog = await response.json();
-      const etag = response.headers.get("etag") || null;
-      const entries = await collectEntries();
-      const { models, providers } = build(catalog, entries);
-      const serialized = JSON.stringify({ v: CATALOG_VERSION, etag, syncedAt: Date.now(), models, providers });
-
-      writeAtomic(CATALOG_FILE, serialized);
-      writeAtomic(CATALOG_RAW_FILE, JSON.stringify(slim(catalog)));
-
-      state.etag = etag;
-      state.fileVersion = CATALOG_VERSION;
-      invalidateCatalog();
-      result = {
-        status: "updated",
-        etag,
-        bytes: Buffer.byteLength(serialized),
-        models: Object.keys(models).length,
-        providers: Object.keys(providers).length,
-      };
-      console.log(`[modelCatalog] ${result.models} models, ${result.providers} providers, ${(result.bytes / 1024).toFixed(1)}KB`);
-    }
+    const { ran, result } = await withLease(CATALOG_LEASE_ID, CATALOG_LEASE_TTL_MS, fetchAndWrite);
+    const outcome = ran ? result : await adoptFromKv();
 
     state.lastSync = Date.now();
     state.lastError = null;
-    state.lastResult = result;
-    return result;
+    state.lastResult = outcome;
+    return outcome;
   } catch (error) {
     state.lastError = error?.message || String(error);
     console.log(`[modelCatalog] sync failed: ${state.lastError}`);
@@ -244,6 +286,7 @@ function restoreEtag() {
     const parsed = JSON.parse(fs.readFileSync(CATALOG_FILE, "utf8"));
     state.etag = parsed.etag || null;
     state.fileVersion = parsed.v || 1;
+    state.syncedAt = parsed.syncedAt || null;
     state.lastSync = fs.statSync(CATALOG_FILE).mtimeMs;
   } catch {
     state.etag = null;
@@ -259,8 +302,12 @@ export function startModelCatalogSync() {
 
   const schedule = (delay) => {
     timer = setTimeout(async () => {
-      const result = await syncModelCatalog();
-      schedule(result ? SYNC_INTERVAL_MS : RETRY_DELAY_MS);
+      await syncModelCatalog();
+      // Reschedule on whether we actually have a catalog now (state.syncedAt),
+      // not on syncModelCatalog()'s return value — a loser with nothing to
+      // adopt yet still resolves truthy ({status:"unchanged"}) and must retry
+      // sooner than a full day, or it can go a whole cycle catalog-less.
+      schedule(state.syncedAt ? SYNC_INTERVAL_MS : RETRY_DELAY_MS);
     }, delay);
     timer.unref?.();
   };
