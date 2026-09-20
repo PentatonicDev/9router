@@ -210,13 +210,27 @@ describe("POST /api/keys — one admin key per owner (route-level 409)", () => {
     expect(res.status).toBe(400);
   });
 
-  it("a non-admin caller's kind:admin request is silently downgraded to usage, never rejected", async () => {
-    asRequester(usageKeyA); // owner A, kind usage — not an admin identity
-    const res = await keysRoutePOST(apiRequest("/api/keys", bearer(usageKeyA), {
-      name: "Attempted admin key", kind: "admin",
+  it("a non-admin owner may mint an administration key only for itself, and only one", async () => {
+    asRequester(adminKeyA); // owner A, non-admin identity, already holds A's admin key
+    const res = await keysRoutePOST(apiRequest("/api/keys", bearer(adminKeyA), {
+      name: "Second admin key", kind: "admin", owner: OWNER_B,
     }));
-    expect(res.status).toBe(201);
-    expect(res.body.kind).toBe("usage");
+    // ownerForCreate stamps A's own identity (never B), and A already has one.
+    expect(res.status).toBe(409);
+  });
+
+  it("an admin mints an administration key for another owner, once", async () => {
+    asRequester(superAdminKey);
+    const first = await keysRoutePOST(apiRequest("/api/keys", bearer(superAdminKey), {
+      name: "Admin C", kind: "admin", owner: "carol@example.com",
+    }));
+    expect(first.status).toBe(201);
+    expect(first.body.kind).toBe("admin");
+    expect(first.body.owner).toBe("carol@example.com");
+    const second = await keysRoutePOST(apiRequest("/api/keys", bearer(superAdminKey), {
+      name: "Admin C again", kind: "admin", owner: "carol@example.com",
+    }));
+    expect(second.status).toBe(409);
   });
 });
 

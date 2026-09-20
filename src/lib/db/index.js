@@ -33,6 +33,7 @@ export {
   getApiKeyAllowedConnectionIds,
   getApiKeyOwner,
   getApiKeyIdentity, getApiKeyRoutingContext,
+  getAdminKeyByOwner, isAdminOwnerConflict, getApiKeyConnectionBudgets, normalizeConnectionBudgets,
 } from "./repos/apiKeysRepo.js";
 
 // Combos

@@ -11,6 +11,29 @@ function normalizeAllowed(value) {
   return ids.length ? Array.from(new Set(ids)) : null;
 }
 
+const VALID_BUDGET_PERIODS = new Set(["month", "total"]);
+
+// Structural validation for the spend-cap map; a connectionId no longer in
+// allowedConnectionIds is dropped silently rather than rejected, the same
+// "narrows itself" treatment reachableConnectionIds gives allowedConnectionIds
+// on an owner change. allowedConnectionIds === null means unrestricted, so
+// nothing is pruned on that account.
+export function normalizeConnectionBudgets(value, allowedConnectionIds = null) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const allowed = Array.isArray(allowedConnectionIds) ? new Set(allowedConnectionIds) : null;
+  const out = {};
+  for (const [connId, budget] of Object.entries(value)) {
+    if (typeof connId !== "string" || !connId.trim()) continue;
+    if (allowed && !allowed.has(connId)) continue;
+    if (!budget || typeof budget !== "object") continue;
+    const limitUsd = Number(budget.limitUsd);
+    if (!Number.isFinite(limitUsd) || limitUsd <= 0) continue;
+    if (!VALID_BUDGET_PERIODS.has(budget.period)) continue;
+    out[connId] = { limitUsd, period: budget.period };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 const MAX_TAG_LENGTH = 32;
 const MAX_TAGS = 20;
 
@@ -41,7 +64,10 @@ function rowToKey(row) {
     name: row.name,
     machineId: row.machineId,
     isActive: row.isActive === 1 || row.isActive === true,
-    management: row.management === 1 || row.management === true,
+    // "usage" routes /v1 traffic; "admin" drives the dashboard REST API as its
+    // owner and never routes (see resourceScope.js). Supersedes `management`.
+    kind: row.kind === "admin" ? "admin" : "usage",
+    connectionBudgets: parseJson(row.connectionBudgets, null) || {},
     allowedConnectionIds: normalizeAllowed(parseJson(row.allowedConnectionIds, null)),
     tags: normalizeTags(parseJson(row.tags, null)) || [],
     owner: row.owner ?? null,
@@ -61,7 +87,7 @@ export async function getApiKeyById(id) {
   return rowToKey(row);
 }
 
-export async function createApiKey(name, machineId, tags = null, owner = undefined, management = false) {
+export async function createApiKey(name, machineId, tags = null, owner = undefined, kind = "usage") {
   if (!machineId) throw new Error("machineId is required");
   const db = await getDb();
   const { generateApiKeyWithMachine } = await import("@/shared/utils/apiKey");
@@ -72,7 +98,8 @@ export async function createApiKey(name, machineId, tags = null, owner = undefin
     key: result.key,
     machineId,
     isActive: true,
-    management: !!management,
+    kind: kind === "admin" ? "admin" : "usage",
+    connectionBudgets: {},
     allowedConnectionIds: null,
     tags: normalizeTags(tags) || [],
     owner: owner === undefined ? await resolveDefaultOwner() : normalizeOwnerInput(owner),
@@ -80,7 +107,7 @@ export async function createApiKey(name, machineId, tags = null, owner = undefin
   };
   await db.insertInto("apiKeys").values({
     id: apiKey.id, key: apiKey.key, name: apiKey.name, machineId: apiKey.machineId,
-    isActive: 1, management: apiKey.management ? 1 : 0, allowedConnectionIds: null,
+    isActive: 1, kind: apiKey.kind, connectionBudgets: null, allowedConnectionIds: null,
     tags: apiKey.tags.length ? stringifyJson(apiKey.tags) : null,
     owner: apiKey.owner, createdAt: apiKey.createdAt,
   }).execute();
@@ -114,16 +141,30 @@ export async function updateApiKey(id, data) {
     const previous = rowToKey(row);
     const merged = { ...previous, ...data };
     merged.allowedConnectionIds = normalizeAllowed(merged.allowedConnectionIds);
+    // Defaults to allowedConnectionIds itself: null there genuinely means
+    // unrestricted when no owner change happened, so nothing is pruned.
+    let reachableForBudgets = merged.allowedConnectionIds;
     if (data.owner !== undefined && (merged.owner ?? null) !== (previous.owner ?? null)) {
-      merged.allowedConnectionIds = await reachableConnectionIds(trx, merged.allowedConnectionIds, merged.owner ?? null);
+      const kept = await reachableConnectionIds(trx, merged.allowedConnectionIds, merged.owner ?? null);
+      merged.allowedConnectionIds = kept;
+      // reachableConnectionIds collapses "every binding fell out of reach" to
+      // null too (same "empty = unrestricted" convention allowedConnectionIds
+      // itself uses) — but a budget must not read that as "anything goes" and
+      // survive on a connection the new owner cannot see. [] (not null) here
+      // tells normalizeConnectionBudgets below to prune everything instead.
+      reachableForBudgets = kept ?? [];
     }
+    // Re-run after any allowedConnectionIds pruning above, so a budget on a
+    // connection the key can no longer reach doesn't survive an owner change.
+    merged.connectionBudgets = normalizeConnectionBudgets(merged.connectionBudgets, reachableForBudgets);
     const tags = normalizeTags(merged.tags);
     merged.tags = tags || [];
-    merged.management = !!merged.management;
+    merged.kind = merged.kind === "admin" ? "admin" : "usage";
     await trx.updateTable("apiKeys").set({
       key: merged.key, name: merged.name, machineId: merged.machineId,
       isActive: merged.isActive ? 1 : 0,
-      management: merged.management ? 1 : 0,
+      kind: merged.kind,
+      connectionBudgets: merged.connectionBudgets ? stringifyJson(merged.connectionBudgets) : null,
       allowedConnectionIds: merged.allowedConnectionIds ? stringifyJson(merged.allowedConnectionIds) : null,
       tags: tags ? stringifyJson(tags) : null,
       owner: merged.owner ?? null,
@@ -131,6 +172,40 @@ export async function updateApiKey(id, data) {
     result = merged;
   });
   return result;
+}
+
+// The one admin key an owner may hold (idx_ak_admin_owner is the DB-level
+// backstop for this). excludeId lets a PUT re-check without self-conflicting
+// when editing/rotating that very key.
+export async function getAdminKeyByOwner(owner, excludeId = null) {
+  if (!owner) return null;
+  const db = await getDb();
+  let query = db.selectFrom("apiKeys").selectAll().where("owner", "=", owner).where("kind", "=", "admin");
+  if (excludeId) query = query.where("id", "!=", excludeId);
+  return rowToKey(await query.executeTakeFirst());
+}
+
+// True when `error` is idx_ak_admin_owner rejecting a write, on any of the
+// four SQLite drivers (better-sqlite3, node:sqlite, bun:sqlite, sql.js all
+// throw "UNIQUE constraint failed: apiKeys.owner", verified against each) or
+// Postgres (code 23505, constraint name). Lets a route convert the DB-level
+// rejection of the route's own TOCTOU race (check-then-insert on the same
+// owner from two concurrent requests) into 409 instead of a generic 500 —
+// distinguished from the table's other UNIQUE column (`key`) by column/index
+// name, not just "some constraint failed".
+export function isAdminOwnerConflict(error) {
+  if (error?.code === "23505") return error.constraint === "idx_ak_admin_owner";
+  return /UNIQUE constraint failed: apiKeys\.owner/.test(error?.message || "");
+}
+
+// SPEND's per-connection cap read, kept as its own lightweight query rather
+// than folded into getApiKeyRoutingContext so the routing hot path doesn't
+// widen its row for callers that never consult budgets.
+export async function getApiKeyConnectionBudgets(key) {
+  if (!key) return {};
+  const db = await getDb();
+  const row = await db.selectFrom("apiKeys").select("connectionBudgets").where("key", "=", key).executeTakeFirst();
+  return parseJson(row?.connectionBudgets, null) || {};
 }
 
 export async function deleteApiKey(id) {
@@ -156,16 +231,16 @@ export async function getApiKeyAllowedConnectionIds(key) {
 // each call is a Postgres round trip; keeping validity, ownership, bindings and
 // label together avoids re-reading the same row four times before dispatch.
 export async function getApiKeyRoutingContext(key) {
-  if (!key) return { valid: false, owner: null, name: null, management: false, allowedConnectionIds: null };
+  if (!key) return { valid: false, owner: null, name: null, kind: "usage", allowedConnectionIds: null };
   const db = await getDb();
   const row = await db.selectFrom("apiKeys")
-    .select(["isActive", "owner", "name", "management", "allowedConnectionIds"])
+    .select(["isActive", "owner", "name", "kind", "allowedConnectionIds"])
     .where("key", "=", key).executeTakeFirst();
   return {
     valid: row ? row.isActive === 1 || row.isActive === true : false,
     owner: row?.owner ?? null,
     name: row?.name ?? null,
-    management: row?.management === 1 || row?.management === true,
+    kind: row?.kind === "admin" ? "admin" : "usage",
     allowedConnectionIds: normalizeAllowed(parseJson(row?.allowedConnectionIds, null)),
   };
 }

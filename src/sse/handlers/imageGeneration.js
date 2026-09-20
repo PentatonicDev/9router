@@ -13,6 +13,7 @@ import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat } from "open-sse/services/combo.js";
 import * as log from "../utils/logger.js";
+import { rejectAdminKey } from "../utils/adminKeyGuard.js";
 
 // Providers that don't require credentials (noAuth)
 const NO_AUTH_PROVIDERS = new Set(["sdwebui", "comfyui"]);
@@ -36,6 +37,10 @@ export async function handleImageGeneration(request) {
   const modelStr = body.model;
 
   const apiKey = extractApiKey(request);
+  // Refused unconditionally — an admin key is a dashboard-management
+  // credential, not a routing one, whether or not requireApiKey is on.
+  const adminRefusal = await rejectAdminKey(apiKey);
+  if (adminRefusal) return adminRefusal;
   const settings = await getSettings();
   if (settings.requireApiKey) {
     if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
@@ -93,7 +98,7 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId, apiKey });
 
-    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited || credentials?.spendCapExceeded) {
       return responseFromRoutingCandidate(credentials.candidate);
     }
 

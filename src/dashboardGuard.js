@@ -156,11 +156,11 @@ function extractManagementApiKey(request) {
   return request.headers.get("x-api-key") || null;
 }
 
-async function managementKeyContext(request) {
+async function adminKeyContext(request) {
   const key = extractManagementApiKey(request);
   if (!key) return null;
   const ctx = await getApiKeyRoutingContext(key);
-  if (!ctx.valid || !ctx.owner || !ctx.management) return null;
+  if (!ctx.valid || !ctx.owner || ctx.kind !== "admin") return null;
   return ctx;
 }
 
@@ -187,8 +187,8 @@ async function canAccessLocalOnlyRoute(request) {
 // in hand rather than the request-scoped cookies()/headers() helpers.
 async function isAdminRequest(request, settings) {
   if (await hasValidCliToken(request)) return true;
-  const mgmt = await managementKeyContext(request);
-  if (mgmt) return mgmt.owner === ADMIN_OWNER || ssoAdminsFor(settings).includes(mgmt.owner);
+  const adminKey = await adminKeyContext(request);
+  if (adminKey) return adminKey.owner === ADMIN_OWNER || ssoAdminsFor(settings).includes(adminKey.owner);
   const session = await getDashboardAuthSession(request.cookies.get("auth_token")?.value);
   if (!session) return false;
   const owner = normalizeOwner(session.oidcEmail || session.samlEmail);
@@ -213,7 +213,7 @@ async function loadSettings() {
 // Session/requireLogin only, deliberately — canAccessLocalOnlyRoute also calls
 // this, and LOCAL_ONLY_PATHS (process-spawning / host-secret routes) must stay
 // session/CLI-token only, never opened up by a management API key. The generic
-// /api/* deny-by-default gate below checks managementKeyContext separately.
+// /api/* deny-by-default gate below checks adminKeyContext separately.
 async function isAuthenticated(request) {
   if (await hasValidToken(request)) return true;
   const settings = await loadSettings();
@@ -272,7 +272,7 @@ export async function proxy(request) {
   // same reach as that owner's dashboard session.
   if (pathname.startsWith("/api/")) {
     if (isPublicApi(pathname)) return NextResponse.next();
-    if (await hasValidCliToken(request) || await isAuthenticated(request) || await managementKeyContext(request))
+    if (await hasValidCliToken(request) || await isAuthenticated(request) || await adminKeyContext(request))
       return NextResponse.next();
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

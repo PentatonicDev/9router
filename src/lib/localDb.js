@@ -14,6 +14,7 @@ export {
   getApiKeyAllowedConnectionIds,
   getApiKeyOwner,
   getApiKeyIdentity, getApiKeyRoutingContext,
+  getAdminKeyByOwner, isAdminOwnerConflict, getApiKeyConnectionBudgets, normalizeConnectionBudgets,
   getCombos, getComboById, getComboByName,
   createCombo, updateCombo, deleteCombo,
   getModelAliases, setModelAlias, deleteModelAlias,

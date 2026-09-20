@@ -26,6 +26,20 @@ import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
+import { adminKeyRefusal } from "../utils/adminKeyGuard.js";
+import { THINKING_ORDER } from "open-sse/translator/concerns/thinking.js";
+
+// Effective thinking cap for one candidate = the tighter (lower THINKING_ORDER
+// position) of the combo-wide cap and that candidate's own per-model cap;
+// either may be absent. A level absent from THINKING_ORDER is ignored, same
+// as applyThinking's own unknown-cap handling.
+export function resolveMaxThinkingLevel(comboMaxThinking, perModelMaxThinking) {
+  const comboIdx = comboMaxThinking ? THINKING_ORDER.indexOf(comboMaxThinking) : -1;
+  const perModelIdx = perModelMaxThinking ? THINKING_ORDER.indexOf(perModelMaxThinking) : -1;
+  if (comboIdx === -1) return perModelIdx === -1 ? null : perModelMaxThinking;
+  if (perModelIdx === -1) return comboMaxThinking;
+  return perModelIdx <= comboIdx ? perModelMaxThinking : comboMaxThinking;
+}
 
 /**
  * Handle chat completion request
@@ -82,6 +96,10 @@ export async function handleChat(request, clientRawRequest = null, options = {})
   entryPhases.auth_ms = Date.now() - t0 - (entryPhases.parse_ms || 0);
   // undefined (not null) keeps the legacy combo lookup: name alone, ignoring ownership.
   const comboOwner = rawSettings.scopeResourcesByUser === true ? apiKeyContext.owner : undefined;
+  // Refused unconditionally — an admin key is a dashboard-management
+  // credential, not a routing one, whether or not requireApiKey is on.
+  const adminRefusal = adminKeyRefusal(apiKeyContext.kind, errorContext);
+  if (adminRefusal) return adminRefusal;
   if (settings.requireApiKey) {
     if (!apiKey) {
       log.warn("AUTH", "Missing API key (requireApiKey=true)");
@@ -302,6 +320,10 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       log.warn("CHAT", `[${provider}/${model}] ${credentials.candidate.message} (${credentials.retryAfterHuman})`);
       return responseFromRoutingCandidate(credentials.candidate, errorContext);
     }
+    if (credentials?.spendCapExceeded) {
+      log.warn("AUTH", credentials.candidate.message);
+      return responseFromRoutingCandidate(credentials.candidate, errorContext);
+    }
 
     // Account selection shown in the unified "▶" line (acc:...)
     const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
@@ -318,7 +340,10 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     // Use shared chatCore
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
-    const maxThinkingLevel = (comboModelOptions || {})[modelStr]?.maxThinking ?? null;
+    const maxThinkingLevel = resolveMaxThinkingLevel(
+      comboModelOptions?.maxThinking ?? null,
+      comboModelOptions?.modelOptions?.[modelStr]?.maxThinking ?? null
+    );
     const result = await handleChatCore({
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },

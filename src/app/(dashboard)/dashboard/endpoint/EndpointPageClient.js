@@ -52,6 +52,12 @@ export default function APIPageClient({ machineId }) {
   const [isAdmin, setIsAdmin] = useState(true);
   // Owner only means anything while scoping is on, so the field appears only then.
   const [canAssignOwner, setCanAssignOwner] = useState(false);
+  // The caller's own identity owner ("@admin" for password login, or the SSO
+  // e-mail) — an admin key defaults to this rather than the shared-pool
+  // default a routing key gets, since an ownerless admin key can never
+  // authenticate as anyone (see resourceScope.getRequestIdentity).
+  const [ownOwner, setOwnOwner] = useState(null);
+  const [adminKeyError, setAdminKeyError] = useState(null);
   const [requireLogin, setRequireLogin] = useState(true);
   const [hasPassword, setHasPassword] = useState(true);
  const [tunnelDashboardAccess, setTunnelDashboardAccess] = useState(false);
@@ -131,6 +137,7 @@ export default function APIPageClient({ machineId }) {
       .then((data) => {
         setIsAdmin(!data?.scopeResourcesByUser || !!data?.isAdmin);
         setCanAssignOwner(!!data?.scopeResourcesByUser && !!data?.isAdmin);
+        setOwnOwner(data?.owner ?? null);
       })
       .catch(() => {});
   }, []);
@@ -685,6 +692,63 @@ export default function APIPageClient({ machineId }) {
     }
   };
 
+  // Administration key card: create-if-none, rotate, revoke for the caller's
+  // own owner. Rotate has no dedicated endpoint (none exists for routing keys
+  // either) — it revokes then creates, same net effect.
+  const handleCreateAdminKey = async () => {
+    setAdminKeyError(null);
+    try {
+      const res = await fetch("/api/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Administration key", kind: "admin", owner: ownOwner }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCreatedKey(data.key);
+        await fetchData();
+      } else {
+        setAdminKeyError(data.error || "Failed to create administration key");
+      }
+    } catch (error) {
+      setAdminKeyError("An error occurred");
+    }
+  };
+
+  const handleRevokeAdminKey = (id) => {
+    setConfirmState({
+      title: "Revoke Administration Key",
+      message: "Revoke this administration key? Anything using it to drive the dashboard REST API will stop working immediately.",
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          const res = await fetch(`/api/keys/${id}`, { method: "DELETE" });
+          if (res.ok) setKeys((prev) => prev.filter((k) => k.id !== id));
+        } catch (error) {
+          console.log("Error revoking administration key:", error);
+        }
+      },
+    });
+  };
+
+  const handleRotateAdminKey = (id) => {
+    setConfirmState({
+      title: "Rotate Administration Key",
+      message: "Rotate this administration key? The old key stops working immediately and a new one is shown once.",
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          const del = await fetch(`/api/keys/${id}`, { method: "DELETE" });
+          if (!del.ok) return;
+          setKeys((prev) => prev.filter((k) => k.id !== id));
+          await handleCreateAdminKey();
+        } catch (error) {
+          console.log("Error rotating administration key:", error);
+        }
+      },
+    });
+  };
+
   const handleDeleteKey = async (id) => {
     setConfirmState({
       title: "Delete API Key",
@@ -729,10 +793,10 @@ export default function APIPageClient({ machineId }) {
     try {
       const payload = { name: name.trim(), tags: parseTagInput(tags) };
       // Reassigning drops bindings to accounts the new owner cannot reach, so
-      // only send it (and the management flag next to it) when actually editable here.
+      // only send it when actually editable here. Kind (usage/admin) is not
+      // set from this generic form — the Administration key card owns that.
       if (canAssignOwner) {
         payload.owner = owner?.trim() || null;
-        payload.management = !!editKeyState.management;
       }
       const res = await fetch(`/api/keys/${id}`, {
         method: "PUT",
@@ -751,6 +815,7 @@ export default function APIPageClient({ machineId }) {
     }
   };
 
+  const myAdminKey = keys.find((k) => k.kind === "admin" && k.owner === ownOwner) || null;
   const allTags = Array.from(new Set(keys.flatMap((k) => k.tags || []))).sort((a, b) => a.localeCompare(b));
   // Renaming or deleting the last key with a tag would leave the filter stuck
   // on a tag nothing carries, showing an empty list with no way back.
@@ -1111,6 +1176,33 @@ export default function APIPageClient({ machineId }) {
           </div>
         )}
 
+        {isAdmin && (
+          <div className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Administration key</p>
+              <p className="text-xs text-text-muted">
+                Drives the dashboard REST API (combos, providers, keys, settings) as your own
+                identity, instead of routing LLM requests. One per owner.
+              </p>
+              {adminKeyError && <p className="mt-1 text-xs text-red-500">{adminKeyError}</p>}
+            </div>
+            {myAdminKey ? (
+              <div className="flex shrink-0 gap-2">
+                <Button size="sm" variant="secondary" onClick={() => handleRotateAdminKey(myAdminKey.id)}>
+                  Rotate
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => handleRevokeAdminKey(myAdminKey.id)}>
+                  Revoke
+                </Button>
+              </div>
+            ) : (
+              <Button size="sm" onClick={handleCreateAdminKey} className="shrink-0">
+                Create
+              </Button>
+            )}
+          </div>
+        )}
+
         {keys.length === 0 ? (
           <div className="text-center py-12">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 text-primary mb-4">
@@ -1138,6 +1230,15 @@ export default function APIPageClient({ machineId }) {
                   <div className="flex flex-wrap items-center gap-1.5">
                     <p className="text-sm font-medium">{key.name}</p>
                     <span className="text-[11px] text-text-muted">{`Created ${new Date(key.createdAt).toLocaleDateString()}`}</span>
+                    {key.kind === "admin" ? (
+                      <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400" title="Drives the dashboard REST API as its owner, does not route LLM traffic">
+                        Administration
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-black/5 px-2 py-0.5 text-[11px] text-text-muted dark:bg-white/10">
+                        Usage
+                      </span>
+                    )}
                     {key.owner ? (
                       <span className="rounded-full bg-black/5 px-2 py-0.5 text-[11px] text-text-muted dark:bg-white/10">
                         {key.owner === "@admin" ? "Admin only" : key.owner}
@@ -1197,7 +1298,7 @@ export default function APIPageClient({ machineId }) {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setEditKeyState({ id: key.id, name: key.name || "", tags: (key.tags || []).join(", "), owner: key.owner || "", management: !!key.management, error: null })}
+                    onClick={() => setEditKeyState({ id: key.id, name: key.name || "", tags: (key.tags || []).join(", "), owner: key.owner || "", error: null })}
                     className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
                     title="Rename and edit tags"
                   >
@@ -1316,21 +1417,6 @@ export default function APIPageClient({ machineId }) {
                 Leave empty to share with everyone, or use &ldquo;@admin&rdquo; to keep it to the password
                 login. Accounts the new owner cannot reach are unbound from this key.
               </p>
-              <div className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
-                <div>
-                  <p className="text-sm font-medium">Can manage dashboard</p>
-                  <p className="text-xs text-text-muted">
-                    Lets this key drive the dashboard REST API (combos, providers, keys,
-                    settings) as its owner, instead of only routing LLM requests.
-                  </p>
-                </div>
-                <Toggle
-                  size="sm"
-                  checked={!!editKeyState?.management}
-                  onChange={(checked) => setEditKeyState((prev) => ({ ...prev, management: checked }))}
-                  title="Can manage dashboard"
-                />
-              </div>
             </>
           )}
           {editKeyState?.error && <p className="text-sm text-red-500">{editKeyState.error}</p>}

@@ -29,7 +29,7 @@ describe("getApiKeyRoutingContext", () => {
       valid: true,
       owner: "dev@example.com",
       name: "Claude Code",
-      management: false,
+      kind: "usage",
       allowedConnectionIds: ["conn-a", "conn-b"],
     });
   });
@@ -42,10 +42,10 @@ describe("getApiKeyRoutingContext", () => {
 
   it("keeps missing/unbound key semantics", async () => {
     expect(await repo.getApiKeyRoutingContext(null)).toEqual({
-      valid: false, owner: null, name: null, management: false, allowedConnectionIds: null,
+      valid: false, owner: null, name: null, kind: "usage", allowedConnectionIds: null,
     });
     expect(await repo.getApiKeyRoutingContext("sk-missing")).toEqual({
-      valid: false, owner: null, name: null, management: false, allowedConnectionIds: null,
+      valid: false, owner: null, name: null, kind: "usage", allowedConnectionIds: null,
     });
   });
 

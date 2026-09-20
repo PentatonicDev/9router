@@ -10,6 +10,7 @@ import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { handleComboChat } from "open-sse/services/combo.js";
 import * as log from "../utils/logger.js";
+import { rejectAdminKey } from "../utils/adminKeyGuard.js";
 
 // Derived from providers.js: any TTS provider not noAuth requires stored credentials
 const CREDENTIALED_PROVIDERS = new Set(
@@ -34,6 +35,10 @@ export async function handleTts(request) {
   log.request("POST", `${url.pathname} | ${modelStr} | format=${responseFormat}${language ? ` | lang=${language}` : ""}`);
 
   const apiKey = extractApiKey(request);
+  // Refused unconditionally — an admin key is a dashboard-management
+  // credential, not a routing one, whether or not requireApiKey is on.
+  const adminRefusal = await rejectAdminKey(apiKey);
+  if (adminRefusal) return adminRefusal;
   const settings = await getSettings();
   if (settings.requireApiKey) {
     if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
@@ -87,7 +92,7 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { apiKey });
 
-    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited || credentials?.spendCapExceeded) {
       return responseFromRoutingCandidate(credentials.candidate);
     }
 

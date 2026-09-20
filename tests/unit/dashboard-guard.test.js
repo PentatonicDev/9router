@@ -63,7 +63,7 @@ describe("dashboard guard public LLM API access", () => {
     process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
     mocks.getSettings.mockResolvedValue({ requireLogin: true });
     mocks.validateApiKey.mockResolvedValue(false);
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: false, owner: null, management: false });
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: false, owner: null, kind: "usage" });
     mocks.getConsistentMachineId.mockResolvedValue("cli-token");
     mocks.verifyDashboardAuthToken.mockResolvedValue(false);
     mocks.getDashboardAuthSession.mockResolvedValue(null);
@@ -228,7 +228,7 @@ describe("dashboard guard local-only access", () => {
     process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
     mocks.getSettings.mockResolvedValue({ requireLogin: true });
     mocks.validateApiKey.mockResolvedValue(false);
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: false, owner: null, management: false });
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: false, owner: null, kind: "usage" });
     mocks.getConsistentMachineId.mockResolvedValue("cli-token");
     mocks.verifyDashboardAuthToken.mockResolvedValue(false);
     mocks.getDashboardAuthSession.mockResolvedValue(null);
@@ -294,11 +294,11 @@ describe("dashboard guard local-only access", () => {
     expect(response).toBe(mocks.nextResponse);
   });
 
-  // Mutation-proof for isAuthenticated() growing a managementKeyContext branch:
+  // Mutation-proof for isAuthenticated() growing an adminKeyContext branch:
   // process-spawning/host-secret routes must stay session/CLI-token only, even
-  // from the loopback socket, even with an otherwise-valid management key.
-  it("rejects local-only route on loopback with a valid management key but no session", async () => {
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: "alice@corp.com", management: true });
+  // from the loopback socket, even with an otherwise-valid admin key.
+  it("rejects local-only route on loopback with a valid admin key but no session", async () => {
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: "alice@corp.com", kind: "admin" });
 
     const response = await proxy(localRequest("/api/mcp/filesystem/sse", {
       host: "localhost:20128",
@@ -346,7 +346,7 @@ describe("dashboard guard helpers", () => {
   });
 });
 
-describe("dashboard guard management API key access", () => {
+describe("dashboard guard admin API key access", () => {
   const OWNER = "alice@corp.com";
 
   beforeEach(() => {
@@ -359,18 +359,18 @@ describe("dashboard guard management API key access", () => {
     mocks.getDashboardAuthSession.mockResolvedValue(null);
   });
 
-  it("allows a protected /api/* route with an active, owned, management key", async () => {
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: OWNER, management: true });
+  it("allows a protected /api/* route with an active, owned, admin key", async () => {
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: OWNER, kind: "admin" });
 
-    const response = await proxy(request("/api/keys", { authorization: "Bearer mgmt-key" }));
+    const response = await proxy(request("/api/keys", { authorization: "Bearer admin-key" }));
 
     expect(response).toBe(mocks.nextResponse);
   });
 
-  // Mutation-proof for a dropped/flipped `!ctx.management` check: only this
-  // flag differs from the passing case above.
-  it("rejects an active, owned key with management: false", async () => {
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: OWNER, management: false });
+  // Mutation-proof for a dropped/flipped `ctx.kind !== "admin"` check: only
+  // this field differs from the passing case above.
+  it("rejects an active, owned key with kind: usage", async () => {
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: OWNER, kind: "usage" });
 
     const response = await proxy(request("/api/keys", { authorization: "Bearer routing-key" }));
 
@@ -379,56 +379,56 @@ describe("dashboard guard management API key access", () => {
 
   // Mutation-proof for a dropped `!ctx.owner` check: only owner differs from
   // the passing case above.
-  it("rejects a shared (owner: null) key even with management: true", async () => {
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: null, management: true });
+  it("rejects a shared (owner: null) key even with kind: admin", async () => {
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: null, kind: "admin" });
 
-    const response = await proxy(request("/api/keys", { authorization: "Bearer shared-mgmt-key" }));
-
-    expect(response.status).toBe(401);
-  });
-
-  it("rejects an inactive, owned, management key", async () => {
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: false, owner: OWNER, management: true });
-
-    const response = await proxy(request("/api/keys", { authorization: "Bearer inactive-mgmt-key" }));
+    const response = await proxy(request("/api/keys", { authorization: "Bearer shared-admin-key" }));
 
     expect(response.status).toBe(401);
   });
 
-  // Query-string management key is a spec violation (G2e), not a hypothetical:
+  it("rejects an inactive, owned, admin key", async () => {
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: false, owner: OWNER, kind: "admin" });
+
+    const response = await proxy(request("/api/keys", { authorization: "Bearer inactive-admin-key" }));
+
+    expect(response.status).toBe(401);
+  });
+
+  // Query-string admin key is a spec violation (G2e), not a hypothetical:
   // dashboardGuard's own extractApiKey does accept ?key=, so the middleware
   // gate must go through the header-only extractManagementApiKey instead.
-  it("rejects a management key presented only via the ?key= query string", async () => {
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: OWNER, management: true });
+  it("rejects an admin key presented only via the ?key= query string", async () => {
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: OWNER, kind: "admin" });
 
-    const response = await proxy(request("/api/keys?key=mgmt-key"));
+    const response = await proxy(request("/api/keys?key=admin-key"));
 
     expect(response.status).toBe(401);
     expect(mocks.getApiKeyRoutingContext).not.toHaveBeenCalled();
   });
 
-  it("never grants ALWAYS_PROTECTED access with a management key", async () => {
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: OWNER, management: true });
+  it("never grants ALWAYS_PROTECTED access with an admin key", async () => {
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: OWNER, kind: "admin" });
 
-    const response = await proxy(request("/api/shutdown", { authorization: "Bearer mgmt-key" }));
+    const response = await proxy(request("/api/shutdown", { authorization: "Bearer admin-key" }));
 
     expect(response.status).toBe(401);
   });
 
-  it("an admin-owned management key passes an ADMIN_ONLY_PATH when scoping is on", async () => {
+  it("an admin-owned admin key passes an ADMIN_ONLY_PATH when scoping is on", async () => {
     mocks.getSettings.mockResolvedValue({ requireLogin: true, scopeResourcesByUser: true });
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: "@admin", management: true });
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: "@admin", kind: "admin" });
 
-    const response = await proxy(request("/api/proxy-pools", { authorization: "Bearer admin-mgmt-key" }));
+    const response = await proxy(request("/api/proxy-pools", { authorization: "Bearer super-admin-key" }));
 
     expect(response).toBe(mocks.nextResponse);
   });
 
-  it("a non-admin-owned management key is rejected on an ADMIN_ONLY_PATH when scoping is on", async () => {
+  it("a non-admin-owned admin key is rejected on an ADMIN_ONLY_PATH when scoping is on", async () => {
     mocks.getSettings.mockResolvedValue({ requireLogin: true, scopeResourcesByUser: true });
-    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: OWNER, management: true });
+    mocks.getApiKeyRoutingContext.mockResolvedValue({ valid: true, owner: OWNER, kind: "admin" });
 
-    const response = await proxy(request("/api/proxy-pools", { authorization: "Bearer mgmt-key" }));
+    const response = await proxy(request("/api/proxy-pools", { authorization: "Bearer admin-key" }));
 
     expect(response.status).toBe(403);
     expect(response.body.error).toBe("Admin access required");

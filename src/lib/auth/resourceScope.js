@@ -99,7 +99,7 @@ export async function getRequestIdentity() {
     // from this file, so a static import here would deadlock the ESM graph.
     const { getApiKeyRoutingContext } = await import("@/lib/db/repos/apiKeysRepo.js");
     const keyCtx = await getApiKeyRoutingContext(ctx.apiKey);
-    if (keyCtx.valid && keyCtx.owner && keyCtx.management) {
+    if (keyCtx.valid && keyCtx.owner && keyCtx.kind === "admin") {
       const settings = await getSettings();
       return {
         isAdmin: keyCtx.owner === ADMIN_OWNER || ssoAdminsFor(settings).includes(keyCtx.owner),

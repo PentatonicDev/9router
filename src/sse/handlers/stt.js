@@ -9,6 +9,7 @@ import { errorResponse, responseFromRoutingCandidate } from "open-sse/utils/erro
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import * as log from "../utils/logger.js";
+import { rejectAdminKey } from "../utils/adminKeyGuard.js";
 
 // Providers requiring credentials for STT
 const CREDENTIALED_PROVIDERS = new Set(
@@ -29,6 +30,10 @@ export async function handleStt(request) {
   log.request("POST", `/v1/audio/transcriptions | ${modelStr}`);
 
   const apiKey = extractApiKey(request);
+  // Refused unconditionally — an admin key is a dashboard-management
+  // credential, not a routing one, whether or not requireApiKey is on.
+  const adminRefusal = await rejectAdminKey(apiKey);
+  if (adminRefusal) return adminRefusal;
   const settings = await getSettings();
   if (settings.requireApiKey) {
     if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
@@ -60,7 +65,7 @@ export async function handleStt(request) {
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { apiKey });
 
-    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited || credentials?.spendCapExceeded) {
       return responseFromRoutingCandidate(credentials.candidate);
     }
 

@@ -13,6 +13,7 @@ import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { saveRequestUsage } from "@/lib/usageDb.js";
+import { rejectAdminKey } from "../utils/adminKeyGuard.js";
 
 function exactEmbeddingUsage(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.estimated === true) return null;
@@ -50,6 +51,11 @@ export async function handleEmbeddings(request) {
   } else {
     log.debug("AUTH", "No API key provided (local mode)");
   }
+
+  // Refused unconditionally — an admin key is a dashboard-management
+  // credential, not a routing one, whether or not requireApiKey is on.
+  const adminRefusal = await rejectAdminKey(apiKey);
+  if (adminRefusal) return adminRefusal;
 
   // Enforce API key if enabled in settings
   const settings = await getSettings();
@@ -98,7 +104,7 @@ export async function handleEmbeddings(request) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { apiKey });
 
     // All accounts unavailable
-    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited || credentials?.spendCapExceeded) {
       return responseFromRoutingCandidate(credentials.candidate);
     }
 

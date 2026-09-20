@@ -12,6 +12,7 @@ import { errorResponse, responseFromRoutingCandidate } from "open-sse/utils/erro
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import * as log from "../utils/logger.js";
+import { rejectAdminKey } from "../utils/adminKeyGuard.js";
 
 // Video generation is xAI-only today; requests without a provider prefix
 // (bare model id, or multipart bodies we deliberately don't parse) land here.
@@ -45,6 +46,10 @@ const CREATE_ROTATION_STATUSES = new Set([
 // travels on to credential selection, which honours its account bindings.
 async function requireValidApiKey(request) {
   const apiKey = extractApiKey(request);
+  // Refused unconditionally — an admin key is a dashboard-management
+  // credential, not a routing one, whether or not requireApiKey is on.
+  const adminRefusal = await rejectAdminKey(apiKey);
+  if (adminRefusal) return { error: adminRefusal };
   const settings = await getSettings();
   if (settings.requireApiKey) {
     if (!apiKey) return { error: errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key") };
@@ -134,7 +139,7 @@ export async function handleVideoCreate(request, action) {
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId, apiKey: auth.apiKey });
 
-    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited || credentials?.spendCapExceeded) {
       return responseFromRoutingCandidate(credentials.candidate);
     }
 
@@ -194,7 +199,7 @@ export async function handleVideoGet(request, requestId) {
   const provider = await resolveGetProvider(request, preferredConnectionId);
 
   const credentials = await getProviderCredentials(provider, null, null, { preferredConnectionId, apiKey: auth.apiKey });
-  if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+  if (credentials?.noActiveCredentials || credentials?.allRateLimited || credentials?.spendCapExceeded) {
     return responseFromRoutingCandidate(credentials.candidate);
   }
 

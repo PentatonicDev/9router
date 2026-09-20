@@ -14,6 +14,7 @@ import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
 import { assertPublicUrlResolved } from "@/shared/utils/ssrfGuard.js";
+import { rejectAdminKey } from "../utils/adminKeyGuard.js";
 
 /**
  * Handle web fetch (URL extraction) request for the SSE/Next.js server.
@@ -46,6 +47,11 @@ export async function handleFetch(request) {
   } else {
     log.debug("AUTH", "No API key provided (local mode)");
   }
+
+  // Refused unconditionally — an admin key is a dashboard-management
+  // credential, not a routing one, whether or not requireApiKey is on.
+  const adminRefusal = await rejectAdminKey(apiKey);
+  if (adminRefusal) return adminRefusal;
 
   // Enforce API key if enabled in settings
   const settings = await getSettings();
@@ -167,7 +173,7 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
   while (true) {
     const credentials = await getProviderCredentials(providerId, excludeConnectionIds, fetchLockKey, { apiKey });
 
-    if (credentials?.noActiveCredentials || credentials?.allRateLimited) {
+    if (credentials?.noActiveCredentials || credentials?.allRateLimited || credentials?.spendCapExceeded) {
       return responseFromRoutingCandidate(credentials.candidate);
     }
 

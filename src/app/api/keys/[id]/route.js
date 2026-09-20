@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { deleteApiKey, getApiKeyById, updateApiKey, getProviderConnections } from "@/lib/localDb";
+import {
+  deleteApiKey, getApiKeyById, updateApiKey, getProviderConnections,
+  getAdminKeyByOwner, isAdminOwnerConflict, normalizeConnectionBudgets,
+} from "@/lib/localDb";
 import { canSee, getRequestIdentity, getScopeFilter, normalizeOwnerInput, scopeVisible } from "@/lib/auth/resourceScope";
 
 const MAX_NAME_LENGTH = 100;
@@ -18,6 +21,32 @@ async function validateAllowedConnectionIds(value, filter) {
   const unknown = ids.filter((id) => !existing.has(id));
   if (unknown.length) return { error: `Unknown connection ids: ${unknown.join(", ")}` };
   return { ids: Array.from(new Set(ids)) };
+}
+
+// Returns the accepted budgets map, or an { error } describing why it was
+// rejected. Unlike normalizeConnectionBudgets's silent pruning on an owner
+// change (the map narrowing underneath the caller), a budget on a connection
+// this same request leaves unbound is a mistake in the request itself, so it
+// 400s instead — `allowedConnectionIds` is the resolved value after this same
+// PUT applies its own binding change, not the stored one.
+function validateConnectionBudgets(value, allowedConnectionIds) {
+  if (value === null) return { budgets: null };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { error: "connectionBudgets must be an object or null" };
+  }
+  const allowed = allowedConnectionIds ? new Set(allowedConnectionIds) : null;
+  for (const [connId, budget] of Object.entries(value)) {
+    if (allowed && !allowed.has(connId)) {
+      return { error: `connectionBudgets has a connection id this key cannot route to: ${connId}` };
+    }
+    if (!budget || typeof budget !== "object" || !(Number(budget.limitUsd) > 0)) {
+      return { error: `connectionBudgets.${connId}.limitUsd must be a number greater than 0` };
+    }
+    if (budget.period !== "month" && budget.period !== "total") {
+      return { error: `connectionBudgets.${connId}.period must be "month" or "total"` };
+    }
+  }
+  return { budgets: normalizeConnectionBudgets(value, allowedConnectionIds) };
 }
 
 // GET /api/keys/[id] - Get single key
@@ -40,7 +69,7 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { isActive, allowedConnectionIds, name, tags, owner, management } = body;
+    const { isActive, allowedConnectionIds, connectionBudgets, name, tags, owner, kind } = body;
 
     const filter = await getScopeFilter();
     const existing = await getApiKeyById(id);
@@ -70,17 +99,48 @@ export async function PUT(request, { params }) {
       if (validated.error) return NextResponse.json({ error: validated.error }, { status: 400 });
       updateData.allowedConnectionIds = validated.ids;
     }
-    // Reassigning an owner, or granting/revoking management, is an admin action;
-    // a non-admin caller's value is silently ignored, never a 400.
-    if (owner !== undefined || management !== undefined) {
+    if (connectionBudgets !== undefined) {
+      const effectiveAllowedConnectionIds = allowedConnectionIds !== undefined
+        ? updateData.allowedConnectionIds : existing.allowedConnectionIds;
+      const validated = validateConnectionBudgets(connectionBudgets, effectiveAllowedConnectionIds);
+      if (validated.error) return NextResponse.json({ error: validated.error }, { status: 400 });
+      updateData.connectionBudgets = validated.budgets;
+    }
+    // Reassigning an owner, or changing kind, is an admin action; a non-admin
+    // caller's value is silently ignored, never a 400.
+    if (owner !== undefined || kind !== undefined) {
       const { isAdmin } = await getRequestIdentity();
       if (isAdmin) {
-        if (owner !== undefined) updateData.owner = normalizeOwnerInput(owner);
-        if (management !== undefined) updateData.management = !!management;
+        if (kind !== undefined && kind !== "usage" && kind !== "admin") {
+          return NextResponse.json({ error: 'kind must be "usage" or "admin"' }, { status: 400 });
+        }
+        const effectiveOwner = owner !== undefined ? normalizeOwnerInput(owner) : existing.owner;
+        const effectiveKind = kind !== undefined ? kind : existing.kind;
+        if (effectiveKind === "admin") {
+          if (!effectiveOwner) {
+            return NextResponse.json({ error: "Administration key requires an owner" }, { status: 400 });
+          }
+          if (await getAdminKeyByOwner(effectiveOwner, id)) {
+            return NextResponse.json({ error: "Owner already has an administration key" }, { status: 409 });
+          }
+        }
+        if (owner !== undefined) updateData.owner = effectiveOwner;
+        if (kind !== undefined) updateData.kind = kind;
       }
     }
 
-    const updated = await updateApiKey(id, updateData);
+    let updated;
+    try {
+      updated = await updateApiKey(id, updateData);
+    } catch (error) {
+      // Same TOCTOU gap as the POST pre-check: two concurrent admin-kind
+      // edits/rotates for the same owner can both pass getAdminKeyByOwner and
+      // race to idx_ak_admin_owner, which rejects the loser.
+      if (updateData.kind === "admin" && isAdminOwnerConflict(error)) {
+        return NextResponse.json({ error: "Owner already has an administration key" }, { status: 409 });
+      }
+      throw error;
+    }
 
     return NextResponse.json({ key: updated });
   } catch (error) {

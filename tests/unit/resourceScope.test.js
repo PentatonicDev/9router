@@ -169,35 +169,35 @@ describe("identity", () => {
   });
 });
 
-describe("identity via a management API key (header-only, no dashboard session)", () => {
-  it("an active, owned, management key authenticates as its owner", async () => {
-    session({ email: null, authorization: "Bearer mgmt-key" });
-    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, management: true });
+describe("identity via an admin API key (header-only, no dashboard session)", () => {
+  it("an active, owned, admin key authenticates as its owner", async () => {
+    session({ email: null, authorization: "Bearer admin-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, kind: "admin" });
 
     expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: ALICE });
   });
 
   it("also reads the key from x-api-key when Authorization is absent", async () => {
-    session({ email: null, apiKeyHeader: "mgmt-key" });
-    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, management: true });
+    session({ email: null, apiKeyHeader: "admin-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, kind: "admin" });
 
     expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: ALICE });
   });
 
-  // Mutation-proof for a dropped/flipped `keyCtx.management` check: only this
-  // flag differs from the passing case above, and falls through to "no session"
+  // Mutation-proof for a dropped/flipped `keyCtx.kind` check: only this field
+  // differs from the passing case above, and falls through to "no session"
   // (ANONYMOUS) rather than escalating.
-  it("falls through to ANONYMOUS when management is false, even if otherwise valid+owned", async () => {
+  it("falls through to ANONYMOUS for kind: usage, even if otherwise valid+owned", async () => {
     session({ noSession: true, authorization: "Bearer routing-key" });
-    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, management: false });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, kind: "usage" });
 
     expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: null });
   });
 
   // Mutation-proof for a dropped `keyCtx.owner` check: only owner differs.
-  it("falls through to ANONYMOUS for a shared (owner: null) key even with management: true", async () => {
-    session({ noSession: true, authorization: "Bearer shared-mgmt-key" });
-    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: null, management: true });
+  it("falls through to ANONYMOUS for a shared (owner: null) key even with kind: admin", async () => {
+    session({ noSession: true, authorization: "Bearer shared-admin-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: null, kind: "admin" });
 
     expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: null });
     // {isAdmin:false, owner:null} is also what a dropped `keyCtx.owner` check
@@ -208,42 +208,42 @@ describe("identity via a management API key (header-only, no dashboard session)"
     expect(settingsMock).not.toHaveBeenCalled();
   });
 
-  it("falls through to ANONYMOUS for an inactive, owned, management key", async () => {
-    session({ noSession: true, authorization: "Bearer inactive-mgmt-key" });
-    apiKeyRoutingContextMock.mockResolvedValue({ valid: false, owner: ALICE, management: true });
+  it("falls through to ANONYMOUS for an inactive, owned, admin key", async () => {
+    session({ noSession: true, authorization: "Bearer inactive-admin-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: false, owner: ALICE, kind: "admin" });
 
     expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: null });
   });
 
-  it("an @admin-owned management key is admin", async () => {
-    session({ email: null, authorization: "Bearer admin-mgmt-key" });
-    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ADMIN_OWNER, management: true });
+  it("an @admin-owned admin key is admin", async () => {
+    session({ email: null, authorization: "Bearer super-admin-key" });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ADMIN_OWNER, kind: "admin" });
 
     expect(await getRequestIdentity()).toEqual({ isAdmin: true, owner: ADMIN_OWNER });
   });
 
-  it("a management key owned by a designated SSO admin is admin", async () => {
-    session({ email: null, authorization: "Bearer alice-mgmt-key", admins: [ALICE] });
-    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, management: true });
+  it("an admin key owned by a designated SSO admin is admin", async () => {
+    session({ email: null, authorization: "Bearer alice-admin-key", admins: [ALICE] });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, kind: "admin" });
 
     expect(await getRequestIdentity()).toEqual({ isAdmin: true, owner: ALICE });
   });
 
-  // A key that fails the management check never short-circuits to ANONYMOUS on
-  // its own — a real dashboard session presented alongside it still resolves.
-  it("an invalid management key does not shadow a real session presented alongside it", async () => {
+  // A key that fails the kind check never short-circuits to ANONYMOUS on its
+  // own — a real dashboard session presented alongside it still resolves.
+  it("an invalid admin key does not shadow a real session presented alongside it", async () => {
     session({ email: BOB, authorization: "Bearer routing-key" });
-    apiKeyRoutingContextMock.mockResolvedValue({ valid: false, owner: null, management: false });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: false, owner: null, kind: "usage" });
 
     expect(await getRequestIdentity()).toEqual({ isAdmin: false, owner: BOB });
   });
 
   it("a query-string-only key is not read by this header-only path", async () => {
-    // No Authorization/x-api-key header set — a would-be management key sitting
-    // in the URL never reaches ctx.apiKey, so the ordinary password-login
-    // session (no oidcEmail) resolves exactly as it would without any key.
+    // No Authorization/x-api-key header set — a would-be admin key sitting in
+    // the URL never reaches ctx.apiKey, so the ordinary password-login session
+    // (no oidcEmail) resolves exactly as it would without any key.
     session({ email: null });
-    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, management: true });
+    apiKeyRoutingContextMock.mockResolvedValue({ valid: true, owner: ALICE, kind: "admin" });
 
     expect(await getRequestIdentity()).toEqual({ isAdmin: true, owner: ADMIN_OWNER });
     expect(apiKeyRoutingContextMock).not.toHaveBeenCalled();
