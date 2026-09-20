@@ -113,6 +113,48 @@ describe("Codex fast tier and capacity handling", () => {
     expect(peek.matched).toBe("server_is_overloaded");
   });
 
+  // Real turns open with response.created + response.in_progress; a capacity error
+  // that follows them lands in a later socket read and must still rotate accounts.
+  it("catches a capacity error delivered in a later chunk than the preamble", async () => {
+    const executor = new CodexExecutor();
+    const preamble = [
+      'event: response.created\ndata: {"type":"response.created","response":{}}\n\n',
+      'event: response.in_progress\ndata: {"type":"response.in_progress","response":{}}\n\n',
+    ].join("");
+    const err = 'event: error\ndata: {"error":{"message":"Selected model is at capacity. Please try a different model."}}\n\n';
+    const encoder = new TextEncoder();
+    const response = new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(preamble));
+        controller.enqueue(encoder.encode(err));
+        controller.close();
+      },
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+
+    const peek = await executor._peekSseTransientError(response);
+    expect(peek.accountFallback).toBe(true);
+  });
+
+  it("releases at the first event past the preamble without draining the turn", async () => {
+    const executor = new CodexExecutor();
+    const preamble = [
+      'event: response.created\ndata: {"type":"response.created","response":{}}\n\n',
+      'event: response.in_progress\ndata: {"type":"response.in_progress","response":{}}\n\n',
+    ].join("");
+    const item = 'event: response.output_item.added\ndata: {"type":"response.output_item.added","item":{"type":"reasoning"}}\n\n';
+    const reasoning = `event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","delta":"${"r".repeat(64 * 1024)}"}\n\n`;
+    const full = preamble + item + reasoning;
+    const response = new Response(streamFromChunks(full, 1024), {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+
+    const peek = await executor._peekSseTransientError(response);
+    expect(peek.matched).toBeNull();
+    expect(peek.peekBytes).toBeLessThan(2048);
+    await expect(new Response(peek.replacementBody).text()).resolves.toBe(full);
+  });
+
   it("reassembles normal SSE after peeking", async () => {
     const executor = new CodexExecutor();
     const text = [

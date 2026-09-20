@@ -24,6 +24,8 @@ const CODEX_SSE_USER_OUTPUT_PATTERNS = [
   '"type":"response.function_call_arguments.delta"',
 ];
 const CODEX_SSE_PEEK_BYTES = 256 * 1024;
+// Every Codex turn opens with these two events before the model produces anything.
+const CODEX_SSE_PREAMBLE_EVENTS = ["response.created", "response.in_progress"];
 const CODEX_MODEL_CAPACITY_MESSAGE = "Selected model is at capacity. Please try a different model.";
 
 // Server-generated item id prefixes that Codex /responses cannot resolve when store=false
@@ -122,6 +124,13 @@ function normalizeCodexTools(body) {
       if (!n || !validNames.has(n)) delete body.tool_choice;
     }
   }
+}
+
+// True once a complete SSE event that is not part of the opening preamble has arrived.
+function sawEventPastPreamble(text) {
+  const events = text.split("\n\n");
+  events.pop();
+  return events.some(e => e.trim() && !CODEX_SSE_PREAMBLE_EVENTS.some(p => e.includes(p)));
 }
 
 // Resolve prompt-cache session id: client session → assistant-text-hash → workspaceId → connection
@@ -327,13 +336,13 @@ export class CodexExecutor extends BaseExecutor {
     let matched = null;
     let accountFallback = false;
     let peekBytes = 0;
-    // A healthy stream opens with response.created, which echoes the whole request
-    // (~145KB of tools + instructions on a real Codex turn), so waiting for
-    // output_text.delta meant draining CODEX_SSE_PEEK_BYTES in full and holding the
-    // client's first byte until then. On reasoning models the delta only lands after
-    // the thinking phase, so TTFT absorbed prefill + reasoning + the 256KB drain.
-    // An in-band error arrives as the very first event instead, so releasing at the
-    // end of the first complete event keeps the detection and drops the wait.
+    // A healthy stream opens with response.created (echoing the whole request,
+    // ~145KB on a real Codex turn) and response.in_progress. Waiting for
+    // output_text.delta meant draining CODEX_SSE_PEEK_BYTES in full — on reasoning
+    // models that delta only lands after the thinking phase. Capacity/overload
+    // errors can still follow that preamble as the next event, so the peek releases
+    // at the first complete event past it: reasoning and output flow live, the
+    // in-band error is still caught here.
     try {
       while (text.length < CODEX_SSE_PEEK_BYTES) {
         const { done, value } = await reader.read();
@@ -347,10 +356,7 @@ export class CodexExecutor extends BaseExecutor {
         const retryHit = CODEX_SSE_RETRY_PATTERNS.find(p => lowerText.includes(p));
         if (retryHit) { matched = retryHit; break; }
         if (CODEX_SSE_USER_OUTPUT_PATTERNS.some(p => lowerText.includes(p))) break;
-        // Blank line closes an SSE event. Payload JSON is compact, so a real
-        // blank line only ever appears at an event boundary — one non-error
-        // event is enough to conclude the stream is healthy.
-        if (text.includes("\n\n")) break;
+        if (sawEventPastPreamble(text)) break;
       }
     } catch (e) {
       dbg("CODEX", `peek read error: ${e.message}`);

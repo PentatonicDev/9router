@@ -189,6 +189,9 @@ export function createSSEStream(options = {}) {
 
               if (extractStreamError(parsed)) streamErrored = true;
 
+              // Claude-native passthrough never reaches the OpenAI delta accumulation below.
+              if (!firstContentAt && parsed.type === "content_block_delta" && parsed.delta) firstContentAt = Date.now();
+
               if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
                 continue;
               }

@@ -273,17 +273,6 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   // Extract userAgent from request
   const userAgent = request?.headers?.get("user-agent") || "";
 
-  // Forward the client's session headers to the executor. Without these the Codex
-  // cache key falls back to a per-connection id shared by every conversation on the
-  // account, so each turn rotates the cached prefix. Claude Code / the Hermes CLI
-  // send x-claude-code-session-id, which is exactly the conversation identity the
-  // prefix cache needs.
-  const clientSessionHeaders = {};
-  for (const name of ["x-claude-code-session-id", "x-session-id", "session-id", "session_id", "x-amp-thread-id", "x-client-request-id"]) {
-    const v = request?.headers?.get(name);
-    if (v) clientSessionHeaders[name] = v;
-  }
-
   // Try with available accounts (fallback on errors)
   const excludeConnectionIds = new Set();
 
@@ -322,9 +311,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     const result = await handleChatCore({
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
-      credentials: Object.keys(clientSessionHeaders).length
-        ? { ...refreshedCredentials, rawHeaders: clientSessionHeaders }
-        : refreshedCredentials,
+      credentials: refreshedCredentials,
       log,
       clientRawRequest,
       connectionId: credentials.connectionId,
