@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { getDb } from "../kysely.js";
 import { sql } from "kysely";
+import { isDistributed } from "../mode.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
 import { maskApiKey } from "../helpers/maskKey.js";
@@ -54,6 +55,13 @@ function addToCounter(target, key, values) {
   target[key].cachedTokens += values.cachedTokens || 0;
   target[key].cost += values.cost || 0;
   if (values.meta) Object.assign(target[key], values.meta);
+}
+
+function emptyUsageDay() {
+  return {
+    requests: 0, promptTokens: 0, completionTokens: 0, cost: 0,
+    byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {},
+  };
 }
 
 function aggregateEntryToDay(day, entry) {
@@ -293,23 +301,36 @@ export async function saveRequestUsage(entry) {
       }).execute();
 
       const dateKey = getLocalDateKey(entry.timestamp);
-      const row = await trx.selectFrom("usageDaily").select("data").where("dateKey", "=", dateKey).executeTakeFirst();
-      const day = row ? parseJson(row.data, {}) : {
-        requests: 0, promptTokens: 0, completionTokens: 0, cost: 0,
-        byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {},
-      };
+      // Seed the row (no-op if it already exists), then read it back inside
+      // THIS transaction so there's always a committed row to lock below —
+      // on Postgres, two requests hitting the same dateKey under the default
+      // READ COMMITTED isolation would otherwise both read the same JSON and
+      // the later commit clobbers the other's counts (lost update). SQLite
+      // has no FOR UPDATE syntax and doesn't need one: the driver already
+      // serializes writers within one process.
+      await trx.insertInto("usageDaily").values({ dateKey, data: stringifyJson(emptyUsageDay()) })
+        .onConflict((oc) => oc.column("dateKey").doNothing())
+        .execute();
+      let dailyQuery = trx.selectFrom("usageDaily").select("data").where("dateKey", "=", dateKey);
+      if (isDistributed()) dailyQuery = dailyQuery.forUpdate();
+      const row = await dailyQuery.executeTakeFirst();
+      const day = row ? parseJson(row.data, {}) : emptyUsageDay();
       aggregateEntryToDay(day, entry);
       const dayData = stringifyJson(day);
-      await trx.insertInto("usageDaily").values({ dateKey, data: dayData })
-        .onConflict((oc) => oc.column("dateKey").doUpdateSet({ data: dayData }))
-        .execute();
+      await trx.updateTable("usageDaily").set({ data: dayData }).where("dateKey", "=", dateKey).execute();
 
-      // Atomic counter increment in same transaction
-      const cur = await trx.selectFrom("_meta").select("value").where("key", "=", "totalRequestsLifetime").executeTakeFirst();
-      const value = String((cur ? parseInt(cur.value, 10) : 0) + 1);
-      await trx.insertInto("_meta").values({ key: "totalRequestsLifetime", value })
-        .onConflict((oc) => oc.column("key").doUpdateSet({ value }))
+      // Same seed-then-lock pattern as usageDaily above: without it, concurrent
+      // requests landing on different dateKeys (so the usageDaily lock above
+      // doesn't happen to serialize them too) read the same counter value and
+      // the later commit clobbers the rest (lost update on Postgres).
+      await trx.insertInto("_meta").values({ key: "totalRequestsLifetime", value: "0" })
+        .onConflict((oc) => oc.column("key").doNothing())
         .execute();
+      let metaQuery = trx.selectFrom("_meta").select("value").where("key", "=", "totalRequestsLifetime");
+      if (isDistributed()) metaQuery = metaQuery.forUpdate();
+      const cur = await metaQuery.executeTakeFirst();
+      const value = String((cur ? parseInt(cur.value, 10) : 0) + 1);
+      await trx.updateTable("_meta").set({ value }).where("key", "=", "totalRequestsLifetime").execute();
       inserted = true;
     });
 
