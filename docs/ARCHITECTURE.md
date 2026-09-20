@@ -519,7 +519,8 @@ Runtime visibility sources:
 - textual request status log in `log.txt`
 - optional deep request/translation logs under `logs/` when `ENABLE_REQUEST_LOGS=true`
 - dashboard usage endpoints (`/api/usage/*`) for UI consumption
-- `GET /v1/admin/request-details[/{id}]` — same stored rows as the dashboard's Request Details drawer, for `curl`-based debugging. Requires an active API key owned by `@admin` and `settings.enableObservability === true` (the key is checked first, so the setting cannot be probed anonymously); the collection route strips request/provider bodies unless `?full=1` is given.
+- `GET /v1/admin/request-details[/{id}]` — same stored rows as the dashboard's Request Details drawer, for `curl`-based debugging. Requires an active API key with an owner, plus `settings.requireLogin` and `settings.enableObservability` both on (the key is checked first, so the settings cannot be probed anonymously). Rows are scoped to the owner's keys and accounts unless the owner is an admin; the collection route strips request/provider bodies unless `?full=1` is given.
+- Dashboard REST API by key: a key flagged `management` (admin-set) authenticates `/api/*` management routes as its owner via `Authorization: Bearer` / `x-api-key`, with the same resource scoping as a session (`src/dashboardGuard.js`, `src/lib/auth/resourceScope.js`).
 
 ## Security-Sensitive Boundaries
 
