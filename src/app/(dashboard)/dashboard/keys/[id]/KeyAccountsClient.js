@@ -3,17 +3,50 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import PropTypes from "prop-types";
 import Link from "next/link";
-import { Card, Button, Input, CardSkeleton, Toggle } from "@/shared/components";
+import { Card, Button, Input, Select, CardSkeleton, Toggle } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
+import { cn } from "@/shared/utils/cn";
 
 function connectionLabel(connection) {
   return connection.displayName || connection.name || connection.email || connection.id.slice(0, 8);
 }
 
+const BUDGET_PERIOD_OPTIONS = [
+  { value: "month", label: "Monthly" },
+  { value: "total", label: "Lifetime" },
+];
+
+// Spent-vs-cap thresholds — same 70/30 bands as the quota dashboard's
+// QuotaProgressBar, mirrored because this tracks spend (higher = worse)
+// instead of remaining quota (higher = better).
+function spendBarColor(percentUsed) {
+  if (percentUsed >= 100) return "bg-red-500";
+  if (percentUsed >= 80) return "bg-yellow-500";
+  return "bg-green-500";
+}
+
+function SpendCapBar({ spentUsd, limitUsd }) {
+  const pct = limitUsd > 0 ? Math.min(100, (spentUsd / limitUsd) * 100) : 0;
+  return (
+    <div className="mt-1.5">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/[0.06] dark:bg-white/[0.06]">
+        <div className={cn("h-full rounded-full transition-all", spendBarColor(pct))} style={{ width: `${pct}%` }} />
+      </div>
+      <p className="mt-1 text-[11px] text-text-muted">
+        ${spentUsd.toFixed(2)} / ${limitUsd.toFixed(2)} spent
+      </p>
+    </div>
+  );
+}
+
+SpendCapBar.propTypes = { spentUsd: PropTypes.number.isRequired, limitUsd: PropTypes.number.isRequired };
+
 export default function KeyAccountsClient({ keyId }) {
   const [apiKey, setApiKey] = useState(null);
   const [connections, setConnections] = useState([]);
   const [selected, setSelected] = useState(new Set());
+  const [spendByConn, setSpendByConn] = useState(new Map());
+  const [budgets, setBudgets] = useState(new Map());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -23,17 +56,21 @@ export default function KeyAccountsClient({ keyId }) {
     let cancelled = false;
     (async () => {
       try {
-        const [keyRes, provRes] = await Promise.all([
+        const [keyRes, provRes, spendRes] = await Promise.all([
           fetch(`/api/keys/${keyId}`),
           fetch("/api/providers"),
+          fetch(`/api/keys/${keyId}/spend`),
         ]);
         if (!keyRes.ok) throw new Error("Key not found");
         const keyData = await keyRes.json();
         const provData = provRes.ok ? await provRes.json() : { connections: [] };
+        const spendData = spendRes.ok ? await spendRes.json() : { spend: [] };
         if (cancelled) return;
         setApiKey(keyData.key);
         setConnections(provData.connections || []);
         setSelected(new Set(keyData.key?.allowedConnectionIds || []));
+        setSpendByConn(new Map((spendData.spend || []).map((s) => [s.connectionId, s])));
+        setBudgets(new Map((spendData.spend || []).filter((s) => s.budget).map((s) => [s.connectionId, s.budget])));
       } catch (e) {
         if (!cancelled) setError(e.message || "Failed to load key");
       } finally {
@@ -42,6 +79,22 @@ export default function KeyAccountsClient({ keyId }) {
     })();
     return () => { cancelled = true; };
   }, [keyId]);
+
+  const setBudget = useCallback((connId, patch) => {
+    setBudgets((prev) => {
+      const next = new Map(prev);
+      next.set(connId, { limitUsd: 1, period: "month", ...next.get(connId), ...patch });
+      return next;
+    });
+  }, []);
+
+  const clearBudget = useCallback((connId) => {
+    setBudgets((prev) => {
+      const next = new Map(prev);
+      next.delete(connId);
+      return next;
+    });
+  }, []);
 
   const grouped = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -66,21 +119,26 @@ export default function KeyAccountsClient({ keyId }) {
     setSaving(true);
     setError(null);
     try {
+      // connectionBudgets, keyed by connection id, only for still-bound accounts.
+      const connectionBudgets = Object.fromEntries([...budgets].filter(([connId]) => selected.has(connId)));
       const response = await fetch(`/api/keys/${keyId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ allowedConnectionIds: [...selected] }),
+        body: JSON.stringify({ allowedConnectionIds: [...selected], connectionBudgets }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Failed to save");
       setApiKey(data.key);
       setSelected(new Set(data.key?.allowedConnectionIds || []));
+      const spendRes = await fetch(`/api/keys/${keyId}/spend`);
+      const spendData = spendRes.ok ? await spendRes.json() : { spend: [] };
+      setSpendByConn(new Map((spendData.spend || []).map((s) => [s.connectionId, s])));
     } catch (e) {
       setError(e.message);
     } finally {
       setSaving(false);
     }
-  }, [keyId, selected]);
+  }, [keyId, selected, budgets]);
 
   if (loading) return <CardSkeleton />;
 
@@ -158,26 +216,73 @@ export default function KeyAccountsClient({ keyId }) {
                   <span className="text-sm font-medium capitalize text-text-primary">{provider}</span>
                 </div>
                 <div className="flex flex-col">
-                  {providerConnections.map((conn) => (
-                    <div
-                      key={conn.id}
-                      className="flex items-center justify-between border-b border-black/[0.03] py-2.5 last:border-b-0 dark:border-white/[0.03]"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm text-text-primary">{connectionLabel(conn)}</p>
-                        <p className="text-xs text-text-muted">
-                          {conn.authType}
-                          {conn.isActive === false ? " · inactive" : ""}
-                        </p>
+                  {providerConnections.map((conn) => {
+                    const isSelected = selected.has(conn.id);
+                    const spend = spendByConn.get(conn.id);
+                    const budget = budgets.get(conn.id);
+                    // A cap only makes sense once the account is linked and its
+                    // provider is consumption-billed — a subscription account
+                    // (Claude Pro, Copilot, ...) has no per-request cost to cap.
+                    const canBudget = isSelected && spend && spend.billing === "usage";
+                    return (
+                      <div
+                        key={conn.id}
+                        className="border-b border-black/[0.03] py-2.5 last:border-b-0 dark:border-white/[0.03]"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm text-text-primary">{connectionLabel(conn)}</p>
+                            <p className="text-xs text-text-muted">
+                              {conn.authType}
+                              {conn.isActive === false ? " · inactive" : ""}
+                            </p>
+                          </div>
+                          <Toggle
+                            size="sm"
+                            checked={isSelected}
+                            onChange={() => toggle(conn.id)}
+                            title={isSelected ? "Unlink account" : "Link account"}
+                          />
+                        </div>
+                        {isSelected && spend && spend.billing !== "usage" && (
+                          <p className="mt-1.5 text-[11px] text-text-muted">Subscription plan — spend caps don&apos;t apply.</p>
+                        )}
+                        {isSelected && !spend && (
+                          <p className="mt-1.5 text-[11px] text-text-muted">Save to configure a spend cap for this account.</p>
+                        )}
+                        {canBudget && (
+                          <div className="mt-2 flex flex-wrap items-end gap-2">
+                            <Input
+                              type="number"
+                              min="0.01"
+                              step="0.01"
+                              className="w-28"
+                              placeholder="No cap"
+                              value={budget?.limitUsd ?? ""}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === "") { clearBudget(conn.id); return; }
+                                setBudget(conn.id, { limitUsd: Number(v) });
+                              }}
+                            />
+                            <Select
+                              className="w-32"
+                              options={BUDGET_PERIOD_OPTIONS}
+                              value={budget?.period || "month"}
+                              onChange={(e) => setBudget(conn.id, { period: e.target.value })}
+                              disabled={!budget}
+                            />
+                            {budget && (
+                              <Button variant="secondary" size="sm" onClick={() => clearBudget(conn.id)}>
+                                Remove cap
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                        {canBudget && budget && <SpendCapBar spentUsd={spend.spentUsd} limitUsd={budget.limitUsd} />}
                       </div>
-                      <Toggle
-                        size="sm"
-                        checked={selected.has(conn.id)}
-                        onChange={() => toggle(conn.id)}
-                        title={selected.has(conn.id) ? "Unlink account" : "Link account"}
-                      />
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}

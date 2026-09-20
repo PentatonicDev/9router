@@ -35,6 +35,12 @@ for (const entry of REGISTRY) {
   if (entry.transport) {
     PROVIDERS[entry.id] = buildTransport(entry.transport, entry.oauth);
     if (entry.transports) PROVIDERS[entry.id].transports = entry.transports;
+    // Spend caps only mean something for consumption-billed accounts. `oauth`
+    // category is the flat-plan/subscription signal (Claude Pro, Copilot, ...);
+    // everything else (apikey, free, freeTier, webCookie) is pay-per-use.
+    // `category`, not `authType`: most oauth-category providers never set
+    // authType at all, so keying on it would default them the wrong way.
+    PROVIDERS[entry.id].billing = entry.billing ?? (entry.category === "oauth" ? "subscription" : "usage");
   }
   if (entry.models !== undefined) PROVIDER_MODELS[entry.alias || entry.id] = entry.models.map(normalizeModel);
   if (entry.oauth) PROVIDER_OAUTH[entry.id] = entry.oauth;

@@ -12,6 +12,10 @@ import { DEFAULT_RETRY_CONFIG, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtim
  * @property {string}  [uiAlias]      Token shown in UI badges.
  * @property {string}   category      "apikey"|"oauth"|"freeTier"|... drives UI grouping. REQUIRED.
  * @property {string}  [authType]     "apikey"|"oauth" auth hint.
+ * @property {string}  [billing]      "usage"|"subscription" — cost model for spend caps.
+ *   Default: category === "oauth" ? "subscription" : "usage" (see providers/index.js).
+ *   Override only when a provider's category disagrees with its real billing
+ *   (none currently do — openrouter/opencode were audited and match the default).
  * @property {string[]}[authModes]    Allowed auth modes when provider supports both.
  * @property {boolean} [hasOAuth]     Provider exposes an OAuth flow.
  * @property {boolean} [noAuth]       Provider needs no credentials (local/free).

@@ -4,6 +4,7 @@ import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLock
 import { classifyRoutingReason, publicStatusForReason, sanitizePublicMessage } from "open-sse/utils/error.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache } from "./antigravityQuota.js";
+import { getApiKeyConnectionBudgets, getExhaustedConnectionIds } from "@/lib/db/repos/spendLedgerRepo.js";
 import * as log from "../utils/logger.js";
 
 // Serialize round-robin updates only inside the provider pool they mutate.
@@ -109,6 +110,40 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       ? options.allowedConnectionIds
       : await getApiKeyAllowedConnectionIds(options?.apiKey || null);
     if (allowedConnectionIds) connections = connections.filter(c => allowedConnectionIds.includes(c.id));
+
+    // Spend caps: a key's connectionBudgets exclude bound accounts once their
+    // ledger spend (this period) reaches the limit. Distinct from the
+    // no-credentials/rate-limit shapes below — it must return its own 402
+    // candidate here, before the connections.length === 0 branch, or an
+    // all-capped pool falls into "no_active_credentials" (503) and gets
+    // miscounted into combo.js's allMissing bucket instead of surfacing 402.
+    if (connections.length && options?.apiKey) {
+      const budgets = await getApiKeyConnectionBudgets(options.apiKey);
+      if (Object.keys(budgets).length) {
+        const before = connections.length;
+        const exhausted = await getExhaustedConnectionIds(options.apiKey, budgets, (connId, spent, limitUsd) => {
+          log.warn("AUTH", `${provider} | ${connId.slice(0, 8)} at ${(spent / limitUsd * 100).toFixed(0)}% of spend cap ($${spent.toFixed(2)}/$${limitUsd})`);
+        });
+        if (exhausted.size) connections = connections.filter(c => !exhausted.has(c.id));
+        if (connections.length === 0) {
+          log.warn("AUTH", `${provider} | all ${before} bound accounts spend-capped`);
+          return {
+            spendCapExceeded: true,
+            candidate: {
+              reason: "spend_cap_exceeded",
+              provider: providerId,
+              model,
+              status: 402,
+              errorType: "billing_error",
+              message: `Spend cap exceeded for provider: ${providerId}`,
+              retryable: false,
+              retryAtMs: null,
+            },
+          };
+        }
+      }
+    }
+
     log.debug("AUTH", `${provider} | total connections: ${connections.length}, excludeIds: ${excludeSet.size > 0 ? [...excludeSet].join(",") : "none"}, model: ${model || "any"}`);
 
     if (connections.length === 0) {

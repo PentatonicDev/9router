@@ -5,6 +5,7 @@ import { isDistributed } from "../mode.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
 import { maskApiKey } from "../helpers/maskKey.js";
+import { recordSpend } from "./spendLedgerRepo.js";
 
 const PENDING_TIMEOUT_MS = 60 * 1000;
 const RING_CAP = 50;
@@ -331,6 +332,12 @@ export async function saveRequestUsage(entry) {
       const cur = await metaQuery.executeTakeFirst();
       const value = String((cur ? parseInt(cur.value, 10) : 0) + 1);
       await trx.updateTable("_meta").set({ value }).where("key", "=", "totalRequestsLifetime").execute();
+
+      await recordSpend(trx, {
+        apiKey: entry.apiKey, connectionId: entry.connectionId,
+        cost: entry.cost, timestamp: entry.timestamp,
+      });
+
       inserted = true;
     });
 
