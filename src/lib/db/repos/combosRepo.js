@@ -11,6 +11,7 @@ function rowToCombo(row) {
     kind: row.kind,
     models: parseJson(row.models, []),
     modelOptions: parseJson(row.modelOptions, null),
+    maxThinking: row.maxThinking ?? null,
     owner: row.owner ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -65,6 +66,7 @@ export async function createCombo(data) {
     kind: data.kind || null,
     models: data.models || [],
     modelOptions: data.modelOptions || null,
+    maxThinking: data.maxThinking || null,
     owner: data.owner === undefined ? await resolveDefaultOwner() : normalizeOwnerInput(data.owner),
     createdAt: now,
     updatedAt: now,
@@ -73,6 +75,7 @@ export async function createCombo(data) {
     id: combo.id, name: combo.name, kind: combo.kind,
     models: stringifyJson(combo.models),
     modelOptions: combo.modelOptions ? stringifyJson(combo.modelOptions) : null,
+    maxThinking: combo.maxThinking,
     owner: combo.owner,
     createdAt: combo.createdAt, updatedAt: combo.updatedAt,
   }).execute();
@@ -90,6 +93,7 @@ export async function updateCombo(id, data) {
       name: merged.name, kind: merged.kind,
       models: stringifyJson(merged.models || []),
       modelOptions: merged.modelOptions ? stringifyJson(merged.modelOptions) : null,
+      maxThinking: merged.maxThinking || null,
       owner: merged.owner ?? null, updatedAt: merged.updatedAt,
     }).where("id", "=", id).execute();
     result = merged;

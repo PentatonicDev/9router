@@ -297,6 +297,24 @@ describe("chat.js: comboModelOptions resolution (F3 — nested combo never inher
       models: ["openai/gpt-5"],
       modelOptions: { "openai/gpt-5": { maxThinking: "low" } },
     },
+    "combo-wide-cap": {
+      id: "wide", name: "combo-wide-cap", owner: null,
+      models: ["openai/gpt-5", "anthropic/claude"],
+      modelOptions: null,
+      maxThinking: "high",
+    },
+    "combo-per-model-lower": {
+      id: "lower", name: "combo-per-model-lower", owner: null,
+      models: ["openai/gpt-5"],
+      modelOptions: { "openai/gpt-5": { maxThinking: "low" } },
+      maxThinking: "high",
+    },
+    "combo-per-model-higher": {
+      id: "higher", name: "combo-per-model-higher", owner: null,
+      models: ["openai/gpt-5"],
+      modelOptions: { "openai/gpt-5": { maxThinking: "xhigh" } },
+      maxThinking: "high",
+    },
   };
 
   beforeEach(() => {
@@ -341,5 +359,189 @@ describe("chat.js: comboModelOptions resolution (F3 — nested combo never inher
     // must read "high" (outer's own map), never "low" leaked from the nested
     // resolution that ran first in the same fallback loop.
     expect(maxLevels).toEqual(["low", "high"]);
+  });
+
+  it("combo-wide cap alone clamps every model in the combo to the same level", async () => {
+    const { handleChat } = await import("../../src/sse/handlers/chat.js");
+    const req = new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "combo-wide-cap", messages: [{ role: "user", content: "hi" }] }),
+    });
+    await handleChat(req);
+
+    const maxLevels = mocks.handleChatCore.mock.calls.map((call) => call[0].maxThinkingLevel);
+    expect(maxLevels).toEqual(["high", "high"]);
+  });
+
+  it("per-model cap lower than the combo-wide cap wins", async () => {
+    const { handleChat } = await import("../../src/sse/handlers/chat.js");
+    const req = new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "combo-per-model-lower", messages: [{ role: "user", content: "hi" }] }),
+    });
+    await handleChat(req);
+
+    const maxLevels = mocks.handleChatCore.mock.calls.map((call) => call[0].maxThinkingLevel);
+    expect(maxLevels).toEqual(["low"]);
+  });
+
+  it("per-model cap higher than the combo-wide cap loses — combo cap wins", async () => {
+    const { handleChat } = await import("../../src/sse/handlers/chat.js");
+    const req = new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "combo-per-model-higher", messages: [{ role: "user", content: "hi" }] }),
+    });
+    await handleChat(req);
+
+    const maxLevels = mocks.handleChatCore.mock.calls.map((call) => call[0].maxThinkingLevel);
+    expect(maxLevels).toEqual(["high"]);
+  });
+});
+
+describe("resolveMaxThinkingLevel (mutation-proof min-of-two-caps logic)", () => {
+  it("combo cap alone (no per-model cap) → combo cap wins", async () => {
+    const { resolveMaxThinkingLevel } = await import("../../src/sse/handlers/chat.js");
+    expect(resolveMaxThinkingLevel("high", null)).toBe("high");
+  });
+
+  it("per-model cap alone (no combo cap) → per-model cap wins", async () => {
+    const { resolveMaxThinkingLevel } = await import("../../src/sse/handlers/chat.js");
+    expect(resolveMaxThinkingLevel(null, "low")).toBe("low");
+  });
+
+  it("per-model cap lower than combo cap → per-model wins", async () => {
+    const { resolveMaxThinkingLevel } = await import("../../src/sse/handlers/chat.js");
+    expect(resolveMaxThinkingLevel("high", "low")).toBe("low");
+  });
+
+  it("per-model cap higher than combo cap → combo cap wins", async () => {
+    const { resolveMaxThinkingLevel } = await import("../../src/sse/handlers/chat.js");
+    expect(resolveMaxThinkingLevel("low", "high")).toBe("low");
+  });
+
+  it("equal caps → that level is returned", async () => {
+    const { resolveMaxThinkingLevel } = await import("../../src/sse/handlers/chat.js");
+    expect(resolveMaxThinkingLevel("medium", "medium")).toBe("medium");
+  });
+
+  it("both absent → null", async () => {
+    const { resolveMaxThinkingLevel } = await import("../../src/sse/handlers/chat.js");
+    expect(resolveMaxThinkingLevel(null, null)).toBeNull();
+  });
+
+  it("combo cap unknown level is ignored — per-model cap applies", async () => {
+    const { resolveMaxThinkingLevel } = await import("../../src/sse/handlers/chat.js");
+    expect(resolveMaxThinkingLevel("bogus", "low")).toBe("low");
+  });
+
+  it("per-model cap unknown level is ignored — combo cap applies", async () => {
+    const { resolveMaxThinkingLevel } = await import("../../src/sse/handlers/chat.js");
+    expect(resolveMaxThinkingLevel("high", "bogus")).toBe("high");
+  });
+});
+
+describe("combos API: maxThinking (combo-wide cap) validation + round-trip", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getComboByName.mockResolvedValue(null);
+    mocks.getHiddenComboNames.mockResolvedValue([]);
+    mocks.getRequestIdentity.mockResolvedValue({ isAdmin: true, owner: "@admin" });
+    mocks.getScopeFilter.mockResolvedValue(null);
+    mocks.ownerForCreate.mockImplementation(async (o) => o ?? null);
+  });
+
+  it("POST rejects an unknown maxThinking level", async () => {
+    const { POST } = await import("@/app/api/combos/route.js");
+    const req = new Request("http://localhost/api/combos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "combo1", models: ["openai/gpt-5"], maxThinking: "nope" }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    expect(mocks.createCombo).not.toHaveBeenCalled();
+  });
+
+  it("POST round-trips a valid combo-wide maxThinking", async () => {
+    mocks.createCombo.mockImplementation(async (data) => ({ id: "c1", ...data }));
+    const { POST } = await import("@/app/api/combos/route.js");
+    const req = new Request("http://localhost/api/combos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "combo1", models: ["openai/gpt-5"], maxThinking: "high" }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(201);
+    const json = await res.json();
+    expect(json.maxThinking).toBe("high");
+    expect(mocks.createCombo).toHaveBeenCalledWith(expect.objectContaining({ maxThinking: "high" }));
+  });
+
+  it("PUT rejects an unknown maxThinking level without touching updateCombo", async () => {
+    mocks.getComboById.mockResolvedValue({ id: "c1", name: "combo1", owner: null, models: ["openai/gpt-5"] });
+    const { PUT } = await import("@/app/api/combos/[id]/route.js");
+    const req = new Request("http://localhost/api/combos/c1", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ maxThinking: "bogus" }),
+    });
+    const res = await PUT(req, { params: Promise.resolve({ id: "c1" }) });
+    expect(res.status).toBe(400);
+    expect(mocks.updateCombo).not.toHaveBeenCalled();
+  });
+
+  it("PUT round-trips a valid combo-wide maxThinking", async () => {
+    mocks.getComboById.mockResolvedValue({ id: "c1", name: "combo1", owner: null, models: ["openai/gpt-5"] });
+    mocks.updateCombo.mockImplementation(async (id, patch) => ({
+      id, name: "combo1", owner: null, models: ["openai/gpt-5"], ...patch,
+    }));
+    const { PUT } = await import("@/app/api/combos/[id]/route.js");
+    const req = new Request("http://localhost/api/combos/c1", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ maxThinking: "low" }),
+    });
+    const res = await PUT(req, { params: Promise.resolve({ id: "c1" }) });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.maxThinking).toBe("low");
+  });
+});
+
+describe("combosRepo: maxThinking (combo-wide cap) round-trip (real SQLite, temp DATA_DIR)", () => {
+  const originalDataDir = process.env.DATA_DIR;
+  let tempDir;
+  let db;
+
+  beforeAll(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-combo-wide-cap-"));
+    process.env.DATA_DIR = tempDir;
+    vi.resetModules();
+    db = await import("@/lib/db/index.js");
+    await db.initDb();
+  });
+
+  afterAll(() => {
+    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+  });
+
+  it("createCombo without maxThinking → maxThinking is null (backward compat)", async () => {
+    const combo = await db.createCombo({ name: "no-wide-cap-combo", models: ["openai/gpt-5"] });
+    expect(combo.maxThinking).toBeNull();
+    const fetched = await db.getComboById(combo.id);
+    expect(fetched.maxThinking).toBeNull();
+  });
+
+  it("updateCombo adding maxThinking round-trips it", async () => {
+    const combo = await db.createCombo({ name: "wide-capped-combo", models: ["openai/gpt-5"] });
+    const updated = await db.updateCombo(combo.id, { maxThinking: "high" });
+    expect(updated.maxThinking).toBe("high");
+    const fetched = await db.getComboById(combo.id);
+    expect(fetched.maxThinking).toBe("high");
   });
 });

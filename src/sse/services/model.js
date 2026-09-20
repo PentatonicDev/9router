@@ -93,11 +93,12 @@ export async function getComboModels(modelStr, comboOwner = undefined) {
   return null;
 }
 
-// Per-model thinking cap for a combo, keyed by the literal model-entry string
-// (as stored in combo.models[]), or null when the combo has none. modelStr
-// here is the combo NAME (same argument getComboModels takes), not an entry.
+// Per-model thinking caps for a combo, plus the combo-wide cap that applies to
+// every model in it. modelStr here is the combo NAME (same argument
+// getComboModels takes), not an entry. Returns null when there's no combo.
 export async function getComboModelOptions(modelStr, comboOwner = undefined) {
   if (modelStr.includes("/")) return null;
   const combo = await getComboByName(modelStr, comboOwner);
-  return combo?.modelOptions || null;
+  if (!combo) return null;
+  return { modelOptions: combo.modelOptions || null, maxThinking: combo.maxThinking || null };
 }

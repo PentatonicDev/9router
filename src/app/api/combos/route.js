@@ -21,6 +21,12 @@ export function isValidModelOptions(modelOptions) {
   });
 }
 
+// combo.maxThinking: same THINKING_ORDER level, applied across every model in
+// the combo (a per-model cap below it still wins). Absent/null is valid.
+export function isValidMaxThinking(maxThinking) {
+  return maxThinking === undefined || maxThinking === null || THINKING_ORDER.includes(maxThinking);
+}
+
 // GET /api/combos - Get all combos
 export async function GET() {
   try {
@@ -47,7 +53,7 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { name, models, kind, modelOptions } = body;
+    const { name, models, kind, modelOptions, maxThinking } = body;
 
     if (!name) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
@@ -60,6 +66,10 @@ export async function POST(request) {
 
     if (!isValidModelOptions(modelOptions)) {
       return NextResponse.json({ error: "Invalid modelOptions: unknown maxThinking level" }, { status: 400 });
+    }
+
+    if (!isValidMaxThinking(maxThinking)) {
+      return NextResponse.json({ error: "Invalid maxThinking level" }, { status: 400 });
     }
 
     // Names are unique per owner, so only a clash within the caller's own scope
@@ -81,6 +91,7 @@ export async function POST(request) {
 
     const combo = await createCombo({
       name, models: models || [], kind: kind || null, modelOptions: modelOptions || null,
+      maxThinking: maxThinking || null,
       owner: await ownerForCreate(body.owner),
     });
 

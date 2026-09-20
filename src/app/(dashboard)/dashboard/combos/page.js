@@ -786,6 +786,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   const [name, setName] = useState(combo?.name || "");
   const [models, setModels] = useState(combo?.models || []);
   const [modelOptions, setModelOptions] = useState(combo?.modelOptions || {});
+  const [maxThinking, setMaxThinking] = useState(combo?.maxThinking || "");
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -891,6 +892,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
     await onSave({
       name: name.trim(), models,
       modelOptions: Object.keys(modelOptions).length ? modelOptions : null,
+      maxThinking: maxThinking || null,
       ...(canAssignOwner ? { owner: owner.trim() || null } : {}),
     });
     setSaving(false);
@@ -937,7 +939,23 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
 
           {/* Models */}
           <div>
-            <label className="text-sm font-medium mb-1.5 block">Models</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-sm font-medium block">Models</label>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-text-muted">Max thinking (all models)</span>
+                <select
+                  value={maxThinking || ""}
+                  onChange={(e) => setMaxThinking(e.target.value)}
+                  className="shrink-0 rounded border border-black/10 bg-transparent px-1 py-0.5 text-[10px] text-text-muted dark:border-white/10"
+                  title="Cap max thinking level across every model in this combo"
+                >
+                  <option value="">no cap</option>
+                  {THINKING_ORDER.map((level) => (
+                    <option key={level} value={level}>{level}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
             {models.length === 0 ? (
               <div className="text-center py-4 border border-dashed border-black/10 dark:border-white/10 rounded-lg bg-black/[0.01] dark:bg-white/[0.01]">
