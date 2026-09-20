@@ -520,7 +520,9 @@ Runtime visibility sources:
 - optional deep request/translation logs under `logs/` when `ENABLE_REQUEST_LOGS=true`
 - dashboard usage endpoints (`/api/usage/*`) for UI consumption
 - `GET /v1/admin/request-details[/{id}]` — same stored rows as the dashboard's Request Details drawer, for `curl`-based debugging. Requires an active API key with an owner, plus `settings.requireLogin` and `settings.enableObservability` both on (the key is checked first, so the settings cannot be probed anonymously). Rows are scoped to the owner's keys and accounts unless the owner is an admin; the collection route strips request/provider bodies unless `?full=1` is given.
-- Dashboard REST API by key: a key flagged `management` (admin-set) authenticates `/api/*` management routes as its owner via `Authorization: Bearer` / `x-api-key`, with the same resource scoping as a session (`src/dashboardGuard.js`, `src/lib/auth/resourceScope.js`).
+- Dashboard REST API by key: an administration key (`apiKeys.kind = 'admin'`, one per owner) authenticates `/api/*` management routes as its owner via `Authorization: Bearer` / `x-api-key`, with the same resource scoping as a session (`src/dashboardGuard.js`, `src/lib/auth/resourceScope.js`); usage keys (`kind = 'usage'`) are refused there and administration keys are refused on `/v1`.
+- Spend caps: `apiKeys.connectionBudgets` + `spendLedger` (`src/lib/db/repos/spendLedgerRepo.js`), enforced in `getProviderCredentials` (`src/sse/services/auth.js`) for providers whose registry `billing` is `usage`.
+- Amazon Bedrock: `open-sse/executors/bedrock.js` (Converse over `@aws-sdk/client-bedrock-runtime`), translators `openai-to-bedrock-converse` / `bedrock-converse-to-openai`, per-connection client config in `open-sse/services/bedrockClient.js` (API key vs IAM, region/global/home region/endpoint), discovery in `open-sse/services/bedrockModels.js` behind `POST /api/providers/bedrock/discover` (preview) and `POST /api/providers/{id}/discover` (persist).
 
 ## Security-Sensitive Boundaries
 
