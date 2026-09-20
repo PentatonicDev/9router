@@ -64,9 +64,26 @@ async function createSqlite() {
   return new Kysely({ dialect: new SqliteDialect({ database: sqliteDatabaseFrom(adapter) }) });
 }
 
+// `management` (boolean, superseded) becomes kind='admin'. One row per owner —
+// idx_ak_admin_owner is unique — the oldest wins; the statement matches nothing
+// once done, so every instance can run it on every boot. Fail-open: a failure
+// here must not take the database down with it.
+async function backfillAdminKeyKind(db) {
+  try {
+    await db.updateTable("apiKeys").set({ kind: "admin" })
+      .where("management", "=", 1).where("kind", "=", "usage").where("owner", "is not", null)
+      .where("createdAt", "=", (eb) => eb.selectFrom("apiKeys as a2").select((e) => e.fn.min("a2.createdAt").as("m"))
+        .whereRef("a2.owner", "=", "apiKeys.owner").where("a2.management", "=", 1))
+      .execute();
+  } catch (e) {
+    console.warn(`[DB] admin key backfill skipped: ${e.message}`);
+  }
+}
+
 async function init() {
   if (!isDistributed()) {
     const db = await createSqlite();
+    await backfillAdminKeyKind(db);
     state.instance = db;
     return db;
   }
@@ -77,6 +94,7 @@ async function init() {
   const { createSchema, syncColumns } = await import("./schemaKysely.js");
   await createSchema(db);
   await syncColumns(db);
+  await backfillAdminKeyKind(db);
   console.log(`[DB] distributed mode — schema ready`);
   state.instance = db;
   return db;

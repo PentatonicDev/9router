@@ -59,7 +59,8 @@ async function createIndexes(db, pg) {
         const cols = pg ? idx.expression.pg : idx.expression.sqlite;
         const table = pg ? `"${idx.table}"` : idx.table;
         const unique = idx.unique ? "UNIQUE " : "";
-        await sql.raw(`CREATE ${unique}INDEX IF NOT EXISTS ${idx.name} ON ${table}(${cols})`).execute(db);
+        const where = idx.where ? ` WHERE ${pg ? idx.where.pg : idx.where.sqlite}` : "";
+        await sql.raw(`CREATE ${unique}INDEX IF NOT EXISTS ${idx.name} ON ${table}(${cols})${where}`).execute(db);
         continue;
       }
       let b = db.schema.createIndex(idx.name).ifNotExists().on(idx.table);

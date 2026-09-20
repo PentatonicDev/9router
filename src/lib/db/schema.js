@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 10;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -90,6 +90,13 @@ export const TABLES = {
       // resourceScope.js / dashboardGuard.js). Off by default: a leaked routing
       // key must not become a management credential.
       management: "INTEGER DEFAULT 0",
+      // "usage" routes /v1 traffic; "admin" drives the dashboard REST API as its
+      // owner and never routes. One admin key per owner (idx_ak_admin_owner).
+      // Supersedes `management`, which stays for the boot backfill in kysely.js.
+      kind: "TEXT DEFAULT 'usage'",
+      // JSON: { [connectionId]: { limitUsd, period: "month" | "total" } } — spend
+      // cap of this key on a consumption-billed account (see spendLedger).
+      connectionBudgets: "TEXT",
       // JSON array of providerConnections.id this key may route to.
       // NULL/empty = unrestricted (the key reaches every account).
       allowedConnectionIds: "TEXT",
@@ -103,7 +110,21 @@ export const TABLES = {
     indexes: [
       "CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)",
       "CREATE INDEX IF NOT EXISTS idx_ak_owner ON apiKeys(owner)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_ak_admin_owner ON apiKeys(owner) WHERE kind='admin'",
     ],
+  },
+  // Money spent per API key on one account inside one period; written in the same
+  // transaction as usageHistory and read when an account is picked for a request.
+  spendLedger: {
+    columns: {
+      apiKey: "TEXT NOT NULL",
+      connectionId: "TEXT NOT NULL",
+      periodKey: "TEXT NOT NULL", // UTC "YYYY-MM" or "total"
+      costUsd: "REAL DEFAULT 0",
+      updatedAt: "TEXT NOT NULL",
+    },
+    primaryKey: "PRIMARY KEY (apiKey, connectionId, periodKey)",
+    indexes: ["CREATE INDEX IF NOT EXISTS idx_sl_apikey ON spendLedger(apiKey)"],
   },
   combos: {
     columns: {
@@ -117,6 +138,8 @@ export const TABLES = {
       // JSON keyed by the entry string in `models`: { "<model>": { maxThinking: <level> } }.
       // A fallback candidate never thinks above its cap, whatever the client asked for.
       modelOptions: "TEXT",
+      // Combo-wide thinking cap (same levels); a per-model cap below it wins.
+      maxThinking: "TEXT",
       // See providerConnections.owner.
       owner: "TEXT",
       createdAt: "TEXT NOT NULL",
@@ -234,6 +257,8 @@ export const INDEXES = [
   { name: "idx_combo_name", table: "combos", columns: ["name"], unique: false },
   { name: "idx_combo_owner_name", table: "combos", expression: { sqlite: "name, IFNULL(owner, '')", pg: "name, COALESCE(owner, '')" }, unique: true },
   { name: "idx_kv_scope", table: "kv", columns: ["scope"], unique: false },
+  { name: "idx_ak_admin_owner", table: "apiKeys", expression: { sqlite: "owner", pg: '"owner"' }, where: { sqlite: "kind='admin'", pg: '"kind"=\'admin\'' }, unique: true },
+  { name: "idx_sl_apikey", table: "spendLedger", columns: ["apiKey"], unique: false },
   { name: "idx_cl_ts", table: "consoleLogs", columns: ["timestamp"], order: "desc", unique: false },
   { name: "idx_cl_instance", table: "consoleLogs", columns: ["instanceId"], unique: false },
   { name: "idx_uh_ts", table: "usageHistory", columns: ["timestamp"], order: "desc", unique: false },
