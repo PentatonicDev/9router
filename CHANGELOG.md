@@ -1,6 +1,7 @@
 # Unreleased
 
 ## Fixes
+- **Build**: the standalone server (Docker image) failed every route with `Cannot find module '../../webpack-runtime.js'`. Next applies `outputFileTracingExcludes` with substring matching, so the `./.next/**` and `./logs/**` entries stripped the webpack runtime and Next's own `dev/browser-logs` from the traced output. Only the upstream `gitbook` exclude remains.
 - **Stream**: open the client SSE response as soon as a `stream: true` request is authenticated, so routing, combo/account fallback and provider prefill no longer leave the connection silent — reverse proxies (Cloudflare's 125s Proxy Read Timeout) answered 524 before upstream headers existed. Heartbeats are SSE comments, suppressed while a partial event is in flight, and the final client-facing stream is relayed unchanged. A failure that resolves before the stream opens now travels in-band in the client's format (OpenAI error frame + `[DONE]`, Claude `event: error`, Responses `event: response.failed` + `[DONE]`) instead of dropping the connection.
 - **Stream**: cancel the upstream request when the client disconnects, and stop locking the account when the abort is what ended the request.
 

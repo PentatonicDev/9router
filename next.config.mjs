@@ -26,9 +26,11 @@ const nextConfig = {
   },
   outputFileTracingRoot: tracingRoot,
   outputFileTracingExcludes: {
-    // Runtime request logs are mutable and may contain credentials; never copy
-    // them into a standalone build. Generated .next output must not trace itself.
-    "*": ["./gitbook/**/*", "./logs/**/*", "./.next/**/*"]
+    // Next matches these globs with picomatch `contains: true`, i.e. anywhere in
+    // the path: `./.next/**` strips `.next/server/webpack-runtime.js` from every
+    // route trace and `./logs/**` strips next's own `dev/browser-logs/*`, either
+    // of which leaves the standalone server unable to boot or serve routes.
+    "*": ["./gitbook/**/*"]
   },
   images: {
     unoptimized: true
