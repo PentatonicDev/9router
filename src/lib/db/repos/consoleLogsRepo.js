@@ -43,11 +43,16 @@ export async function getRecentConsoleLogs(limit = 200) {
   return rows.reverse().map((r) => ({ ...r, id: Number(r.id) }));
 }
 
+// Pods that no longer exist keep their rows until the MAX_ROWS window pushes
+// them out, so the picker only lists instances that wrote inside this window.
+const ACTIVE_INSTANCE_WINDOW_MS = 15 * 60 * 1000;
+
 // Which instances have written recently — the dashboard's instance picker.
-export async function getConsoleLogInstances() {
+export async function getConsoleLogInstances({ activeWithinMs = ACTIVE_INSTANCE_WINDOW_MS, nowMs = Date.now() } = {}) {
   const db = await getDb();
   const rows = await db.selectFrom("consoleLogs")
     .select(["instanceId", sql`max(timestamp)`.as("lastSeen")])
+    .where("timestamp", ">=", new Date(nowMs - activeWithinMs).toISOString())
     .groupBy("instanceId").orderBy("instanceId", "asc").execute();
   return rows;
 }

@@ -5,6 +5,7 @@
 - **Observability**: `GET /v1/admin/request-details` (and `/v1/admin/request-details/{id}`) expose the stored request metrics — latency, phases, tokens, provider, model, status, comboName — for `curl`-based debugging. Gated on `settings.enableObservability` and an active API key owned by `@admin`; the collection route strips request/provider bodies unless `?full=1` is given, the by-id route always returns the full stored record.
 
 ## Fixes
+- **Console Log**: the pod picker only lists instances that wrote in the last 15 minutes, so pods that no longer exist stop appearing.
 - **Usage**: `usageDaily` and the lifetime request counter lost concurrent updates on Postgres (read, merge in JS, write back with no lock); the rows are now seeded and locked with `SELECT ... FOR UPDATE` inside the transaction. 50 concurrent writes count 50 (was 1). SQLite is unchanged.
 - **Quota jobs**: auto-ping and unlock start on process boot (`instrumentation.js`) instead of on the first dashboard render, so an instance serving only `/v1` runs them too.
 - **Token refresh**: a non-OK refresh response is returned as an error object instead of `null`; a permanent one (`invalid_grant`) stops the retry loop instead of resending a dead refresh token, a transient one still retries with backoff.

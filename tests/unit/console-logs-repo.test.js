@@ -63,6 +63,20 @@ describe("consoleLogsRepo", () => {
     expect(instances[0].lastSeen).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  it("drops instances that stopped writing", async () => {
+    await repo.clearConsoleLogsFromDb();
+    const { getDb } = await import("@/lib/db/kysely.js");
+    const db = await getDb();
+    const stale = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await db.insertInto("consoleLogs").values({ instanceId: "gone-pod", timestamp: stale, line: "old" }).execute();
+    await repo.appendConsoleLogs(["fresh"]);
+    const ids = (await repo.getConsoleLogInstances()).map((i) => i.instanceId);
+    expect(ids).not.toContain("gone-pod");
+    expect(ids).toHaveLength(1);
+    const all = (await repo.getConsoleLogInstances({ activeWithinMs: 2 * 60 * 60 * 1000 })).map((i) => i.instanceId);
+    expect(all).toContain("gone-pod");
+  });
+
   it("clears every row", async () => {
     await repo.appendConsoleLogs(["leftover"]);
     await repo.clearConsoleLogsFromDb();
