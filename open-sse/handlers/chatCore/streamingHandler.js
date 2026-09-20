@@ -132,7 +132,7 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
 export function buildOnStreamComplete({ provider, model, connectionId, apiKey, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest, pxpipe, reqTag, log, phases: entryPhases, comboName }) {
   const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
-  const onStreamComplete = (contentObj, usage, ttftAt, firstContentAt) => {
+  const onStreamComplete = (contentObj, usage, ttftAt, firstContentAt, upstream) => {
     const now = Date.now();
     const latency = {
       // TTFT means first useful content. The opening SSE frame is tracked
@@ -147,6 +147,13 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
     const safeContent = contentObj?.content || "[Empty streaming response]";
     const safeThinking = contentObj?.thinking || null;
 
+    // A turn that never produced output still needs to say why: an upstream
+    // error/failed/errored terminal is not a "success", even though the client
+    // got a 200 and a (possibly synthesized) terminal frame.
+    const upstreamFailed = upstream?.errored
+      || upstream?.terminal_event === "response.failed"
+      || upstream?.terminal_event === "error";
+
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId, apiKey,
       latency,
@@ -158,7 +165,8 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
       providerResponse: safeContent,
       response: { content: safeContent, thinking: safeThinking, type: "streaming" },
       pxpipe,
-      status: "success"
+      upstream,
+      status: upstreamFailed ? "error" : "success"
     }, { id: streamDetailId })).catch(err => {
       console.error("[RequestDetail] Failed to update streaming content:", err.message);
     });

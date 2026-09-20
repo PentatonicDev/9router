@@ -519,6 +519,7 @@ Runtime visibility sources:
 - textual request status log in `log.txt`
 - optional deep request/translation logs under `logs/` when `ENABLE_REQUEST_LOGS=true`
 - dashboard usage endpoints (`/api/usage/*`) for UI consumption
+- `GET /v1/admin/request-details[/{id}]` — same stored rows as the dashboard's Request Details drawer, for `curl`-based debugging. Requires an active API key owned by `@admin` and `settings.enableObservability === true` (the key is checked first, so the setting cannot be probed anonymously); the collection route strips request/provider bodies unless `?full=1` is given.
 
 ## Security-Sensitive Boundaries
 

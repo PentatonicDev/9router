@@ -83,6 +83,34 @@ export function createSSEStream(options = {}) {
   let streamErrored = false;   // an upstream error was emitted: no success terminal may follow
   let finalized = false;
 
+  // Diagnostics for the stored request detail — why a turn ended the way it did.
+  // Populated for a Responses-format upstream only; other formats keep events+finish_reason.
+  let upstreamTerminalEvent = null;
+  let upstreamResponseStatus = null;
+  let upstreamIncompleteReason = null;
+  let upstreamErrorMessage = null;
+  const upstreamOutputItemCounts = {};
+
+  const buildUpstreamSummary = () => {
+    const events = { ...eventTypeCounts };
+    if (mode === STREAM_MODE.TRANSLATE && targetFormat === FORMATS.OPENAI_RESPONSES) {
+      return {
+        terminal_event: upstreamTerminalEvent,
+        response_status: upstreamResponseStatus,
+        incomplete_reason: upstreamIncompleteReason,
+        error: upstreamErrorMessage,
+        errored: streamErrored,
+        events,
+        output_items: { ...upstreamOutputItemCounts }
+      };
+    }
+    return {
+      events,
+      finish_reason: (mode === STREAM_MODE.TRANSLATE ? state?.finishReason : null) || null,
+      errored: streamErrored
+    };
+  };
+
   // Usage/logging tail, callable from transform() as well as flush(): a client that
   // closes right after the terminal event cancels the reader, and flush() never runs.
   const finalizeStream = () => {
@@ -110,7 +138,7 @@ export function createSSEStream(options = {}) {
       onStreamComplete({
         content: accumulatedContent,
         thinking: accumulatedThinking
-      }, finalUsage, ttftAt, firstContentAt);
+      }, finalUsage, ttftAt, firstContentAt, buildUpstreamSummary());
     }
   };
 
@@ -127,13 +155,13 @@ export function createSSEStream(options = {}) {
       for (const line of lines) {
         if (streamErrored) break; // nothing may follow an error terminal
         const trimmed = line.trim();
-        if (isDebugEnabled && trimmed) {
-          sseLineCount++;
-          if (trimmed.startsWith("event:")) {
-            const evt = trimmed.slice(6).trim();
-            eventTypeCounts[evt] = (eventTypeCounts[evt] || 0) + 1;
-          }
+        // Event-name counts feed both the debug flush line and the stored request
+        // detail's upstream summary, so they're tracked regardless of debug mode.
+        if (trimmed.startsWith("event:")) {
+          const evt = trimmed.slice(6).trim();
+          eventTypeCounts[evt] = (eventTypeCounts[evt] || 0) + 1;
         }
+        if (isDebugEnabled && trimmed) sseLineCount++;
 
         // Capture Responses API event name to preserve framing in same-format passthrough
         if (mode === STREAM_MODE.TRANSLATE && targetFormat === FORMATS.OPENAI_RESPONSES && trimmed.startsWith("event:")) {
@@ -274,8 +302,19 @@ export function createSSEStream(options = {}) {
           || openAIResponsesEventName === "response.function_call_arguments.delta"
         )) firstContentAt = Date.now();
 
-        if (isOpenAIResponsesStream && isOpenAIResponsesTerminalEvent(openAIResponsesEventName, parsed)) {
-          openAIResponsesTerminalSeen = true;
+        if (isOpenAIResponsesStream) {
+          if (openAIResponsesEventName === "response.output_item.added" && parsed?.item?.type) {
+            upstreamOutputItemCounts[parsed.item.type] = (upstreamOutputItemCounts[parsed.item.type] || 0) + 1;
+          }
+          if (parsed?.response?.status) upstreamResponseStatus = parsed.response.status;
+          if (parsed?.response?.incomplete_details?.reason) upstreamIncompleteReason = parsed.response.incomplete_details.reason;
+          const upstreamErrText = parsed?.error?.message || parsed?.response?.error?.message;
+          if (upstreamErrText) upstreamErrorMessage = String(upstreamErrText).slice(0, 300);
+
+          if (isOpenAIResponsesTerminalEvent(openAIResponsesEventName, parsed)) {
+            openAIResponsesTerminalSeen = true;
+            upstreamTerminalEvent = openAIResponsesEventName;
+          }
         }
 
         // For Ollama: done=true is the final chunk with finish_reason/usage, must translate
@@ -289,6 +328,8 @@ export function createSSEStream(options = {}) {
             reqLogger?.appendConvertedChunk?.(failedOutput);
             controller.enqueue(sharedEncoder.encode(failedOutput));
             openAIResponsesTerminalSeen = true;
+            upstreamTerminalEvent = "response.failed";
+            upstreamErrorMessage ||= "stream closed before response.completed";
             sseEmittedCount++;
           }
 
@@ -410,6 +451,19 @@ export function createSSEStream(options = {}) {
             sseEmittedCount++;
           }
         }
+
+        // A Responses upstream pivoted to an OpenAI-format client needs the
+        // [DONE] sentinel spelled out ourselves: Responses has none of its own
+        // to pass through, and chat-completions clients wait on it to close out.
+        // Claude/Gemini-family targets use their own termination framing instead.
+        if (isOpenAIResponsesStream && !keepsOpenAIResponsesFormat && openAIResponsesTerminalSeen
+          && sourceFormat === FORMATS.OPENAI && !streamDoneSent) {
+          const doneOutput = "data: [DONE]\n\n";
+          reqLogger?.appendConvertedChunk?.(doneOutput);
+          controller.enqueue(sharedEncoder.encode(doneOutput));
+          streamDoneSent = true;
+          finalizeStream();
+        }
       }
       if (!firstContentAt && (accumulatedContent || accumulatedThinking)) firstContentAt = Date.now();
     },
@@ -513,6 +567,8 @@ export function createSSEStream(options = {}) {
           reqLogger?.appendConvertedChunk?.(failedOutput);
           controller.enqueue(sharedEncoder.encode(failedOutput));
           openAIResponsesTerminalSeen = true;
+          upstreamTerminalEvent = "response.failed";
+          upstreamErrorMessage ||= "stream closed before response.completed";
         }
 
         if (keepsOpenAIResponsesFormat && !openAIResponsesDoneSent && !streamDoneSent) {

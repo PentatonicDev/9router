@@ -538,9 +538,10 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
     return null;
   }
 
-  // Response completed
-  if (eventType === "response.completed" || eventType === "response.done") {
-    // Extract usage from response.completed event
+  // Response completed / incomplete (e.g. hit max_output_tokens or content filter
+  // mid-turn — still a terminal event, just not a clean stop)
+  if (eventType === "response.completed" || eventType === "response.done" || eventType === "response.incomplete") {
+    // Extract usage from response.completed/incomplete event
     const responseUsage = data.response?.usage;
     if (responseUsage && typeof responseUsage === "object") {
       const inputTokens = responseUsage.input_tokens || responseUsage.prompt_tokens || 0;
@@ -548,16 +549,24 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
       // OpenAI Responses API: input_tokens already includes cached_tokens
       // Cache info is in input_tokens_details.cached_tokens
       const cacheReadTokens = responseUsage.input_tokens_details?.cached_tokens || responseUsage.cache_read_input_tokens || 0;
-      
+
       state.usage = buildUsage({ promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: inputTokens + outputTokens, cachedTokens: cacheReadTokens });
     }
-    
+
     if (!state.finishReasonSent) {
-      const finishReason = computeFinishReason(state);
+      const isIncomplete = eventType === "response.incomplete" || data.response?.status === "incomplete";
+      const incompleteReason = data.response?.incomplete_details?.reason;
+      const finishReason = isIncomplete
+        ? (incompleteReason === "max_output_tokens" ? OPENAI_FINISH.LENGTH
+          : incompleteReason === "content_filter" ? OPENAI_FINISH.CONTENT_FILTER
+          // Unrecognized/future incomplete_details.reason: still tool-call-aware
+          // rather than assuming a clean stop.
+          : computeFinishReason(state))
+        : computeFinishReason(state);
 
       state.finishReasonSent = true;
       state.finishReason = finishReason; // Mark for usage injection in stream.js
-      
+
       const finalChunk = buildChunk(
         { id: state.chatId, created: state.created, model: state.model || MODEL_FALLBACK },
         {},
@@ -568,7 +577,7 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
       if (state.usage && typeof state.usage === "object") {
         finalChunk.usage = state.usage;
       }
-      
+
       return finalChunk;
     }
     return null;

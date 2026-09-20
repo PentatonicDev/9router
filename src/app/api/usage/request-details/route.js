@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getRequestDetails } from "@/lib/usageDb";
 import { getApiKeys } from "@/lib/localDb";
 import { maskApiKey } from "@/lib/db/helpers/maskKey.js";
-import { getScopeFilter, canSee } from "@/lib/auth/resourceScope";
+import { getScopeFilter, canSee, getRequestIdentity } from "@/lib/auth/resourceScope";
 import { getUsageVisibility, canSeeUsageRow } from "@/lib/auth/usageScope";
 
 /**
@@ -71,11 +71,12 @@ export async function GET(request) {
     
     const result = await getRequestDetails(filter);
 
-    // Redact conversation payloads: the stored details include full request
-    // bodies (user prompts, tool calls) and provider responses. Returning them
-    // wholesale lets any dashboard-authenticated user (or, if requireLogin is
-    // disabled, anyone) read every user's conversation history. Keep the
-    // metadata (model, tokens, latency, status) but drop message content.
+    // The stored details include full request bodies (user prompts, tool calls)
+    // and provider responses. Only an admin session sees them: with requireLogin
+    // disabled there is no session at all, so the identity is anonymous and the
+    // payloads stay redacted for whoever can reach the dashboard. Everyone keeps
+    // the metadata (model, tokens, latency, status).
+    const { isAdmin } = await getRequestIdentity();
     const keyNameByMasked = new Map(
       (await getApiKeys()).filter((k) => canSee(k, scopeFilter)).map((k) => [maskApiKey(k.key), k.name])
     );
@@ -85,7 +86,7 @@ export async function GET(request) {
       .map((d) => {
       const redacted = { ...d };
       for (const key of ["request", "providerRequest", "providerResponse", "response"]) {
-        if (redacted[key] !== undefined) {
+        if (!isAdmin && redacted[key] !== undefined) {
           redacted[key] = { redacted: true };
         }
       }

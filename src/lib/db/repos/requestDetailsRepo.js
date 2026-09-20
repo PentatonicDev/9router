@@ -117,6 +117,7 @@ async function flushToDatabase() {
             // defeat the point of measuring them.
             phases: item.phases || undefined,
             comboName: item.comboName || undefined,
+            upstream: item.upstream || undefined,
             tokens: item.tokens || {},
             request: truncateField(item.request, config.maxJsonSize),
             providerRequest: truncateField(item.providerRequest, config.maxJsonSize),

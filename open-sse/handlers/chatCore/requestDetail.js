@@ -76,6 +76,10 @@ export function buildRequestDetail(base, overrides = {}) {
     // Per-stage timings in ms from t0 (epoch). An absent key means the stage did not
     // run — never write 0, which would read as a measured zero.
     phases: base.phases || undefined,
+    // Streamed-turn diagnostics (terminal event, incomplete reason, error, event
+    // counts) — see open-sse/utils/stream.js buildUpstreamSummary. Small and flat,
+    // like phases/comboName, so it skips truncateField in requestDetailsRepo.js.
+    upstream: base.upstream || undefined,
     tokens: base.tokens || { prompt_tokens: 0, completion_tokens: 0 },
     request: base.request,
     providerRequest: base.providerRequest || null,

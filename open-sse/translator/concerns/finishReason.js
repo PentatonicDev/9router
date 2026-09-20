@@ -55,6 +55,7 @@ export function fromOpenAIFinish(reason, format) {
         case OPENAI_FINISH.STOP: return CLAUDE_STOP.END_TURN;
         case OPENAI_FINISH.LENGTH: return CLAUDE_STOP.MAX_TOKENS;
         case OPENAI_FINISH.TOOL_CALLS: return CLAUDE_STOP.TOOL_USE;
+        case OPENAI_FINISH.CONTENT_FILTER: return CLAUDE_STOP.REFUSAL;
         default: return CLAUDE_STOP.END_TURN;
       }
     default:
