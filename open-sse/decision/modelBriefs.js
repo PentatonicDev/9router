@@ -1,16 +1,9 @@
-// "What this model is FOR" — the criteria jev reads when picking a model from a
-// pool. This text is the feature: measured on the same pool and the same tasks,
-// a criteria built from price + capability flags decided 0/4 correctly
-// (confidence 0.43–0.47, discarded by the threshold), while these briefs decided
-// 5/5 (confidence 0.96–0.99), including the hard case — a production race
-// condition routed to the reasoning model instead of the cheapest one.
+// "What this model is FOR" — the criteria jev reads when picking from a pool. This
+// text is the feature: price + capability flags decided 0/4 correctly against 5/5
+// for these briefs (measured), because "reasoning: true, 1000k context" says nothing
+// while "root-cause debugging of intermittent production bugs" says everything.
 //
-// "reasoning: true, context 1000k" tells jev nothing. "architectural decisions,
-// root-cause debugging of intermittent production bugs" tells it everything.
-//
-// Keys are canonical model ids (provider-agnostic), matching MODEL_PRICING's
-// shape in open-sse/providers/pricing.js. Price is NOT baked in here — it is
-// appended live from getPricingForModel so the text never goes stale.
+// Keyed by canonical model id. Price is appended live from getPricingForModel.
 
 import { getPricingForModel } from "../providers/pricing.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
@@ -56,15 +49,12 @@ export const MODEL_BRIEFS = {
 };
 
 /**
- * The criteria jev reads for one model. Resolution order:
- *   1. what the operator wrote for this model (their pool, their intent)
- *   2. the curated table above
- *   3. price + capability flags
+ * The criteria for one model: the operator's own brief, then the table above, then
+ * price + capability flags.
  *
- * ponytail: step 3 is measured BAD — it decided 0/4 correctly and only avoided
- * wrong routing because the confidence threshold discarded it. It exists so an
- * unknown model still gets *some* criterion rather than none; if you add a model
- * you care about, add a brief instead of trusting this.
+ * ponytail: the third step is measured bad (0/4; only the confidence threshold
+ * stopped it routing wrong). It is a floor for unknown models, not a substitute
+ * for a brief.
  */
 export function resolveCriteria({ provider, model, briefs = {}, maxChars = 600 }) {
   const id = String(model || "");
@@ -94,12 +84,8 @@ function describeCapabilities(provider, model) {
   return bits.length ? bits.join(", ") + "." : "";
 }
 
-/**
- * Passthrough providers address a model with a vendor prefix baked in
- * ("anthropic/claude-haiku-4.5" under the `vercel` alias), and the table is keyed
- * by the bare id. Without this the lookup misses and the model silently falls to
- * the derived criteria — the one measured to decide 0/4 correctly.
- */
+/** Passthrough ids carry a vendor prefix ("anthropic/claude-haiku-4.5"); the table
+ *  is keyed by the bare id, and a miss falls silently to the bad derived criteria. */
 function vendorSuffix(id) {
   const slash = id.indexOf("/");
   return slash > 0 ? id.slice(slash + 1) : null;
@@ -110,7 +96,7 @@ function briefsFor(id) {
   return MODEL_BRIEFS[id] || null;
 }
 
-/** Versioned ids ("claude-sonnet-4-5-20250929") fall back to their family brief. */
+/** Versioned ids fall back to their family brief. */
 function matchSuffix(table, id) {
   for (const key of Object.keys(table)) {
     if (key.length >= 8 && id.startsWith(key)) return table[key];

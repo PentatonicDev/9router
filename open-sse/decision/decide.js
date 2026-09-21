@@ -1,18 +1,10 @@
-// Turns jev's typed answers into a decision. Pure: no fetch, no clock, no state
-// of its own — the caller supplies the answers and the previous verdict, which is
-// what makes the rules below testable without a network.
-//
-// Every path that is not a confident, agreeing answer returns a passthrough. A
-// decision provider that guesses is worse than one that abstains: abstaining
-// costs a few hundred input tokens, guessing costs a wrong model or a wrong tool.
+// Turns jev's typed answers into a decision. Pure, so the rules are testable
+// without a network. Anything short of a confident, agreeing answer abstains.
 
-/** A tool name is offered to jev as an option label and, in hint mode, written
- *  into text the model reads. One inert token, no way out of either container. */
+/** A tool name becomes an option label and, in hint mode, model-readable text. */
 const SAFE_NAME = /^[\p{L}\p{N}_.:/-]{1,128}$/u;
 
-/** Roster ceiling. jev accepts 255 options per choice and the state has its own
- *  budget, so a roster this size is not judged — measured: 281 tools is a hard
- *  400 from the API. */
+/** jev caps a choice at 255 options — measured: 281 tools is a hard 400. */
 export const MAX_TOOLS = 120;
 
 /** jev answers "no tool needed" as an option in the same choice question. */
@@ -22,14 +14,10 @@ export const DEFAULT_MIN_CONFIDENCE = 0.7;
 export const DEFAULT_SWITCH_CONFIDENCE = 0.85;
 
 /**
- * Whether to change the model serving this session, from the confidence bands.
- *
- * The band split exists because a single threshold cannot separate two situations
- * that were both measured: clear verdicts arrive at 0.96–1.00 (a session that
- * hardened went haiku → sonnet → opus across three turns, all correct), while
- * vague tasks and bad criteria land at 0.43–0.57. Between 0.7 and 0.85 the
- * verdict is real but not certain, and a second agreeing verdict is what makes it
- * worth paying a cache rewrite for.
+ * Whether to change the model serving this session. One threshold cannot separate
+ * what was measured: clear verdicts land at 0.96–1.00, vague tasks and bad criteria
+ * at 0.43–0.57. In between, a second agreeing verdict is what justifies the cache
+ * rewrite a switch costs.
  */
 export function decideSwitch({
   confidence,
@@ -46,14 +34,7 @@ export function decideSwitch({
 }
 
 /**
- * Auto-combo: pick the model for this turn.
- *
- * `cheapest` and `dearest` are the pool's price extremes as model strings. Only
- * ONE contradiction is worth blocking: jev says the step needs real deliberation
- * and picks the cheapest model in the pool. That pairing loses quality silently,
- * which is the failure the operator cannot see. The mirror case (a mechanical
- * step on the dearest model) is a cost miss, not a quality one, and confidence
- * already covers it.
+ * Auto-combo: pick the model for this turn. `cheapest` is the pool's cheapest entry.
  */
 export function resolveModelDecision({
   answers,
@@ -72,8 +53,7 @@ export function resolveModelDecision({
     return { apply: false, reason: "no_deliberation_signal" };
   }
 
-  // A usable pick is reported even when it is not applied: the caller tracks the
-  // previous verdict so two identical answers can unlock the ambiguous band.
+  // Reported even when not applied: the caller tracks the previous verdict.
   const usable = { model: pick.choice, confidence: pick.confidence, deliberation: deliberation.noul };
 
   const gate = decideSwitch({
@@ -85,11 +65,9 @@ export function resolveModelDecision({
   });
   if (!gate.change) return { apply: false, reason: gate.reason, ...usable };
 
-  // Two independent answers disagreeing is the signal to abstain. Only ONE
-  // contradiction is worth blocking: jev says the step needs real deliberation and
-  // picks the cheapest model in the pool. That pairing loses quality silently.
-  // The mirror case (a mechanical step on the dearest model) is a cost miss, not a
-  // quality one, and confidence already covers it.
+  // The one contradiction worth blocking: a step that needs deliberation routed to
+  // the cheapest model loses quality silently. Mechanical work on an expensive model
+  // is only a cost miss, which confidence already covers.
   const hard = deliberation.noul >= 0.7;
   if (hard && cheapest && pick.choice === cheapest) {
     return { apply: false, reason: "signals_disagree", ...usable };
@@ -105,29 +83,22 @@ export function resolveModelDecision({
 }
 
 /**
- * Tool routing. Returns the mode to apply and, when there is one, the tool.
- *
- * `cacheSafe` means the request carries no cache breakpoint, so mutating
- * `tool_choice` costs nothing. When a breakpoint IS present the only safe move is
- * a tail hint: changing `tool_choice` rewrites the cached prefix, and on a 60k
- * prefix at the top tier that rewrite costs more than many turns of the saving.
+ * Tool routing: the mode to apply, and the tool when there is one. `cacheSafe` means
+ * the request carries no cache breakpoint, so mutating `tool_choice` is free — with
+ * one present, rewriting the cached prefix costs more than the saving.
  */
 export function resolveToolDecision({
   answers,
   tools = [],
   plans = [],
   cacheSafe = true,
-  /** How far the operator lets a decision go, narrowest first. "off" never
-   *  touches the request at all, which lets model routing run on its own;
-   *  "hint" appends a suggestion and never rewrites tool_choice; "none" adds the
-   *  ability to say "call nothing"; "forced" adds pinning a tool. Each is a
-   *  strict superset of the one before, so each setting means something. */
+  /** How far a verdict may go, narrowest first: off < hint < none < forced.
+   *  Each is a strict superset of the previous. */
   allowed = "forced",
   minConfidence = DEFAULT_MIN_CONFIDENCE,
 } = {}) {
   const rank = { off: -1, hint: 0, none: 1, forced: 2 };
-  // An unrecognised value falls to the NARROWEST, not the widest: a typo in a
-  // setting must never hand the decision more authority than the operator granted.
+  // Unrecognised falls to the narrowest: a typo must not grant more authority.
   const ceiling = rank[allowed] ?? rank.off;
   const allows = (mode) => rank[mode] <= ceiling;
 

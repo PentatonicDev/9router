@@ -312,15 +312,9 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     try { onPxpipeEvent?.({ provider, model, ...pxpipeSummary }); } catch { /* stats must not break requests */ }
   }
 
-  // System One decision routing: which tool the model should call next.
-  //
-  // Placed last on purpose — after every token saver, because pxpipe reassigns
-  // `translatedBody` outright, and before anchorClaudeCache, which must pin the
-  // final body. A hint is appended at the tail (never inside the cached prefix),
-  // and tool_choice is only mutated when the request carries no cache breakpoint.
-  //
-  // The decision itself is delegated: open-sse cannot reach the app's settings or
-  // provider connections, so chat.js injects the caller through coreOptions.
+  // System One tool routing. Last of the body mutators on purpose: pxpipe reassigns
+  // `translatedBody` outright, and anchorClaudeCache below must pin the final body.
+  // Delegated, because open-sse cannot reach settings or provider connections.
   if (typeof decideTool === "function"
       && clientRawRequest?.headers?.[DECISION_HEADER]?.toLowerCase() !== "off") {
     try {

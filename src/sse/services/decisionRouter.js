@@ -1,14 +1,9 @@
-// App-side glue for System One decision routing: reads the operator's settings,
-// resolves the gateway credential, and turns the model's typed answers into an
-// ordered model list or a tool mode.
+// App-side glue: reads the operator's settings, resolves the gateway credential, and
+// turns jev's answers into an ordered model list or a tool mode. The gateway IS the
+// provider, so one key covers chat and decisions. Swapping the decision model is
+// editing `model`.
 //
-// The gateway IS the provider — there is no separate decision provider identity.
-// A decision route borrows the credential of the gateway that serves it, so one
-// Vercel key covers chat and decisions and no second connection is registered.
-// Swap the decision model by editing `model`; nothing else moves.
-//
-// open-sse/decision/ holds the pure parts (transport, state, questions, decide)
-// and imports nothing from src/.
+// The pure parts live in open-sse/decision/ and import nothing from src/.
 
 import REGISTRY from "open-sse/providers/registry/index.js";
 import { getProviderCredentials } from "./auth.js";
@@ -38,12 +33,12 @@ export function normalizeDecisionConfig(raw) {
   return config;
 }
 
-/** The raw registry entry, which carries both `transport` and `decisionConfig`. */
+/** The raw registry entry, which carries `transport` and `decisionConfig`. */
 function registryEntry(providerId) {
   return REGISTRY.find((entry) => entry.id === providerId || entry.alias === providerId) || null;
 }
 
-/** Gateways that can serve a decision model, for the panel's provider picker. */
+/** Gateways that can serve a decision model. */
 export function decisionProviders() {
   return REGISTRY.filter((entry) => entry.decisionConfig && entry.transport)
     .map((entry) => ({
@@ -187,17 +182,19 @@ export async function decideComboModel({ body, models, comboName, config, target
 }
 
 /**
- * Tool routing: which tool the model should call next, if any.
- *
- * The caller decides whether the verdict is applied, which is what makes shadow
- * mode measurable: the call still happens, is logged and is priced, it just is not
- * written into the request.
+ * Tool routing: which tool the model should call next, if any. The caller decides
+ * whether to apply it, which is what makes shadow mode measurable.
  */
 export async function decideTool({ body, tools, plans = [], config, target, log }) {
   if (tools.length === 0) return null;
 
   const { questions } = buildToolQuestions(tools);
-  const state = buildState(body, { maxStateChars: 24000 });
+  // A much smaller window than the model decision uses: the conversation dominates
+  // a decision's cost (~3,400 of 4,442 input tokens at 30 turns, against ~740 for a
+  // 21-tool roster) and "what next" needs the latest request, not the whole
+  // transcript. Runs once per turn and is the verdict most often discarded.
+  // ponytail: fixed ceiling; raise it if long sessions start picking worse.
+  const state = buildState(body, { maxStateChars: 6000 });
   const response = await ask(target, config, state, questions, log);
   if (!response) return null;
   await recordUsage({ response, log });
@@ -218,11 +215,9 @@ export async function decideTool({ body, tools, plans = [], config, target, log 
 }
 
 /**
- * The decision's own cost goes on its own usage row, under the decision model's
- * own name. Folding these tokens into the main request would price them at the
- * serving model's rate — a decision call billed as Opus. `saveRequestUsage` runs
- * them through calculateCost, which is why PROVIDER_PRICING needs the `typesafe`
- * entry; without it the cost reads 0 and the savings maths is fiction.
+ * Its own usage row, under its own model: folded into the main request these tokens
+ * would be priced at the serving model's rate. PROVIDER_PRICING's `typesafe` entry
+ * is what lets calculateCost price them at all.
  */
 async function recordUsage({ response, log }) {
   try {
@@ -241,15 +236,9 @@ async function recordUsage({ response, log }) {
   }
 }
 
-/**
- * The last verdict per combo, so two identical answers can unlock the ambiguous
- * confidence band (0.7–0.85) that a single answer may not.
- *
- * ponytail: in-process, so in the distributed runtime the streak is per instance
- * and a load-balanced session may not see its own previous verdict. Same ceiling
- * the round-robin rotation already has (comboRotationState). Upgrade path: move
- * both to the shared store together, not separately.
- */
+/** The last verdict per combo, so a repeated answer can unlock the ambiguous band.
+ *  ponytail: in-process, so the streak is per instance — same ceiling as
+ *  comboRotationState. Move both to the shared store together, not separately. */
 const lastVerdicts = new Map();
 
 export function readPreviousVerdict(key) {

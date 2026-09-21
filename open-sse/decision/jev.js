@@ -1,22 +1,13 @@
-// System One (jev) transport. The decision model is a field, not a provider: the
-// caller names the gateway that serves it and the model id, and this module only
-// knows the wire format. Every route that resells jev takes the same body
-// ({ model, state, questions }) and returns the same shape, so one client covers
-// all of them — only the URL and the credential differ.
-//
-// Every entry point fails open: a decision provider is an optimisation, and an
-// outage must never take a request down with it. Callers get null, not a throw.
+// System One (jev) transport: one wire format, { model, state, questions } in and
+// { model, answers, usage } out, shared by every gateway that resells it. Fails
+// open everywhere — callers get null, never a throw.
 
 const RETRYABLE = new Set([408, 429, 500, 502, 503, 504, 529]);
 
 /** Decision models are advertised in a gateway's catalog with this type. */
 export const DECISION_MODEL_TYPE = "evaluation";
 
-/**
- * Where a decision model lives on a gateway: the configured path resolved against
- * the provider transport's origin, so adding a gateway never means hardcoding a
- * second host.
- */
+/** The decision path resolved against the gateway's own transport origin. */
 export function decisionUrlFor(providerEntry) {
   const config = providerEntry?.decisionConfig;
   const base = providerEntry?.transport?.baseUrl;
@@ -29,11 +20,8 @@ export function decisionUrlFor(providerEntry) {
 }
 
 /**
- * Gateways disagree on what a choice answer carries: TypeSafe's own API always
- * sends `confidence`, resellers sometimes send only `probabilities`. Without this
- * the caller's threshold reads `undefined` and every decision is discarded — a
- * silent total failure, not a degraded one. The winning probability is the honest
- * stand-in.
+ * Resellers sometimes omit `confidence`, which would make every threshold read
+ * `undefined` and discard every decision. The winning probability stands in.
  */
 export function normalizeAnswers(answers) {
   const out = {};
@@ -54,11 +42,7 @@ export function normalizeAnswers(answers) {
   return out;
 }
 
-/**
- * One call to the decision model. Returns null on any failure — including a
- * refusal to retry, which is the normal path for 401/422: repeating a rejected key
- * or a malformed body only doubles the latency before the same fail-open.
- */
+/** One call to the decision model. Null on any failure. */
 export async function askJev({
   url,
   model,
@@ -69,9 +53,7 @@ export async function askJev({
   fetchImpl = fetch,
   onFailure = null,
 }) {
-  // Every null return names its reason. Without this a discarded decision is
-  // indistinguishable from an outage, a rejected key or a malformed question set —
-  // the caller only sees "unavailable" and nothing to act on.
+  // Every null names its reason: a bare null is indistinguishable from an outage.
   const fail = (reason) => {
     try {
       onFailure?.(reason);
@@ -108,15 +90,11 @@ export async function askJev({
   try {
     payload = await once();
   } catch (error) {
-    // A timeout is NOT retried: it means the service is slow, so a second attempt
-    // burns another full timeout and still loses the decision — measured, one
-    // discard logged `retry_failed:TimeoutError` at the old 800ms budget. Retrying
-    // is for a status that says "this attempt was refused", not "I am drowning".
+    // A timeout is not retried: the service is slow, so a second attempt burns
+    // another budget and still loses the decision (measured).
     if (error?.name === "TimeoutError") return fail("timeout");
     const status = error?.status;
-    // A network error has no status and is worth the one retry; a 401/422 is not.
-    // 503 is retryable because the Vercel route emits it intermittently —
-    // measured, not assumed.
+    // 503 is retryable because the Vercel route emits it intermittently (measured).
     if (status !== undefined && !RETRYABLE.has(status)) return fail(`http_${status}`);
     try {
       payload = await once();

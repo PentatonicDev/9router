@@ -1,17 +1,11 @@
-// Reads the tool roster out of a body that has already been translated to the
-// target format.
-//
-// Reading the TARGET body, not the client's, is the only correct place: the names
-// jev picks are written back into `tool_choice`, and tool_choice addresses the
-// names the upstream will see. The client-side names are reconciled through
-// `_toolNameMap`, which chatCore deletes before this point.
+// Reads the tool roster from the body already translated to the target format. The
+// names jev picks go back into `tool_choice`, which addresses the names the upstream
+// sees — not the client's, which `_toolNameMap` reconciles and chatCore then deletes.
 
 import { FORMATS } from "../translator/formats.js";
 
-/** Providers whose upstream wire format is binary/NDJSON and never passes through
- *  the translator. There is no `tool_choice` to write there, so tool routing is
- *  unconditionally a passthrough for them. (Auto-combo is unaffected: it only
- *  changes the `model` field.) */
+/** Binary/NDJSON upstreams never reach the translator, so there is no tool_choice to
+ *  write. Auto-combo is unaffected — it only changes `model`. */
 export const UNSUPPORTED_EXECUTORS = new Set([
   "kiro",
   "cursor",
@@ -85,7 +79,7 @@ export function isGemini(format) {
   );
 }
 
-/** Formats where writing `tool_choice` is a documented, working operation. */
+/** Formats where writing `tool_choice` works. */
 export function supportsToolChoice(format) {
   return (
     format === FORMATS.OPENAI ||

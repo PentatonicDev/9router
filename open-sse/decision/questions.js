@@ -1,24 +1,19 @@
 // Builds the typed questions jev answers.
 //
-// Every builder here returns `{ questions, ... }` — one shape, no exception. An
-// earlier version had two builders return the map bare and one wrap it, and the
-// caller that destructured `{ questions }` from the bare one got undefined; the
-// decision then failed open silently, which is how it survived a live test. Questions are cheap — extra ones barely
-// change latency because they are evaluated in parallel — so one call can ask
-// both "which one" and "does this even need one".
+// Every builder returns `{ questions }` — one shape, no exception. A split shape
+// once let a caller destructure undefined and fail open silently.
 //
-// Measured constraint that shapes all of this: a `choice` question accepts at
-// most 255 options, and Claude Code sends ~280 tools. A single question over a
-// full roster is not slow, it is a 400.
+// Questions are cheap: they are evaluated in parallel, so one call can ask both
+// "which one" and "does this even need one".
 
 import { NO_TOOL, MAX_TOOLS } from "./decide.js";
 
 const MAX_DESCRIPTION_CHARS = 1024;
-/** Characters one tool question may spend on descriptions (~12k tokens). */
+/** Description budget per tool question (~12k tokens). */
 const QUESTION_CHAR_BUDGET = 48000;
-/** Kept per shard by the first pass, when a roster is too big for one question. */
+/** Kept per shard by the first pass. */
 export const SHORTLIST_PER_SHARD = 3;
-/** "None of these fits" option a shard uses to abstain. */
+/** A shard's abstention option. */
 export const NONE_OF_THESE = "none_of_these";
 
 export const MODEL_KEY = "model";
@@ -26,7 +21,7 @@ export const DELIBERATION_KEY = "needs_reasoning";
 export const TOOL_KEY = "tool";
 export const NEEDS_TOOL_KEY = "needs_tool";
 
-/** Tool descriptions lead with what the tool is for; the tail is usage detail. */
+/** Descriptions lead with what the tool is for; the tail is usage detail. */
 function toolCriteria(tools) {
   const limit = Math.max(80, Math.min(MAX_DESCRIPTION_CHARS, Math.floor(QUESTION_CHAR_BUDGET / tools.length)));
   const criteria = {};
@@ -38,15 +33,8 @@ function toolCriteria(tools) {
 }
 
 /**
- * Which tool to call next, and whether any is needed.
- *
- * The two questions are independent on purpose: the caller only applies an answer
- * when both agree, which is what keeps a marginal verdict from overriding the
- * model.
- *
- * No option here may be anything but a real tool name. A non-tool option in a
- * model-choice question was measured to absorb 39-45% of the probability mass and
- * destroy the decision — the same trap a "none of these" option would set here.
+ * Which tool to call next, and whether any is needed. The two are independent on
+ * purpose: the caller applies an answer only when both agree.
  */
 export function buildToolQuestions(tools) {
   const criteria = toolCriteria(tools);
@@ -72,11 +60,7 @@ export function buildToolQuestions(tools) {
   };
 }
 
-/**
- * First pass over a roster too large for one question: every shard is ranked in
- * the same call, and the best few of each go on to the real decision. Ranking
- * wide, then judging a shortlist.
- */
+/** First pass over a roster too large for one question: rank wide, then judge a shortlist. */
 export function buildShortlistQuestions(tools) {
   const shardCount = Math.ceil(tools.length / MAX_TOOLS);
   const size = Math.ceil(tools.length / shardCount);
@@ -97,7 +81,7 @@ export function buildShortlistQuestions(tools) {
   return { questions, shards };
 }
 
-/** The tools of each shard that survived the first pass. */
+/** The tools that survived the first pass. */
 export function readShortlist(answers, shards) {
   return shards.flatMap((shard, index) => {
     const answer = answers?.[`shard:${index}`];
@@ -113,11 +97,8 @@ export function readShortlist(answers, shards) {
 
 /**
  * Which model should serve this step, and how much deliberation it needs.
- *
- * `criteriaFor(model)` must return the "what this model is FOR" text — price and
- * capability flags alone were measured to decide 0/4 correctly vs 5/5 for a
- * curated brief. The second question exists so the caller can refuse to apply a
- * pick that contradicts it.
+ * `criteriaFor` must return what the model is FOR: price and capability flags alone
+ * decided 0/4 correctly against 5/5 for a curated brief (measured).
  */
 export function buildModelQuestions(models, criteriaFor) {
   const criteria = {};

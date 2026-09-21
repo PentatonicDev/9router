@@ -1,20 +1,15 @@
-// Appends a routing hint to the very end of the conversation.
+// Appends a routing hint at the very end of the conversation. Fails open.
 //
-// Deliberately NOT open-sse/rtk/systemInject.js. That injector places its block
-// *before* the last cache_control breakpoint (injectClaudeSystem splices at
-// lastCacheIdx) — correct for caveman/ponytail, whose prompt is the same stable
-// string on every request and therefore belongs inside the cached prefix. A hint
-// is volatile: it names the tool this turn, so inside the prefix it would rewrite
-// the cache on every single request. Appending after the breakpoints leaves the
-// cached prefix byte-identical, which is the whole point.
-//
-// Fail-open and idempotent, like every other body mutator in this codebase.
+// Deliberately not open-sse/rtk/systemInject.js: that one splices before the last
+// cache_control, correct for the stable caveman/ponytail prompts but wrong for a
+// hint, which names this turn's tool and would rewrite the cached prefix every
+// request. Appending after the breakpoints leaves the prefix byte-identical.
 
 import { FORMATS } from "../translator/formats.js";
 
 const SEP = "\n\n";
 
-/** One inert token, no whitespace or quoting to break out of the reminder. */
+/** One inert token, nothing to break out of the reminder with. */
 const SAFE_NAME = /^[\p{L}\p{N}_.:/-]{1,128}$/u;
 
 export function hintText(tool) {
