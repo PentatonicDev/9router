@@ -68,10 +68,14 @@ vi.mock("../../open-sse/rtk/index.js", () => ({
   formatRtkLog: vi.fn(() => ""),
 }));
 
-vi.mock("../../open-sse/rtk/headroom.js", () => ({
-  compressWithHeadroom: vi.fn(async () => null),
-  formatHeadroomLog: vi.fn(() => ""),
-}));
+vi.mock("../../open-sse/rtk/headroom.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    compressWithHeadroom: vi.fn(async () => null),
+    formatHeadroomLog: vi.fn(() => ""),
+  };
+});
 
 vi.mock("../../open-sse/providers/capabilities.js", () => ({
   getCapabilitiesForModel: vi.fn(() => ({})),
