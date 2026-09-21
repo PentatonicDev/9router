@@ -59,10 +59,30 @@ export function normalizeAnswers(answers) {
  * refusal to retry, which is the normal path for 401/422: repeating a rejected key
  * or a malformed body only doubles the latency before the same fail-open.
  */
-export async function askJev({ url, model, apiKey, state, questions, timeoutMs = 3000, fetchImpl = fetch }) {
-  if (!apiKey) return null;
-  if (!url || !model) return null;
-  if (!questions || Object.keys(questions).length === 0) return null;
+export async function askJev({
+  url,
+  model,
+  apiKey,
+  state,
+  questions,
+  timeoutMs = 3000,
+  fetchImpl = fetch,
+  onFailure = null,
+}) {
+  // Every null return names its reason. Without this a discarded decision is
+  // indistinguishable from an outage, a rejected key or a malformed question set —
+  // the caller only sees "unavailable" and nothing to act on.
+  const fail = (reason) => {
+    try {
+      onFailure?.(reason);
+    } catch {
+      /* diagnostics must never break the fail-open path */
+    }
+    return null;
+  };
+  if (!apiKey) return fail("no_api_key");
+  if (!url || !model) return fail("no_target");
+  if (!questions || Object.keys(questions).length === 0) return fail("no_questions");
 
   const startedAt = Date.now();
   const once = async () => {
@@ -88,20 +108,25 @@ export async function askJev({ url, model, apiKey, state, questions, timeoutMs =
   try {
     payload = await once();
   } catch (error) {
+    // A timeout is NOT retried: it means the service is slow, so a second attempt
+    // burns another full timeout and still loses the decision — measured, one
+    // discard logged `retry_failed:TimeoutError` at the old 800ms budget. Retrying
+    // is for a status that says "this attempt was refused", not "I am drowning".
+    if (error?.name === "TimeoutError") return fail("timeout");
     const status = error?.status;
     // A network error has no status and is worth the one retry; a 401/422 is not.
     // 503 is retryable because the Vercel route emits it intermittently —
     // measured, not assumed.
-    if (status !== undefined && !RETRYABLE.has(status)) return null;
+    if (status !== undefined && !RETRYABLE.has(status)) return fail(`http_${status}`);
     try {
       payload = await once();
-    } catch {
-      return null;
+    } catch (retryError) {
+      return fail(`retry_failed:${retryError?.status ?? retryError?.name ?? "unknown"}`);
     }
   }
 
   const answers = normalizeAnswers(payload?.answers);
-  if (Object.keys(answers).length === 0) return null;
+  if (Object.keys(answers).length === 0) return fail("no_answers");
   return {
     answers,
     usage: {

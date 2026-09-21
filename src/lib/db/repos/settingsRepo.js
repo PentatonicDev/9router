@@ -99,7 +99,10 @@ const DEFAULT_SETTINGS = {
     toolMode: "hint",
     minConfidence: 0.7,
     switchConfidence: 0.85,
-    timeoutMs: 800,
+    // Matches STREAM_STATUS_GRACE_MS: within it the request is answered before the
+    // SSE has to open, so a slow decision costs latency but not a broken stream.
+    // The steady state is ~350ms; the tail is what this budget is for.
+    timeoutMs: 1500,
   },
 };
 

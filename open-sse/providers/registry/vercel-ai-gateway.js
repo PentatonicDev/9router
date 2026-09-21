@@ -45,7 +45,7 @@ export default {
     path: "/typesafe/v1/systemone",
     modelType: "evaluation",
     defaultModel: "typesafe-ai/jev",
-    timeoutMs: 800,
+    timeoutMs: 1500,
   },
   modelsFetcher: { url: "https://ai-gateway.vercel.sh/v1/models", type: "openai" },
   passthroughModels: true,

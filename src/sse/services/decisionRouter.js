@@ -27,7 +27,7 @@ export const DEFAULT_DECISION = {
   toolMode: "hint",
   minConfidence: 0.7,
   switchConfidence: 0.85,
-  timeoutMs: 800,
+  timeoutMs: 1500,
 };
 
 export function normalizeDecisionConfig(raw) {
@@ -130,7 +130,7 @@ function cheapestOf(models) {
   return cheapest;
 }
 
-const ask = (target, config, state, questions) =>
+const ask = (target, config, state, questions, log) =>
   askJev({
     url: target.url,
     model: config.model,
@@ -138,6 +138,7 @@ const ask = (target, config, state, questions) =>
     state,
     questions,
     timeoutMs: config.timeoutMs,
+    onFailure: (reason) => log?.info?.("DECISION", `decision model returned nothing (${reason})`),
   });
 
 /**
@@ -156,10 +157,10 @@ export async function decideComboModel({ body, models, comboName, config, target
 
   const { questions } = buildModelQuestions(models, criteriaResolver(config));
   const state = buildState(body, { maxStateChars: 24000 });
-  const response = await ask(target, config, state, questions);
+  const response = await ask(target, config, state, questions, log);
 
   if (!response) {
-    log?.info?.("DECISION", "model: decision model unavailable, pool order unchanged");
+    log?.info?.("DECISION", "model: verdict discarded, pool order unchanged");
     return { models, decision: null, reason: "ask_failed" };
   }
   await recordUsage({ response, log });
@@ -197,7 +198,7 @@ export async function decideTool({ body, tools, plans = [], config, target, log 
 
   const { questions } = buildToolQuestions(tools);
   const state = buildState(body, { maxStateChars: 24000 });
-  const response = await ask(target, config, state, questions);
+  const response = await ask(target, config, state, questions, log);
   if (!response) return null;
   await recordUsage({ response, log });
 
