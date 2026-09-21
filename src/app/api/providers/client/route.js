@@ -48,12 +48,9 @@ function isUsageEligible(connection) {
   if (!USAGE_SUPPORTED_PROVIDERS.includes(connection.provider)) return false;
   if (connection.authType === "oauth") return true;
   if (!USAGE_APIKEY_PROVIDERS.includes(connection.provider)) return false;
-  // Bedrock rows come from a credits ceiling and/or the account's quotas, which
-  // only IAM credentials can read; a bare API-key connection has nothing to show.
-  if (connection.provider === "bedrock") {
-    const psd = connection.providerSpecificData || {};
-    return psd.authMethod === "iam" || Number(psd.creditsUsd) > 0;
-  }
+  // Bedrock has no native quota API — it only shows up once a credits ceiling
+  // is set on the connection, so the tracker has something to render.
+  if (connection.provider === "bedrock") return Number(connection.providerSpecificData?.creditsUsd) > 0;
   return true;
 }
 
