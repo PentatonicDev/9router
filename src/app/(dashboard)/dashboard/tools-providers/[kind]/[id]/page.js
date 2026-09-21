@@ -27,7 +27,7 @@ export default function MediaProviderDetailPage() {
     if (!confirm("Delete this Custom Embedding node?")) return;
     try {
       const res = await fetch(`/api/provider-nodes/${id}`, { method: "DELETE" });
-      if (res.ok) router.push(`/dashboard/media-providers/${kind}`);
+      if (res.ok) router.push(`/dashboard/tools-providers/${kind}`);
     } catch (error) {
       console.log("Error deleting custom embedding node:", error);
     }
@@ -76,7 +76,7 @@ export default function MediaProviderDetailPage() {
       {/* Back */}
       <div>
         <Link
-          href={`/dashboard/media-providers/${kind}`}
+          href={`/dashboard/tools-providers/${kind}`}
           className="inline-flex items-center gap-1 text-sm text-text-muted hover:text-primary transition-colors mb-4"
         >
           <span className="material-symbols-outlined text-lg">arrow_back</span>
@@ -165,7 +165,9 @@ export default function MediaProviderDetailPage() {
         <ConnectionsCard providerId={id} isOAuth={false} />
       )}
       {id === "searxng" && <SearxngInstanceCard onUrlChange={setSearxngUrl} />}
-      {id === "jev" && <DecisionRouterCard provider={provider} />}
+      {/* Gate on the capability, not on a provider id: any gateway that declares a
+          decision route gets the card, so adding one needs no change here. */}
+      {provider?.decisionConfig && <DecisionRouterCard provider={provider} />}
 
       {/* Models - hidden for tts/webSearch/webFetch (provider IS the model) and for
           decision (jev carries no `models` on purpose); custom uses prefix as alias */}

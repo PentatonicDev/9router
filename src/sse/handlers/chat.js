@@ -19,7 +19,7 @@ import { createErrorContext, errorResponse, responseFromRoutingCandidate, withRe
 import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "open-sse/services/combo.js";
 import {
   normalizeDecisionConfig,
-  resolveDecisionCredential,
+  resolveDecisionTarget,
   decideComboModel,
   decideTool as decideToolCore,
   readPreviousVerdict,
@@ -168,8 +168,8 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
   const config = normalizeDecisionConfig(settings.decisionRouter);
   if (config.mode === "off") return models;
 
-  const credential = await resolveDecisionCredential(config, { apiKey, log });
-  if (!credential) return models;
+  const target = await resolveDecisionTarget(config, { apiKey, log });
+  if (!target) return models;
 
   let result;
   try {
@@ -178,7 +178,7 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
       models,
       comboName,
       config,
-      apiKey: credential.apiKey,
+      target,
       log,
       previousVerdict: readPreviousVerdict(comboName),
     });
@@ -226,9 +226,9 @@ function createToolDecider({ settings, apiKey, log }) {
     const memoKey = `${provider}/${model}|${signature}`;
     if (memo.has(memoKey)) return memo.get(memoKey);
 
-    credentialPromise ||= resolveDecisionCredential(config, { apiKey, log });
-    const credential = await credentialPromise;
-    if (!credential) {
+    credentialPromise ||= resolveDecisionTarget(config, { apiKey, log });
+    const target = await credentialPromise;
+    if (!target) {
       const skipped = { mode: "passthrough", reason: "no_credential" };
       memo.set(memoKey, skipped);
       return skipped;
@@ -236,7 +236,7 @@ function createToolDecider({ settings, apiKey, log }) {
 
     let result = null;
     try {
-      result = await decideToolCore({ body, tools, plans: tools, config, apiKey: credential.apiKey, log });
+      result = await decideToolCore({ body, tools, plans: tools, config, target, log });
     } catch (error) {
       log.warn("DECISION", `tool decision failed: ${error.message}`);
     }

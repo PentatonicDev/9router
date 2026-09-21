@@ -79,10 +79,7 @@ export const MEDIA_PROVIDER_KINDS = [
   { id: "webFetch",    label: "Web Fetch",      icon: "language",          endpoint: { method: "POST", path: "/v1/web/fetch" } },
   { id: "video",       label: "Video",          icon: "movie",             endpoint: { method: "POST", path: "/v1/videos/generations" } },
   { id: "music",       label: "Music",          icon: "music_note",        endpoint: { method: "POST", path: "/v1/audio/music" } },
-  // `group` promotes a kind into its own sidebar category: the accordion label
-  // and the first breadcrumb both read it, and kinds without it stay under
-  // "Media Providers". Only this kind sets it.
-  { id: "decision",    label: "Decisions",      icon: "psychology",        group: "Decision Providers", endpoint: { method: "POST", path: "/v1/decisions" } },
+  { id: "decision",    label: "Decisions",      icon: "psychology",        endpoint: { method: "POST", path: "/v1/decisions" } },
 ];
 
 export const OPENAI_COMPATIBLE_PREFIX = "openai-compatible-";

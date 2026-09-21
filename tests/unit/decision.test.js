@@ -6,7 +6,7 @@ import {
   MAX_TOOLS,
   NO_TOOL,
 } from "../../open-sse/decision/decide.js";
-import { normalizeAnswers, ROUTES } from "../../open-sse/decision/jev.js";
+import { normalizeAnswers, decisionUrlFor, DECISION_MODEL_TYPE } from "../../open-sse/decision/jev.js";
 import { buildState, hasCacheBreakpoint } from "../../open-sse/decision/state.js";
 import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist } from "../../open-sse/decision/questions.js";
 import { injectHint, hintText } from "../../open-sse/decision/injectHint.js";
@@ -299,11 +299,28 @@ describe("resolveCriteria", () => {
   });
 });
 
-describe("routes", () => {
-  it("ships only the Vercel route, reusing the existing gateway credential", () => {
-    expect(Object.keys(ROUTES)).toContain("vercel");
-    expect(ROUTES.vercel.credentialProvider).toBe("vercel-ai-gateway");
-    expect(ROUTES.vercel.model).toBe("typesafe-ai/jev");
+describe("decision route resolution", () => {
+  // The decision route is derived from the gateway's own transport, so adding a
+  // gateway never means hardcoding a second host — and there is no separate
+  // provider identity to keep in sync with the credential.
+  it("resolves the decision URL against the gateway transport origin", () => {
+    const url = decisionUrlFor({
+      transport: { baseUrl: "https://ai-gateway.vercel.sh/v1/chat/completions" },
+      decisionConfig: { path: "/typesafe/v1/systemone" },
+    });
+    expect(url).toBe("https://ai-gateway.vercel.sh/typesafe/v1/systemone");
+  });
+
+  it("returns null rather than guessing when either half is missing", () => {
+    expect(decisionUrlFor({ transport: { baseUrl: "https://x.sh/v1/chat" } })).toBeNull();
+    expect(decisionUrlFor({ decisionConfig: { path: "/p" } })).toBeNull();
+    expect(decisionUrlFor(null)).toBeNull();
+  });
+
+  it("names the catalog type that marks a decision model", () => {
+    // Measured against the live catalog: typesafe-ai/jev is type "evaluation"
+    // with max_tokens 0, which is how a decision model is told from a chat model.
+    expect(DECISION_MODEL_TYPE).toBe("evaluation");
   });
 });
 

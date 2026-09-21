@@ -15,9 +15,11 @@ const FIELD_SCHEMA = {
   formats:          { label: "Formats",    format: (v) => v.join(", ") },
   maxMaxResults:    { label: "Max results", format: (v) => v },
   maxCharacters:    { label: "Max chars",  format: (v) => v.toLocaleString() },
-  // routes is an array of objects: the generic `v.join(", ")` would print
-  // "[object Object]" for every entry.
-  routes:           { label: "Routes",     format: (v) => v.map((r) => `${r.id} → ${r.model}`).join(" · ") },
+  // decisionConfig is the gateway's decision route: scalars only, and the model
+  // is already covered by `defaultModel` above.
+  path:             { label: "Decision path", format: (v) => v, mono: true },
+  modelType:        { label: "Model type", format: (v) => v, mono: true },
+  timeoutMs:        { label: "Timeout",    format: (v) => `${v} ms` },
 };
 
 export default function ProviderInfoCard({ config, provider, title = "Provider Info" }) {

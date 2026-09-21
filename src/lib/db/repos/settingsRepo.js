@@ -88,7 +88,12 @@ const DEFAULT_SETTINGS = {
   // the decision accurate; the repo table is only the default.
   decisionRouter: {
     mode: "off",
-    route: "vercel",
+    // The gateway that serves the decision model. It IS the provider — a decision
+    // route borrows that gateway's credential, so there is no separate provider
+    // identity to configure, and swapping to a better System-1 model is editing
+    // `model` and nothing else.
+    provider: "vercel-ai-gateway",
+    model: "typesafe-ai/jev",
     models: [],
     briefs: {},
     toolMode: "hint",

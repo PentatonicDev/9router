@@ -8,6 +8,8 @@ import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/q
 import { probeBedrockCredential } from "open-sse/services/bedrockModels.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
 import { getSettings, getProviderConnections } from "@/lib/localDb";
+import REGISTRY from "open-sse/providers/registry/index.js";
+import { decisionUrlFor } from "open-sse/decision/jev.js";
 import { getScopeFilter, scopeVisible } from "@/lib/auth/resourceScope";
 
 // A JSON search against the admin-set SearXNG URL. Returns { ok, error } with
@@ -36,75 +38,80 @@ async function probeSearxng(base) {
   return { ok: false, error: `SearXNG answered HTTP ${res.status} at ${url}` };
 }
 
-// Probe a decision provider (jev). It answers typed questions instead of text, so
-// there is no /models to read: the probe POSTs the smallest valid body and reads
-// the status. The key is not in the request — it is read from the connection of
-// the route's `credentialProvider` (one Vercel key serves both chat and decisions,
-// so no second key has to be registered).
+// Probe the decision route of a gateway that serves one. The gateway has no
+// decision-specific key: the route borrows the gateway's own connection, so the
+// probe reads that connection's key server-side and never takes one from the
+// request body.
 //
-// ponytail: v1 ships the single `vercel` route. The loop iterates every route
-// because the lookup is the cheap part, but each route is only proven through its
-// own `credentialProvider` connection — a route whose provider has no connection
-// says exactly that instead of a false OK.
+// The decision model comes from the saved setting, not from the registry default,
+// so the probe tests what a request would actually use.
 async function probeJev(provider) {
-  const routes = AI_PROVIDERS[provider]?.decisionConfig?.routes;
-  if (!routes?.length) return null;
+  const entry = REGISTRY.find((e) => e.id === provider || e.alias === provider);
+  const url = decisionUrlFor(entry);
+  if (!url) return null;
 
-  const failures = [];
-  for (const route of routes) {
-    const connections = scopeVisible(
-      await getProviderConnections({ provider: route.credentialProvider, isActive: true }),
-      await getScopeFilter()
-    );
-    const apiKey = connections[0]?.apiKey;
-    if (!apiKey) {
-      failures.push(`${route.label}: no ${route.credentialProvider} connection`);
-      continue;
-    }
-
-    // Measured against the live API: one `noul` question is ~271 input tokens and
-    // answers 200. `questions` sent as an array is a hard 400, not a variant.
-    const body = JSON.stringify({
-      model: route.model,
-      state: {},
-      questions: { ping: { type: "noul", instructions: "Is this a ping?" } },
-    });
-
-    let res;
-    try {
-      // The in-request budget is decisionConfig.timeoutMs (800ms); this probe is a
-      // diagnostic and must not report a slow-but-healthy gateway as broken, so it
-      // uses the same generous timeout as probeSearxng.
-      res = await fetch(route.url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body,
-        signal: AbortSignal.timeout(15000),
-      });
-    } catch (e) {
-      const code = e?.cause?.code || e?.name || "error";
-      failures.push(code === "TimeoutError"
-        ? `${route.label}: no answer within 15s`
-        : `${route.label}: unreachable from the gateway (${code})`);
-      continue;
-    }
-
-    if (res.ok) return { ok: true, error: null };
-    // Same convention as the rest of this file, extended with 529: the credential
-    // was accepted, the route just refused to serve this call.
-    if (res.status === 429 || res.status === 529) return { ok: true, error: null };
-    if (res.status === 401 || res.status === 403) {
-      return { ok: false, error: `${route.label} rejected the ${route.credentialProvider} key (${res.status}: Authentication failed). Re-check that key in the ${route.credentialProvider} panel.` };
-    }
-    if (res.status === 400 || res.status === 422) {
-      return { ok: false, error: `${route.label} answered ${res.status}: the decision request schema changed, not the key. Update probeJev() in this route.` };
-    }
-    if (res.status === 503) {
-      return { ok: false, error: `${route.label} answered 503 (Service temporarily unavailable). That is not a rejected key and not proof the gateway is down - retry before changing anything.` };
-    }
-    failures.push(`${route.label}: HTTP ${res.status}`);
+  const label = entry.display?.name || provider;
+  const settings = await getSettings().catch(() => ({}));
+  const model = settings?.decisionRouter?.model || entry.decisionConfig?.defaultModel;
+  if (!model) {
+    return { ok: false, error: `${label} has no decision model configured. Set one in the Decisions panel.` };
   }
-  return { ok: false, error: failures.join(" · ") };
+
+  const connections = scopeVisible(
+    await getProviderConnections({ provider: entry.id, isActive: true }),
+    await getScopeFilter()
+  );
+  const apiKey = connections[0]?.apiKey || connections[0]?.accessToken;
+  if (!apiKey) {
+    return { ok: false, error: `${label} has no active connection, so the decision route cannot authenticate. Add one in the ${label} panel.` };
+  }
+
+  // Measured against the live API: one `noul` question is ~271 input tokens and
+  // answers 200. `questions` sent as an array is a hard 400, not a variant.
+  const body = JSON.stringify({
+    model,
+    state: {},
+    questions: { ping: { type: "noul", instructions: "Is this a ping?" } },
+  });
+
+  let res;
+  try {
+    // The in-request budget is decisionConfig.timeoutMs (800ms); this probe is a
+    // diagnostic and must not report a slow-but-healthy gateway as broken, so it
+    // uses the same generous timeout as probeSearxng.
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body,
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (e) {
+    const code = e?.cause?.code || e?.name || "error";
+    return {
+      ok: false,
+      error: code === "TimeoutError"
+        ? `${label}: no answer from the decision route within 15s.`
+        : `${label}: the decision route is unreachable from the gateway (${code}).`,
+    };
+  }
+
+  if (res.ok) return { ok: true, error: null };
+  // Same convention as the rest of this file, extended with 529: the credential
+  // was accepted, the route just refused to serve this call.
+  if (res.status === 429 || res.status === 529) return { ok: true, error: null };
+  if (res.status === 401 || res.status === 403) {
+    return { ok: false, error: `${label} rejected its own key (${res.status}: Authentication failed). Re-check that key in the ${label} panel.` };
+  }
+  if (res.status === 404) {
+    return { ok: false, error: `${label} answered 404 at ${url} - the decision route moved. Update decisionConfig.path for this provider.` };
+  }
+  if (res.status === 400 || res.status === 422) {
+    return { ok: false, error: `${label} answered ${res.status}: the decision request schema changed, not the key. Update probeJev() in this route.` };
+  }
+  if (res.status === 503) {
+    return { ok: false, error: `${label} answered 503 (Service temporarily unavailable). That is not a rejected key and not proof the gateway is down - retry before changing anything.` };
+  }
+  return { ok: false, error: `${label} answered HTTP ${res.status} on the decision route.` };
 }
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.

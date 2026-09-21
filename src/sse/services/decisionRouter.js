@@ -1,22 +1,27 @@
-// App-side glue for the System One decision provider: reads the operator's
-// settings, resolves the credential the route needs, and turns jev's answers into
-// an ordered model list or a tool mode.
+// App-side glue for System One decision routing: reads the operator's settings,
+// resolves the gateway credential, and turns the model's typed answers into an
+// ordered model list or a tool mode.
 //
-// Lives here rather than in open-sse/ because everything it touches — settings,
-// provider connections, account locks — is app-side. open-sse/decision/ holds the
-// pure parts (transport, state, questions, decide) and imports nothing from src/.
+// The gateway IS the provider — there is no separate decision provider identity.
+// A decision route borrows the credential of the gateway that serves it, so one
+// Vercel key covers chat and decisions and no second connection is registered.
+// Swap the decision model by editing `model`; nothing else moves.
+//
+// open-sse/decision/ holds the pure parts (transport, state, questions, decide)
+// and imports nothing from src/.
 
+import REGISTRY from "open-sse/providers/registry/index.js";
 import { getProviderCredentials } from "./auth.js";
-import { askJev, getRoute } from "open-sse/decision/jev.js";
+import { askJev, decisionUrlFor } from "open-sse/decision/jev.js";
 import { buildState, hasCacheBreakpoint } from "open-sse/decision/state.js";
 import { buildModelQuestions, buildToolQuestions } from "open-sse/decision/questions.js";
 import { resolveModelDecision, resolveToolDecision } from "open-sse/decision/decide.js";
 import { resolveCriteria } from "open-sse/decision/modelBriefs.js";
-import { formatCost } from "open-sse/providers/pricing.js";
 
 export const DEFAULT_DECISION = {
   mode: "off",
-  route: "vercel",
+  provider: "vercel-ai-gateway",
+  model: "typesafe-ai/jev",
   models: [],
   briefs: {},
   toolMode: "hint",
@@ -33,8 +38,24 @@ export function normalizeDecisionConfig(raw) {
   return config;
 }
 
+/** The raw registry entry, which carries both `transport` and `decisionConfig`. */
+function registryEntry(providerId) {
+  return REGISTRY.find((entry) => entry.id === providerId || entry.alias === providerId) || null;
+}
+
+/** Gateways that can serve a decision model, for the panel's provider picker. */
+export function decisionProviders() {
+  return REGISTRY.filter((entry) => entry.decisionConfig && entry.transport)
+    .map((entry) => ({
+      id: entry.id,
+      name: entry.display?.name || entry.id,
+      defaultModel: entry.decisionConfig.defaultModel || null,
+      modelType: entry.decisionConfig.modelType || null,
+    }));
+}
+
 /**
- * Is this request allowed to route through jev?
+ * Is this request allowed to route through the decision model?
  *
  * The allowlist holds both shapes the model picker emits: `provider/model` for a
  * model, and a bare combo name for a combo. A bare name is unambiguous — the
@@ -50,35 +71,36 @@ export function isDecisionAllowed(config, { provider, model, comboName } = {}) {
 }
 
 /**
- * Resolve the key for the configured route. The route names the chat provider
- * whose connection already holds the credential, so one Vercel key serves both
- * chat and decisions and no second connection has to be registered.
+ * Resolve everything needed to ask the decision model, or null.
  *
- * The lock key is route-scoped on purpose: without its own scope the account
+ * The lock key is namespaced per gateway: without its own scope the account
  * breaker would take the shared chat provider offline for chat too.
  */
-export async function resolveDecisionCredential(config, { apiKey = null, log } = {}) {
-  const route = getRoute(config.route);
-  const credentialProvider = route.credentialProvider || "jev";
-  const lockKey = `decision:${credentialProvider}:${route.id}`;
+export async function resolveDecisionTarget(config, { apiKey = null, log } = {}) {
+  const entry = registryEntry(config.provider);
+  const url = decisionUrlFor(entry);
+  if (!url) {
+    log?.warn?.("DECISION", `${config.provider} declares no decision route`);
+    return null;
+  }
+  const lockKey = `decision:${entry.id}`;
   try {
-    const credentials = await getProviderCredentials(credentialProvider, new Set(), lockKey, { apiKey });
+    const credentials = await getProviderCredentials(entry.id, new Set(), lockKey, { apiKey });
     if (credentials?.noActiveCredentials) {
-      log?.info?.("DECISION", `no active credentials for ${credentialProvider} - decisions disabled`);
+      log?.info?.("DECISION", `no active credentials for ${entry.id} - decisions disabled`);
       return null;
     }
     const key = credentials?.apiKey || credentials?.accessToken || null;
-    if (key && credentialProvider !== "jev") {
-      log?.info?.("DECISION", `using ${credentialProvider} credential for the ${route.id} route`);
-    }
-    return key ? { apiKey: key, credentialProvider, route } : null;
+    if (!key) return null;
+    log?.info?.("DECISION", `using ${entry.id} credential for the decision route`);
+    return { url, apiKey: key, provider: entry.id };
   } catch (error) {
     log?.warn?.("DECISION", `credential lookup failed: ${error.message}`);
     return null;
   }
 }
 
-function criteriaFor(models, config) {
+function criteriaResolver(config) {
   return (model) => {
     const slash = model.indexOf("/");
     const provider = slash > 0 ? model.slice(0, slash) : "";
@@ -87,16 +109,19 @@ function criteriaFor(models, config) {
   };
 }
 
+function priceOf(model) {
+  const slash = model.indexOf("/");
+  const provider = slash > 0 ? model.slice(0, slash) : "";
+  const id = slash > 0 ? model.slice(slash + 1) : model;
+  const match = resolveCriteria({ provider, model: id }).match(/\$([\d.]+)\/M in/);
+  return match ? Number(match[1]) : null;
+}
+
 function cheapestOf(models) {
   let cheapest = null;
   let lowest = Infinity;
   for (const model of models) {
-    const slash = model.indexOf("/");
-    const provider = slash > 0 ? model.slice(0, slash) : "";
-    const id = slash > 0 ? model.slice(slash + 1) : model;
-    const criteria = resolveCriteria({ provider, model: id });
-    const match = criteria.match(/\$([\d.]+)\/M in/);
-    const price = match ? Number(match[1]) : null;
+    const price = priceOf(model);
     if (price !== null && price < lowest) {
       lowest = price;
       cheapest = model;
@@ -105,40 +130,38 @@ function cheapestOf(models) {
   return cheapest;
 }
 
+const ask = (target, config, state, questions) =>
+  askJev({
+    url: target.url,
+    model: config.model,
+    apiKey: target.apiKey,
+    state,
+    questions,
+    timeoutMs: config.timeoutMs,
+  });
+
 /**
  * Auto-combo: which model of the pool should serve this turn.
  *
- * The conversation has to be read from the RAW client body, because by the time
- * the body is translated the target provider is already fixed and changing models
- * is no longer possible in this request.
+ * The conversation is read from the RAW client body, because by the time the body
+ * is translated the target provider is fixed and the model can no longer change
+ * in this request.
  *
  * Returns the pool reordered with the pick first, or the pool unchanged. An
  * unapplied decision is not an error: the caller's fallback loop walks the rest of
  * the list, so a wrong pick costs one attempt rather than a failure.
  */
-export async function decideComboModel({ body, models, comboName, config, apiKey, log, previousVerdict = null }) {
+export async function decideComboModel({ body, models, comboName, config, target, log, previousVerdict = null }) {
   if (models.length < 2) return { models, decision: null };
-  const criteriaForModel = criteriaFor(models, config);
-  const { questions } = buildModelQuestions(models, criteriaForModel);
-  const state = buildState(body, { maxStateChars: 24000 });
 
-  const startedAt = Date.now();
-  const response = await askJev({
-    state,
-    questions,
-    route: config.route,
-    apiKey,
-    timeoutMs: config.timeoutMs,
-  });
-  const latencyMs = Date.now() - startedAt;
+  const { questions } = buildModelQuestions(models, criteriaResolver(config));
+  const state = buildState(body, { maxStateChars: 24000 });
+  const response = await ask(target, config, state, questions);
 
   if (!response) {
-    log?.info?.("DECISION", `model: jev unavailable, pool order unchanged (${latencyMs}ms)`);
-    return { models, decision: null, reason: "ask_failed", latencyMs };
+    log?.info?.("DECISION", "model: decision model unavailable, pool order unchanged");
+    return { models, decision: null, reason: "ask_failed" };
   }
-
-  // Usage is recorded on its own line. Folding these tokens into the main request
-  // would price them at the serving model's rate — an Opus-priced decision call.
   await recordUsage({ response, log });
 
   const decision = resolveModelDecision({
@@ -151,58 +174,51 @@ export async function decideComboModel({ body, models, comboName, config, apiKey
   });
 
   if (!decision.apply) {
-    log?.info?.("DECISION", `model: no change (${decision.reason}, conf ${fmt(decision.confidence)}, ${latencyMs}ms)`);
-    return { models, decision, reason: decision.reason, latencyMs };
+    log?.info?.("DECISION", `model: no change (${decision.reason}, conf ${fmt(decision.confidence)}, ${response.latencyMs}ms)`);
+    return { models, decision, reason: decision.reason };
   }
 
   log?.info?.(
     "DECISION",
-    `model: ${decision.model} for "${comboName}" (conf ${fmt(decision.confidence)}, deliberar ${fmt(decision.deliberation)}, ${latencyMs}ms)`
+    `model: ${decision.model} for "${comboName}" (conf ${fmt(decision.confidence)}, deliberar ${fmt(decision.deliberation)}, ${response.latencyMs}ms)`
   );
-  return { models: [decision.model, ...models.filter((m) => m !== decision.model)], decision, latencyMs };
+  return { models: [decision.model, ...models.filter((m) => m !== decision.model)], decision };
 }
 
 /**
  * Tool routing: which tool the model should call next, if any.
  *
- * `apply` is false in shadow mode, which is what makes the baseline measurable:
- * the call still happens and the decision is still logged and priced, it just is
- * not written into the request.
+ * The caller decides whether the verdict is applied, which is what makes shadow
+ * mode measurable: the call still happens, is logged and is priced, it just is not
+ * written into the request.
  */
-export async function decideTool({ body, tools, plans = [], config, apiKey, log }) {
+export async function decideTool({ body, tools, plans = [], config, target, log }) {
   if (tools.length === 0) return null;
+
   const { questions } = buildToolQuestions(tools);
   const state = buildState(body, { maxStateChars: 24000 });
-
-  const startedAt = Date.now();
-  const response = await askJev({
-    state,
-    questions,
-    route: config.route,
-    apiKey,
-    timeoutMs: config.timeoutMs,
-  });
-  const latencyMs = Date.now() - startedAt;
+  const response = await ask(target, config, state, questions);
   if (!response) return null;
-
   await recordUsage({ response, log });
 
   const cacheSafe = !hasCacheBreakpoint(body);
-  const decision = resolveToolDecision({
-    answers: response.answers,
-    tools: tools.map((t) => t.name),
-    plans,
+  return {
+    ...resolveToolDecision({
+      answers: response.answers,
+      tools: tools.map((t) => t.name),
+      plans,
+      cacheSafe,
+      allowed: config.toolMode,
+      minConfidence: config.minConfidence,
+    }),
+    latencyMs: response.latencyMs,
     cacheSafe,
-    allowed: config.toolMode,
-    minConfidence: config.minConfidence,
-  });
-
-  return { ...decision, latencyMs, cacheSafe };
+  };
 }
 
 /**
- * The decision's own cost goes on its own usage row, under the decision provider's
- * own model. Folding these tokens into the main request would price them at the
+ * The decision's own cost goes on its own usage row, under the decision model's
+ * own name. Folding these tokens into the main request would price them at the
  * serving model's rate — a decision call billed as Opus. `saveRequestUsage` runs
  * them through calculateCost, which is why PROVIDER_PRICING needs the `typesafe`
  * entry; without it the cost reads 0 and the savings maths is fiction.
@@ -250,5 +266,3 @@ export function resetVerdicts() {
 }
 
 const fmt = (n) => (typeof n === "number" ? n.toFixed(2) : "-");
-
-export { formatCost };

@@ -124,7 +124,6 @@ import p120 from "./fish-audio.js";
 import p121 from "./alitp-intl.js";
 import p122 from "./xquik.js";
 import p124 from "./bedrock.js";
-import p125 from "./jev.js";
 export default [
   p0,
   p1,
@@ -249,5 +248,4 @@ export default [
   p121,
   p122,
   p124,
-  p125,
 ];

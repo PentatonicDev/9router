@@ -61,6 +61,18 @@ const nextConfig = {
     };
     return config;
   },
+  async redirects() {
+    return [
+      {
+        // The Media Providers section became Tools Providers when a decision
+        // model joined the list. Old links, bookmarks and anything a user pasted
+        // into a client keep working.
+        source: "/dashboard/media-providers/:path*",
+        destination: "/dashboard/tools-providers/:path*",
+        permanent: true
+      }
+    ];
+  },
   async rewrites() {
     return [
       {
