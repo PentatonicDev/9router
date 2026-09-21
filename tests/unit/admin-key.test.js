@@ -254,7 +254,9 @@ describe("DB race — idx_ak_admin_owner rejects a second admin key for the same
   const REPO_ROOT = path.resolve(__dirname, "../..");
   const LOADER = path.join(REPO_ROOT, "tests/fixtures/register-loader.mjs");
   const WORKER = path.join(REPO_ROOT, "tests/fixtures/admin-key-race-worker.mjs");
-  const PG_URL = process.env.KEYS_TEST_DATABASE_URL || "postgresql://test:test@127.0.0.1:55432/rel_keys";
+  // Opt-in like the other Postgres proofs (leases, usage ledger): without a
+  // database URL the case is skipped instead of failing on a missing server.
+  const PG_URL = process.env.KEYS_TEST_DATABASE_URL || process.env.LEASE_TEST_DATABASE_URL || "";
 
   function runWorker(args, env = {}) {
     return new Promise((resolve, reject) => {
@@ -288,7 +290,7 @@ describe("DB race — idx_ak_admin_owner rejects a second admin key for the same
     }
   });
 
-  it("Postgres: exactly one of two concurrent admin-key inserts for the same owner wins", async () => {
+  it.skipIf(!PG_URL)("Postgres: exactly one of two concurrent admin-key inserts for the same owner wins", async () => {
     // A fresh owner per run: this DB persists across test runs (unlike the
     // SQLite case's throwaway temp dir), so a fixed owner would only pass once.
     const owner = `race-owner-pg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
