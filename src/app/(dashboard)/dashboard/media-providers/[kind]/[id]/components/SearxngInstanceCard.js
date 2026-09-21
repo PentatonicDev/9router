@@ -56,7 +56,7 @@ export default function SearxngInstanceCard({ onUrlChange }) {
       const ok = res.ok && data?.valid !== false && data?.success !== false;
       setProbe(ok
         ? { ok: true, message: "Instance answered a JSON search." }
-        : { ok: false, message: data?.error || "No JSON answer — check the URL and that search.formats includes json." });
+        : { ok: false, message: data?.error || "No JSON answer from the instance." });
     } catch (e) {
       setProbe({ ok: false, message: e.message });
     }
@@ -74,7 +74,7 @@ export default function SearxngInstanceCard({ onUrlChange }) {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="http://searxng:8080 — leave blank to use SEARXNG_URL"
-          hint="The instance must enable json in search.formats. Private or Docker-internal hostnames are fine here: the admin sets this URL."
+          hint="On the instance, add json to search.formats. Test runs a real JSON search from the gateway and names what blocks it (unreachable, 403 without json, 429 from the limiter). Private or Docker-internal hostnames are fine here: the admin sets this URL."
         />
         <div className="flex items-center gap-3 flex-wrap">
           <Button size="sm" onClick={handleSave} disabled={!dirty || saving}>

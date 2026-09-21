@@ -9,6 +9,32 @@ import { probeBedrockCredential } from "open-sse/services/bedrockModels.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
 import { getSettings } from "@/lib/localDb";
 
+// A JSON search against the admin-set SearXNG URL. Returns { ok, error } with
+// the reason spelled out: each failure here has a different fix on the instance.
+async function probeSearxng(base) {
+  const url = `${base.replace(/\/+$/, "")}/search?q=ping&format=json`;
+  let res;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  } catch (e) {
+    const code = e?.cause?.code || e?.name || "error";
+    return {
+      ok: false,
+      error: code === "TimeoutError"
+        ? `No answer from ${url} within 15s`
+        : `Could not reach ${url} from the gateway (${code})`,
+    };
+  }
+  if (res.ok) return { ok: true, error: null };
+  if (res.status === 429) {
+    return { ok: false, error: "SearXNG's limiter blocked the JSON search (429). Add this gateway's IP/subnet to botdetection.ip_lists.pass_ip in limiter.toml, or set server.limiter: false." };
+  }
+  if (res.status === 403) {
+    return { ok: false, error: "SearXNG answered 403: add json to search.formats in the instance settings.yml." };
+  }
+  return { ok: false, error: `SearXNG answered HTTP ${res.status} at ${url}` };
+}
+
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
 // Returns true if API key is accepted (status !== 401 && !== 403).
 async function probeWebProvider(provider, apiKey) {
@@ -27,16 +53,7 @@ async function probeWebProvider(provider, apiKey) {
     if (provider === "searxng") {
       const settings = await getSettings();
       const base = settings?.searxngUrl?.trim();
-      if (base) {
-        try {
-          const res = await fetch(`${base.replace(/\/+$/, "")}/search?q=ping&format=json`, {
-            signal: AbortSignal.timeout(5000),
-          });
-          return res.ok;
-        } catch {
-          return false;
-        }
-      }
+      if (base) return probeSearxng(base);
     }
     return true; // no-auth (e.g. searxng with no custom URL)
   }
@@ -266,12 +283,13 @@ export async function POST(request) {
 
       // Generic probe for webSearch/webFetch providers (config-driven)
       const webResult = await probeWebProvider(provider, apiKey);
+      if (webResult && typeof webResult === "object") {
+        return NextResponse.json({ valid: webResult.ok, error: webResult.error });
+      }
       if (webResult !== null) {
         return NextResponse.json({
           valid: webResult,
-          error: webResult ? null : (provider === "searxng"
-            ? "SearXNG did not answer a JSON search at the configured URL (check the URL and search.formats)"
-            : "Invalid API key"),
+          error: webResult ? null : "Invalid API key",
         });
       }
 
