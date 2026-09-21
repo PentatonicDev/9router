@@ -119,8 +119,31 @@ function report(rows, title) {
   return { totalIn, totalOut, avg, models, failures: rows.length - ok.length };
 }
 
+/**
+ * Reachability first. Without this an unreachable gateway prints "fetch failed"
+ * once per task and says nothing about why: the first run of this script against a
+ * `next dev` instance sat on the default 20128 while the dev server was on 20127,
+ * and the output looked like a routing failure rather than a wrong port.
+ */
+async function preflight() {
+  try {
+    const res = await fetch(BASE + "/api/auth/status", { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return true;
+  } catch (error) {
+    console.error("Cannot reach a 9Router at " + BASE + " (" + error.message + ").");
+    console.error(
+      "  Is it running? `npm run dev` binds 20127 and `npm run start` binds 20128.\n" +
+      "  Pass whichever you started:\n" +
+      "    node scripts/bench-jev.mjs --url http://127.0.0.1:20127 --combo <name>"
+    );
+    return false;
+  }
+}
+
 async function main() {
   console.log(`bench-jev → ${BASE} · model/combo "${MODEL}" · ${SESSION ? "session mode" : "independent tasks"}`);
+  if (!(await preflight())) process.exit(2);
   console.log("Run once with decisionRouter.mode=off and once with enforce to compare.\n");
 
   if (SESSION) {
