@@ -40,11 +40,7 @@ npx vitest run unit/capabilities.test.js   # single file (path relative to tests
 ```
 > The committed `tests/package.json` `test` script hardcodes Unix paths (`NODE_PATH=/tmp/node_modules …`) — a shared-install workaround from upstream. On Windows (or anywhere), ignore it and use the `npx vitest` form above; `vitest.config.js` resolves the `open-sse`/`@/` aliases from the repo root regardless of where vitest lives.
 >
-> **The suite is NOT expected to be all-green on a plain checkout.** ~938 pass, ~64 fail. Judge regressions with `tests/__baseline__/verify-no-regression.mjs`, not a raw run. Expected red:
-> - 26 catalogued in `tests/__baseline__/known-fails.txt` (rtk, oauth-cursor-auto-import, translator-request-normalization, …).
-> - `unit/embeddings.cloud.test.js` imports `cloud/src/handlers/embeddings.js` — the `cloud/` worker dir is **not in this repo**, so it always fails here.
-> - `unit/xai-oauth-service.test.js` times out (5s) when the xAI endpoint-discovery fetch isn't reachable/mocked.
-> - `real/*.real.test.js` make live provider calls — need credentials, skip otherwise.
+> The suite is expected to be **all green** on a plain checkout (live-provider tests skip themselves without credentials; `MIMO_LIVE_TESTS=1` / `RUN_REAL=1` opt them in). `tests/__baseline__/known-fails.txt` is the list of tolerated failures and is empty — a red test is a regression or a stale test, never "expected"; CI gates on `tests/__baseline__/verify-no-regression.mjs`. Postgres proofs are opt-in via `LEASE_TEST_DATABASE_URL` / `USAGE_TEST_DATABASE_URL` / `KEYS_TEST_DATABASE_URL`.
 - `*.real.test.js` under `tests/translator/real/` make live provider calls — skip unless credentials are set.
 - Regression baselines: `tests/__baseline__/verify-*.mjs` compare against committed snapshots (providers, aliases, OAuth URLs). Run these after touching provider registry / alias logic.
 

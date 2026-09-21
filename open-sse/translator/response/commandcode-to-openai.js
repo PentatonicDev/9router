@@ -166,10 +166,17 @@ export function commandCodeToOpenAIResponse(chunk, state) {
     }
     case "error": {
       const errVal = event.error ?? event.message ?? "unknown";
-      const errStr = typeof errVal === "string" ? errVal : JSON.stringify(errVal);
-      // Mid-stream error: throw rather than emitting as fake content with finish_reason: "stop"
-      // This ensures the downstream stream handler marks the stream as errored/aborted.
-      throw new Error(`[CommandCode error: ${errStr}]`);
+      const errStr = typeof errVal === "string" ? errVal : (errVal.message || JSON.stringify(errVal));
+      const errType = (errVal && typeof errVal === "object" && errVal.type) || "server_error";
+      const message = `[CommandCode error: ${errStr}]`;
+      // Emitted as readable content plus `chunk.error`, with no finish_reason so it
+      // cannot pass for a clean stop. Throwing here is not an option: the executor's
+      // transform() has no try/catch, so a throw kills the ReadableStream and the
+      // client receives nothing at all.
+      const errorChunk = makeChunk(state, { content: message });
+      errorChunk.error = { message, type: errType };
+      out.push(errorChunk);
+      break;
     }
     // Silently ignore: start, start-step, reasoning-start, reasoning-end, text-start, text-end,
     // provider-metadata, message-metadata, etc. They carry no client-visible content.

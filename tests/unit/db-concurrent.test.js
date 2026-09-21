@@ -26,9 +26,18 @@ afterAll(() => {
 describe("DB Concurrency — atomic safety", () => {
   it("100 parallel saveRequestUsage → no count loss", async () => {
     const N = 100;
+    const baseMs = Date.now();
     const promises = [];
     for (let i = 0; i < N; i++) {
+      // Distinct timestamps: saveRequestUsage's same-second dedup guard (see
+      // usageRepo.js — "Same-second retries of one request must not double
+      // count") collapses entries that match on timestamp+provider+model+
+      // connectionId+apiKey+tokens. 100 real requests never share the exact
+      // same millisecond; only firing them with a shared default timestamp
+      // (as this test used to) does. See tests/fixtures/spend-ledger-sqlite-worker.mjs
+      // for the same pattern.
       promises.push(db.saveRequestUsage({
+        timestamp: new Date(baseMs + i).toISOString(),
         provider: "openai", model: "gpt-4", connectionId: "c1",
         tokens: { prompt_tokens: 10, completion_tokens: 5 },
         endpoint: "/v1/chat", status: "ok",
@@ -67,9 +76,12 @@ describe("DB Concurrency — atomic safety", () => {
   }, 15000);
 
   it("mixed concurrent: usage + details + connections + aliases", async () => {
+    const baseMs = Date.now();
     const ops = [];
     for (let i = 0; i < 50; i++) {
+      // Distinct timestamps — see the same-second dedup guard note above.
       ops.push(db.saveRequestUsage({
+        timestamp: new Date(baseMs + i).toISOString(),
         provider: "anthropic", model: `m-${i % 3}`, connectionId: "c2",
         tokens: { prompt_tokens: 20 }, status: "ok",
       }));
@@ -151,9 +163,12 @@ describe("DB Concurrency — atomic safety", () => {
 
   it("daily summary aggregates correctly under parallel writes", async () => {
     const N = 50;
+    const baseMs = Date.now();
     const promises = [];
     for (let i = 0; i < N; i++) {
+      // Distinct timestamps — see the same-second dedup guard note above.
       promises.push(db.saveRequestUsage({
+        timestamp: new Date(baseMs + i).toISOString(),
         provider: "google", model: "gemini-pro", connectionId: "cG",
         tokens: { prompt_tokens: 100, completion_tokens: 50 },
         status: "ok",

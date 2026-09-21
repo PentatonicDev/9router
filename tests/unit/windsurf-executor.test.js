@@ -7,6 +7,7 @@ import {
   default as WindsurfExecutor,
 } from "open-sse/executors/windsurf.js";
 import { PROVIDERS } from "open-sse/config/providers.js";
+import windsurfRegistryEntry from "open-sse/providers/registry/windsurf.js";
 
 // ─── Protobuf helpers for building expected wire bytes in tests ──────────────
 
@@ -165,7 +166,7 @@ describe("WindsurfExecutor class", () => {
     const ex = new WindsurfExecutor();
     expect(ex.provider).toBe("windsurf");
     expect(ex.config).toBeDefined();
-    expect(ex.config.baseUrl).toContain("server.self-serve.windsurf.com");
+    expect(ex.config.baseUrl).toContain("server.codeium.com");
     expect(typeof ex.execute).toBe("function");
   });
 
@@ -187,12 +188,17 @@ describe("WindsurfExecutor class", () => {
 
   it("buildUrl returns the GetChatMessage endpoint", () => {
     const ex = new WindsurfExecutor();
-    expect(ex.buildUrl()).toBe("https://server.self-serve.windsurf.com/exa.language_server_pb.LanguageServerService/GetChatMessage");
+    expect(ex.buildUrl()).toBe("https://server.codeium.com/exa.language_server_pb.LanguageServerService/GetChatMessage");
   });
 
-  it("PROVIDERS.windsurf baseUrl is the chat endpoint (registry in sync)", () => {
-    expect(PROVIDERS.windsurf.baseUrl).toBe(
-      "https://server.self-serve.windsurf.com/exa.language_server_pb.LanguageServerService/GetChatMessage"
+  // windsurf is deliberately excluded from providers/registry/index.js (no tool
+  // calling support — see registry/index.js's "hidden" comment), so PROVIDERS.windsurf
+  // does not exist; the executor falls back to a hardcoded config in that case
+  // (see windsurf.js constructor). Compare against the raw registry entry instead.
+  it("registry entry baseUrl matches the executor's fallback chat endpoint (registry in sync)", () => {
+    expect(PROVIDERS.windsurf).toBeUndefined();
+    expect(windsurfRegistryEntry.transport.baseUrl).toBe(
+      "https://server.codeium.com/exa.language_server_pb.LanguageServerService/GetChatMessage"
     );
   });
 });

@@ -1,6 +1,6 @@
 // Claude helper functions for translator
 import { DEFAULT_THINKING_CLAUDE_SIGNATURE } from "../../config/defaultThinkingSignature.js";
-import { ROLE, CLAUDE_BLOCK } from "../schema/index.js";
+import { ROLE, CLAUDE_BLOCK, SYNTHETIC_THINKING } from "../schema/index.js";
 import { adjustMaxTokens } from "./maxTokens.js";
 import { applyCloaking } from "../../utils/claudeCloaking.js";
 import { resolveSessionId } from "../../utils/sessionManager.js";
@@ -529,6 +529,12 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
             }
           }
           lastAssistantProcessed = true;
+        }
+
+        // Thinking synthesized from OpenAI reasoning_content has no signature: only the
+        // providers below know how to take it; anyone else gets the plain content.
+        if (!handlesThinkingBlocks(provider)) {
+          msg.content = msg.content.filter((block) => !block[SYNTHETIC_THINKING]);
         }
 
         // Handle thinking blocks for Anthropic-compatible endpoints.

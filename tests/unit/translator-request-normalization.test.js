@@ -7,7 +7,14 @@ import { filterToOpenAIFormat } from "../../open-sse/translator/formats/openai.j
 import { parseSSELine } from "../../open-sse/utils/streamHelpers.js";
 
 describe("request normalization", () => {
-  it("claudeToOpenAIRequest flattens text-only content arrays into string", () => {
+  // Multi-part text content is kept as an array of {type:"text"} parts rather than
+  // joined into a string: OpenAI's Chat Completions content field natively accepts
+  // an array of text parts, and some OpenAI-compatible upstreams (DashScope/alicode,
+  // see PROVIDERS[...].quirks.preserveCacheControl) rely on that shape to keep each
+  // block's own cache_control marker. Joining would silently drop those markers.
+  // collapseTextParts (concerns/message.js) only collapses a single lone text part,
+  // where nothing is lost — this has been the behavior since the function existed.
+  it("claudeToOpenAIRequest keeps multi-part text content as an array", () => {
     const body = {
       messages: [
         {
@@ -21,7 +28,10 @@ describe("request normalization", () => {
     };
 
     const result = claudeToOpenAIRequest("gpt-oss:120b", body, true);
-    expect(result.messages[0].content).toBe("hi\nthere");
+    expect(result.messages[0].content).toEqual([
+      { type: "text", text: "hi" },
+      { type: "text", text: "there" },
+    ]);
   });
 
   it("claudeToOpenAIRequest preserves multimodal arrays", () => {
@@ -48,7 +58,10 @@ describe("request normalization", () => {
     expect(Array.isArray(result.messages[0].content)).toBe(true);
   });
 
-  it("filterToOpenAIFormat flattens text-only arrays to string", () => {
+  // filterToOpenAIFormat never joins text parts (only strips non-OpenAI block types
+  // and signature/cache_control unless opts.preserveCacheControl) — same rationale
+  // as above, unchanged since this helper's introduction.
+  it("filterToOpenAIFormat keeps text-only arrays as an array", () => {
     const body = {
       messages: [
         {
@@ -62,10 +75,13 @@ describe("request normalization", () => {
     };
 
     const result = filterToOpenAIFormat(JSON.parse(JSON.stringify(body)));
-    expect(result.messages[0].content).toBe("a\nb");
+    expect(result.messages[0].content).toEqual([
+      { type: "text", text: "a" },
+      { type: "text", text: "b" },
+    ]);
   });
 
-  it("translateRequest keeps /v1/messages Claude->OpenAI text payloads string-safe", () => {
+  it("translateRequest keeps /v1/messages Claude->OpenAI multi-part text as an array", () => {
     const body = {
       model: "ollama/gpt-oss:120b",
       system: [{ type: "text", text: "You are helpful." }],
@@ -92,8 +108,10 @@ describe("request normalization", () => {
     );
 
     const userMessage = result.messages.find((m) => m.role === "user");
-    expect(typeof userMessage.content).toBe("string");
-    expect(userMessage.content).toBe("hello\nworld");
+    expect(userMessage.content).toEqual([
+      { type: "text", text: "hello" },
+      { type: "text", text: "world" },
+    ]);
   });
 
   it("translateRequest strips unsupported Anthropic output_config for MiniMax Claude-compatible endpoints", () => {
@@ -164,6 +182,10 @@ describe("request normalization", () => {
     expect(result.output_config).toEqual(body.output_config);
   });
 
+  // NDJSON parsing requires the explicit `format: FORMATS.OLLAMA` opt-in (83d94daa)
+  // rather than auto-detecting a raw "{"-leading line — a `{`-leading line is
+  // ambiguous for any non-Ollama stream, so parseSSELine only takes that branch when
+  // the caller already knows the stream is NDJSON.
   it("parseSSELine supports provider raw NDJSON stream lines", () => {
     const raw = JSON.stringify({
       model: "gpt-oss:120b",
@@ -171,7 +193,7 @@ describe("request normalization", () => {
       done: false,
     });
 
-    const parsed = parseSSELine(raw);
+    const parsed = parseSSELine(raw, FORMATS.OLLAMA);
     expect(parsed).toEqual({
       model: "gpt-oss:120b",
       message: { role: "assistant", content: "hello" },

@@ -171,6 +171,9 @@ describe("openaiToClaudeRequest", () => {
 describe("openaiToClaudeResponse", () => {
   it("omits empty Read pages tool argument before emitting Claude input deltas", () => {
     const state = { toolCalls: new Map() };
+    // Args are buffered and sanitized once, on the finish_reason chunk (see
+    // 96a9a2b3), not streamed per-delta — a chunk with no finish_reason
+    // never flushes an input_json_delta.
     const chunk = {
       id: "chatcmpl-test",
       model: "gpt-test",
@@ -189,7 +192,8 @@ describe("openaiToClaudeResponse", () => {
               })
             }
           }]
-        }
+        },
+        finish_reason: "tool_calls"
       }]
     };
 

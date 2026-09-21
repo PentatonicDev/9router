@@ -39,9 +39,13 @@ describe("provider baseUrl const (full path, no trailing slash)", () => {
   });
 });
 
-describe("antigravity retry (intentional change: 429=6, 503=3)", () => {
-  it("429 attempts = 6", () => {
-    expect(antigravity.transport.retry["429"].attempts).toBe(6);
+// 429 was 6 attempts at introduction (dd1e0f9b), then deliberately dropped to
+// 3 in 3f9382de ("Fix AG, Kiro, Xiaomi Provider") and has stayed at 3 through
+// every antigravity commit since (including the 500-retry addition in
+// 639f1204) — 3 is the current intent, not 6.
+describe("antigravity retry (intentional change: 429=3, 503=3)", () => {
+  it("429 attempts = 3", () => {
+    expect(antigravity.transport.retry["429"].attempts).toBe(3);
   });
   it("503 attempts = 3", () => {
     expect(antigravity.transport.retry["503"].attempts).toBe(3);

@@ -35,11 +35,16 @@ describe("detectRequiredCapabilities", () => {
     expect(r.has("vision")).toBe(true);
   });
 
-  it("web_search tool -> search", () => {
+  // "search" detection for auto-switch has been a documented no-op since the
+  // function was introduced (b282f0554, Jun 2026): "search: temporarily
+  // disabled in auto-switch (feature not wired yet)" — still true today,
+  // combo.js has no web_search/tools scan. Locks down the current behavior
+  // rather than the aspirational one.
+  it("web_search tool -> search (not wired yet)", () => {
     const r = detectRequiredCapabilities({ messages: [{ role: "user", content: "q" }], tools: [
       { type: "web_search" },
     ] });
-    expect(r.has("search")).toBe(true);
+    expect(r.has("search")).toBe(false);
   });
 
   it("responses input_image -> vision", () => {
@@ -66,9 +71,15 @@ describe("reorderByCapabilities", () => {
   });
 
   it("keeps order when no model matches", () => {
+    // Only the trivial early-return cases (empty `required`, or <=1 models —
+    // see the other two tests in this block) preserve the array reference.
+    // Once any capability is required, reorderByCapabilities always goes
+    // through map/sort/map and builds a fresh array — same content and
+    // order here, but not the same reference. No caller relies on reference
+    // identity (services/combo.js only compares reordered[0] !== models[0]).
     const models = ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"];
     const out = reorderByCapabilities(models, new Set(["vision"]));
-    expect(out).toBe(models);
+    expect(out).toEqual(models);
   });
 
   it("single model -> unchanged", () => {

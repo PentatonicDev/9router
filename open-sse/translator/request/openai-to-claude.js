@@ -5,7 +5,7 @@ import { adjustMaxTokens } from "../formats/maxTokens.js";
 import { safeParseJSON } from "../concerns/json.js";
 import { parseDataUri } from "../concerns/image.js";
 import { extractTextContent } from "../formats/gemini.js";
-import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
+import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK, SYNTHETIC_THINKING } from "../schema/index.js";
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 
 // Empty prefix matches real Claude Code behavior (no tool name prefix).
@@ -253,6 +253,14 @@ function getContentBlocksFromMessage(msg, toolNameMap = new Map()) {
       }
     }
   } else if (msg.role === ROLE.ASSISTANT) {
+    // reasoning_content (DeepSeek/GLM/Qwen-style OpenAI extension) carries the model's
+    // prior thinking as a sibling field. It has no Anthropic signature, so it is emitted
+    // unsigned and marked: prepareClaudeRequest keeps it only for upstreams that accept
+    // unsigned or sentinel-signed thinking (anthropic-compatible, DeepSeek) and drops it
+    // for native Anthropic, whose signature check it could never pass.
+    if (typeof msg.reasoning_content === "string" && msg.reasoning_content) {
+      blocks.push({ type: CLAUDE_BLOCK.THINKING, thinking: msg.reasoning_content, [SYNTHETIC_THINKING]: true });
+    }
     if (Array.isArray(msg.content)) {
       for (const part of msg.content) {
         if (part.type === OPENAI_BLOCK.TEXT && part.text) {

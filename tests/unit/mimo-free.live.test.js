@@ -2,10 +2,18 @@
  * Live repro for issue #1933: MiMo Code Free returns HTTP 502 "MiMo bootstrap failed: 403".
  * Root cause: upstream gates on Chrome-like User-Agent. Without UA → 403 "Illegal access".
  * Hits real endpoints — no mocks. Free provider, safe to call.
+ *
+ * These probe the live MiMo service itself (bootstrap + chat anti-abuse gate), so they
+ * can't be mocked without losing the point of the test. Gated by MIMO_LIVE_TESTS=1 so the
+ * default `vitest run` never depends on the real upstream being reachable/stable.
+ *
+ *   MIMO_LIVE_TESTS=1 npx vitest run tests/unit/mimo-free.live.test.js
  */
 import { describe, it, expect } from "vitest";
 import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
 import { __test__ } from "../../open-sse/executors/mimo-free.js";
+
+const MIMO_LIVE_TESTS = process.env.MIMO_LIVE_TESTS === "1";
 
 const { BOOTSTRAP_URL, CHAT_URL, generateFingerprint, MIMO_SYSTEM_MARKER } = __test__;
 
@@ -43,7 +51,7 @@ async function chatWith(jwt, ua) {
   return proxyAwareFetch(CHAT_URL, { method: "POST", headers, body: JSON.stringify(body) });
 }
 
-describe("MiMo Free bootstrap (live)", () => {
+describe.skipIf(!MIMO_LIVE_TESTS)("MiMo Free bootstrap (live)", () => {
   it("bootstrap returns 200 with JWT", async () => {
     const { status, jwt } = await bootstrapWith(CHROME_UA);
     expect(status).toBe(200);
@@ -51,7 +59,7 @@ describe("MiMo Free bootstrap (live)", () => {
   });
 });
 
-describe("MiMo Free anti-abuse gate (live)", () => {
+describe.skipIf(!MIMO_LIVE_TESTS)("MiMo Free anti-abuse gate (live)", () => {
   it("chat WITH Chrome User-Agent → 200", async () => {
     const { jwt } = await bootstrapWith(CHROME_UA);
     const r = await chatWith(jwt, CHROME_UA);

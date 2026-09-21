@@ -5,7 +5,7 @@
  *  - default.js buildHeaders(): static provider defaults + model-gated anthropic-beta
  *  - default.js buildHeaders(): anthropic-compatible non-Anthropic host stripping
  *  - default.js buildHeaders(): anthropic-compatible official host keeps headers
- *  - proxyFetch.js: api.anthropic.com routes through anthropicFetch path
+ *  - proxyFetch.js: api.anthropic.com requests pass through proxyAwareFetch
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -231,27 +231,33 @@ describe("DefaultExecutor.buildHeaders() — anthropic-compatible stripping", ()
 
 // ─── proxyFetch anthropicFetch routing ────────────────────────────────────────
 
-describe("proxyAwareFetch — api.anthropic.com routing", () => {
+describe("proxyAwareFetch — api.anthropic.com pass-through", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("routes api.anthropic.com to gotScraping (non-streaming) and returns ok response", async () => {
-    // Mock got-scraping before module load
-    vi.doMock("got-scraping", () => {
-      const mockGotScraping = vi.fn().mockResolvedValue({
-        statusCode: 200,
-        statusMessage: "OK",
-        headers: { "content-type": "application/json" },
-        rawBody: Buffer.from(JSON.stringify({ id: "msg_test" })),
-      });
-      mockGotScraping.stream = vi.fn();
-      return { gotScraping: mockGotScraping };
+  it("routes api.anthropic.com through native fetch (non-streaming) and returns ok response", async () => {
+    // got-scraping (browser-like JA3 TLS fingerprinting) is currently disabled in
+    // proxyFetch.js — the whole block is commented out ("kept for future re-enable")
+    // and proxyAwareFetch always falls through to native fetch. api.anthropic.com
+    // gets no special routing today; this just proves the pass-through still works.
+    const savedFetch = globalThis.fetch;
+    // proxyFetch.js captures `globalThis.fetch` as its `originalFetch` at import time,
+    // then (as a module side effect) overwrites globalThis.fetch with its own wrapper —
+    // so the assertion below must hold a reference to this mock, not re-read globalThis.fetch.
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "content-type": "application/json" }),
+      body: null,
+      text: async () => JSON.stringify({ id: "msg_test" }),
+      json: async () => ({ id: "msg_test" }),
     });
+    globalThis.fetch = mockFetch;
 
     vi.resetModules();
     const { proxyAwareFetch } = await import("open-sse/utils/proxyFetch.js");
-    const { gotScraping } = await import("got-scraping");
 
     const res = await proxyAwareFetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -260,11 +266,12 @@ describe("proxyAwareFetch — api.anthropic.com routing", () => {
       body: JSON.stringify({ model: "claude-3-5-sonnet-20241022", messages: [] }),
     });
 
-    expect(gotScraping).toHaveBeenCalledOnce();
+    expect(mockFetch).toHaveBeenCalledOnce();
     expect(res.ok).toBe(true);
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.id).toBe("msg_test");
+    globalThis.fetch = savedFetch;
   });
 
   it("falls back gracefully when got-scraping throws on non-streaming path", async () => {

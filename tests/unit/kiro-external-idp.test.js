@@ -105,8 +105,11 @@ describe("Kiro external_idp (CLIProxyAPI) import and refresh", () => {
     expect(headers.TokenType).toBe("EXTERNAL_IDP");
     expect(headers.tokentype).toBeUndefined();
 
+    // q.us-east-1 is tried before codewhisperer.us-east-1 for every auth method
+    // since 35b950be (kiro.dev path gateway now 400s modern payloads, and 400 is
+    // terminal, so q/codewhisperer — which fall through on 401/403 — go first).
     expect(executor.buildUrl("claude-sonnet-4.5", true, 0, credentials)).toBe(
-      "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse"
+      "https://q.us-east-1.amazonaws.com/generateAssistantResponse"
     );
   });
 

@@ -46,3 +46,9 @@ export const VALID_OPENAI_CONTENT_TYPES = [
 export const VALID_OPENAI_MESSAGE_TYPES = [
   OPENAI_BLOCK.TEXT, OPENAI_BLOCK.IMAGE_URL, OPENAI_BLOCK.IMAGE, "tool_calls", CLAUDE_BLOCK.TOOL_RESULT,
 ];
+
+// Marks a Claude thinking block the translator synthesized from an OpenAI
+// reasoning_content field (no provider signature exists for it). A symbol so it
+// never serializes upstream; prepareClaudeRequest decides per provider whether
+// such a block may be sent.
+export const SYNTHETIC_THINKING = Symbol.for("9router.syntheticThinking");
