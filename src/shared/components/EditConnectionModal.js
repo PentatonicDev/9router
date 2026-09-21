@@ -34,6 +34,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
     accessKeyId: "",
     secretAccessKey: "",
     sessionToken: "",
+    creditsUsd: "",
   });
   const [region, setRegion] = useState("");
   const [testing, setTesting] = useState(false);
@@ -84,6 +85,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
           accessKeyId: "",
           secretAccessKey: "",
           sessionToken: "",
+          creditsUsd: typeof psd.creditsUsd === "number" ? String(psd.creditsUsd) : "",
         });
       }
       // Load region for providers that support it (e.g. xiaomi-tokenplan)
@@ -118,6 +120,9 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   // current value" (route.js PUT merges this onto the existing
   // providerSpecificData, so an omitted key survives untouched). Region/
   // prefix/endpoint are ordinary editable fields and always sent.
+  // creditsUsd is always sent too, but unlike those fields blank means
+  // "clear it": we send null so the normalizer drops the stored value
+  // instead of the PUT's merge leaving a stale credits amount in place.
   const buildBedrockSpecificData = () => {
     const next = {
       authMethod: bedrockData.authMethod,
@@ -126,6 +131,8 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
       endpoint: bedrockData.endpoint.trim(),
       ...(isBedrockGlobal ? { homeRegion: bedrockData.homeRegion.trim() } : {}),
     };
+    const creditsUsd = Number(bedrockData.creditsUsd.trim());
+    next.creditsUsd = bedrockData.creditsUsd.trim() && Number.isFinite(creditsUsd) && creditsUsd > 0 ? creditsUsd : null;
     if (isBedrockIam) {
       if (bedrockData.accessKeyId.trim()) next.accessKeyId = bedrockData.accessKeyId.trim();
       if (bedrockData.secretAccessKey.trim()) next.secretAccessKey = bedrockData.secretAccessKey.trim();
@@ -370,6 +377,15 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
                 value={bedrockData.endpoint}
                 onChange={(e) => setBedrockData({ ...bedrockData, endpoint: e.target.value })}
                 placeholder="For a VPC endpoint or GovCloud — leave blank otherwise"
+              />
+              <Input
+                label="Credits (USD, optional)"
+                type="number"
+                min="0"
+                step="0.01"
+                value={bedrockData.creditsUsd}
+                onChange={(e) => setBedrockData({ ...bedrockData, creditsUsd: e.target.value })}
+                placeholder="Total credits available for this account — enables spend tracking in the Quota Tracker"
               />
             </div>
           </div>

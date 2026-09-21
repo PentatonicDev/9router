@@ -73,4 +73,8 @@ export default {
     // === Cohere ===
     { id: "cohere.command-r-plus-v1:0", name: "Command R+" },
   ],
+  features: {
+    usage: true,
+    usageApikey: true,
+  },
 };

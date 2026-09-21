@@ -49,6 +49,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     accessKeyId: "",
     secretAccessKey: "",
     sessionToken: "",
+    creditsUsd: "",
   });
   const isBedrockIam = isBedrock && bedrockData.authMethod === "iam";
   const isBedrockGlobal = isBedrock && bedrockData.region.trim().toLowerCase() === "global";
@@ -93,6 +94,10 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         ...(bedrockData.endpoint.trim() ? { endpoint: bedrockData.endpoint.trim() } : {}),
         ...(isBedrockGlobal && bedrockData.homeRegion.trim() ? { homeRegion: bedrockData.homeRegion.trim() } : {}),
       };
+      const creditsUsd = Number(bedrockData.creditsUsd.trim());
+      if (bedrockData.creditsUsd.trim() && Number.isFinite(creditsUsd) && creditsUsd > 0) {
+        base.creditsUsd = creditsUsd;
+      }
       // Carries over whatever "Discover models" last found so the connection
       // is saved with those items already in place (see requirement 3/4b) —
       // never re-fetched here, just the last preview result.
@@ -497,6 +502,15 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
                 value={bedrockData.endpoint}
                 onChange={(e) => setBedrockData({ ...bedrockData, endpoint: e.target.value })}
                 placeholder="For a VPC endpoint or GovCloud — leave blank otherwise"
+              />
+              <Input
+                label="Credits (USD, optional)"
+                type="number"
+                min="0"
+                step="0.01"
+                value={bedrockData.creditsUsd}
+                onChange={(e) => setBedrockData({ ...bedrockData, creditsUsd: e.target.value })}
+                placeholder="Total credits available for this account — enables spend tracking in the Quota Tracker"
               />
               <div className="flex items-center gap-2">
                 <Button onClick={handleDiscoverBedrockModels} disabled={!canDiscoverBedrock || bedrockDiscovery?.loading} variant="secondary" size="sm">

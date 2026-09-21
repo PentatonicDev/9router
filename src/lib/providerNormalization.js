@@ -68,6 +68,16 @@ export function normalizeProviderSpecificData(provider, body = {}, providerSpeci
       delete next.secretAccessKey;
       delete next.sessionToken;
     }
+
+    // Optional lifetime credit ceiling for the quota tracker (Number() also
+    // accepts numeric strings from a raw API call, matching the other fields
+    // here). Any non-positive/non-finite value clears it instead of storing junk.
+    const creditsUsd = Number(next.creditsUsd);
+    if (Number.isFinite(creditsUsd) && creditsUsd > 0) {
+      next.creditsUsd = creditsUsd;
+    } else {
+      delete next.creditsUsd;
+    }
   }
 
   return Object.keys(next).length > 0 ? next : null;

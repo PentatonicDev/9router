@@ -46,6 +46,63 @@ describe("EditConnectionModal buildBedrockSpecificData source contract", () => {
   });
 });
 
+// creditsUsd: same no-RTM-harness constraint as above, so these run the
+// actual extracted source blocks (hydration effect + buildBedrockSpecificData)
+// via `new Function` against controlled inputs, rather than just pattern-
+// matching text — proving the real pre-fill/clear/parse behavior, not just
+// that some matching line exists.
+describe("EditConnectionModal bedrock creditsUsd", () => {
+  const source = fs.readFileSync(componentPath, "utf8");
+
+  function runHydration(connection) {
+    let captured;
+    const setBedrockData = (v) => { captured = v; };
+    const block = extractFunctionBody(source, 'if (connection.provider === "bedrock") {');
+    const fn = new Function("connection", "setBedrockData", block);
+    fn(connection, setBedrockData);
+    return captured;
+  }
+
+  it("pre-fills creditsUsd as a string when psd has a numeric value (250 -> \"250\")", () => {
+    expect(runHydration({ provider: "bedrock", providerSpecificData: { creditsUsd: 250 } }).creditsUsd).toBe("250");
+  });
+
+  it("leaves creditsUsd blank when psd has none", () => {
+    expect(runHydration({ provider: "bedrock", providerSpecificData: {} }).creditsUsd).toBe("");
+  });
+
+  function runBuild(creditsUsdInput) {
+    const bedrockData = {
+      authMethod: "api_key",
+      region: "us-east-1",
+      homeRegion: "",
+      inferenceProfilePrefix: "",
+      endpoint: "",
+      accessKeyId: "",
+      secretAccessKey: "",
+      sessionToken: "",
+      creditsUsd: creditsUsdInput,
+    };
+    const body = extractFunctionBody(source, "const buildBedrockSpecificData = () => {");
+    const fn = new Function("bedrockData", "isBedrockIam", "isBedrockGlobal", body);
+    return fn(bedrockData, false, false);
+  }
+
+  it("submits creditsUsd: null when the field is cleared (blank string)", () => {
+    expect(runBuild("").creditsUsd).toBeNull();
+  });
+
+  it("submits creditsUsd: null for a non-positive or non-numeric value", () => {
+    expect(runBuild("0").creditsUsd).toBeNull();
+    expect(runBuild("-5").creditsUsd).toBeNull();
+    expect(runBuild("abc").creditsUsd).toBeNull();
+  });
+
+  it("submits the parsed number for a valid value (\"1000.5\" -> 1000.5)", () => {
+    expect(runBuild("1000.5").creditsUsd).toBe(1000.5);
+  });
+});
+
 const sendMock = vi.fn();
 
 vi.mock("@aws-sdk/client-bedrock-runtime", () => {

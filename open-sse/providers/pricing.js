@@ -4,7 +4,7 @@
 //   1. PROVIDER_PRICING[provider][model]  — provider-specific override
 //   2. MODEL_PRICING[model]               — canonical model price (provider-agnostic)
 //   3. PATTERN_PRICING                    — glob pattern match (e.g. "codex-*")
-import { stripBedrockGeoPrefix } from "./bedrockGeoPrefix.js";
+import { stripBedrockGeoPrefix, bedrockCanonicalModelName } from "./bedrockGeoPrefix.js";
 
 /**
  * Canonical model pricing — provider-agnostic.
@@ -423,6 +423,22 @@ export function getPricingForModel(provider, model) {
   for (const { pattern, pricing } of PATTERN_PRICING) {
     if (matchPattern(pattern, baseModel) || matchPattern(pattern, model)) {
       return pricing;
+    }
+  }
+
+  // 4. Bedrock only: PROVIDER_PRICING.bedrock only lists a handful of ids, but
+  // the account discovers dozens more Anthropic/OpenAI/Minimax/Kimi/GLM/Grok
+  // ids on Bedrock. Try the canonical (vendor + version stripped) name against
+  // the same provider-agnostic tables before giving up.
+  // ponytail: Anthropic-on-Bedrock rates equal the direct API (AWS publishes
+  // the same tiers); other vendors' canonical/pattern rates here are direct-
+  // API list prices used as the best available approximation — verify against
+  // https://aws.amazon.com/bedrock/pricing/ before trusting them for a spend cap.
+  if (provider === "bedrock") {
+    const canonical = bedrockCanonicalModelName(model);
+    if (MODEL_PRICING[canonical]) return MODEL_PRICING[canonical];
+    for (const { pattern, pricing } of PATTERN_PRICING) {
+      if (matchPattern(pattern, canonical)) return pricing;
     }
   }
 

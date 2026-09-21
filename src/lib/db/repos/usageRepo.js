@@ -824,3 +824,14 @@ export async function getRecentLogs(limit = 200, visible = null) {
     return [];
   }
 }
+
+// Postgres' SUM() returns a numeric-as-string (bigint-ish), unlike SQLite's
+// native number — Number() normalizes both to the same JS type.
+export async function getConnectionSpend(connectionId) {
+  const db = await getDb();
+  const row = await db.selectFrom("usageHistory")
+    .select(sql`COALESCE(SUM(cost), 0)`.as("total"))
+    .where("connectionId", "=", connectionId)
+    .executeTakeFirst();
+  return Number(row?.total || 0);
+}
