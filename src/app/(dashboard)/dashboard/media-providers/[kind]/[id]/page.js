@@ -13,6 +13,7 @@ import { EmbeddingExampleCard } from "./components/EmbeddingExampleCard";
 import { TtsExampleCard } from "./components/TtsExampleCard";
 import { GenericExampleCard } from "./components/GenericExampleCard";
 import { SttExampleCard } from "./components/SttExampleCard";
+import SearxngInstanceCard from "./components/SearxngInstanceCard";
 
 // MediaProviderDetailPage
 export default function MediaProviderDetailPage() {
@@ -34,6 +35,7 @@ export default function MediaProviderDetailPage() {
   const [customNode, setCustomNode] = useState(null);
   const [customLoading, setCustomLoading] = useState(isCustom);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [searxngUrl, setSearxngUrl] = useState("");
 
   // Fetch custom node info from API for custom embedding nodes
   useEffect(() => {
@@ -161,6 +163,7 @@ export default function MediaProviderDetailPage() {
       ) : (
         <ConnectionsCard providerId={id} isOAuth={false} />
       )}
+      {id === "searxng" && <SearxngInstanceCard onUrlChange={setSearxngUrl} />}
 
       {/* Models - hidden for tts/webSearch/webFetch (provider IS the model); custom uses prefix as alias */}
       {kind !== "tts" && kind !== "webSearch" && kind !== "webFetch" && (
@@ -179,6 +182,7 @@ export default function MediaProviderDetailPage() {
               : kind === "tts" ? provider.ttsConfig
               : kind === "stt" ? provider.sttConfig
               : kind === "embedding" ? provider.embeddingConfig
+              : id === "searxng" && searxngUrl ? { ...provider.searchConfig, baseUrl: `${searxngUrl.replace(/\/+$/, "")}/search` }
               : provider.searchConfig || { mode: "chat-completions", defaultModel: provider.searchViaChat?.defaultModel, pricingUrl: provider.searchViaChat?.pricingUrl, freeTier: provider.searchViaChat?.freeTier }
           }
           provider={provider}

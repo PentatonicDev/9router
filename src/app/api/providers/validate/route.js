@@ -269,7 +269,9 @@ export async function POST(request) {
       if (webResult !== null) {
         return NextResponse.json({
           valid: webResult,
-          error: webResult ? null : "Invalid API key",
+          error: webResult ? null : (provider === "searxng"
+            ? "SearXNG did not answer a JSON search at the configured URL (check the URL and search.formats)"
+            : "Invalid API key"),
         });
       }
 

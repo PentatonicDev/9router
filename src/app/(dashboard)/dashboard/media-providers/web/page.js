@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Card, Badge, Button, Toggle, Select, Input } from "@/shared/components";
+import { Card, Badge, Button, Toggle, Select } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import { AI_PROVIDERS, getProvidersByKind } from "@/shared/constants/providers";
 
@@ -16,7 +16,6 @@ const AUTO_SOURCE = "__auto__";
 function WebSearchSettingsCard({ searchProviders, searchCombos, connections }) {
   const [emulation, setEmulation] = useState(true);
   const [source, setSource] = useState("");
-  const [searxngUrl, setSearxngUrl] = useState("");
   const [initial, setInitial] = useState(null);
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
@@ -30,11 +29,9 @@ function WebSearchSettingsCard({ searchProviders, searchCombos, connections }) {
         const loaded = {
           webSearchEmulation: data.webSearchEmulation !== false,
           webSearchSource: data.webSearchSource || "",
-          searxngUrl: data.searxngUrl || "",
         };
         setEmulation(loaded.webSearchEmulation);
         setSource(loaded.webSearchSource);
-        setSearxngUrl(loaded.searxngUrl);
         setInitial(loaded);
       } catch { /* noop */ }
     })();
@@ -42,14 +39,13 @@ function WebSearchSettingsCard({ searchProviders, searchCombos, connections }) {
 
   const dirty = !!initial && (
     emulation !== initial.webSearchEmulation ||
-    source !== initial.webSearchSource ||
-    searxngUrl !== initial.searxngUrl
+    source !== initial.webSearchSource
   );
 
   const handleSave = async () => {
     setSaving(true);
     setJustSaved(false);
-    const payload = { webSearchEmulation: emulation, webSearchSource: source, searxngUrl };
+    const payload = { webSearchEmulation: emulation, webSearchSource: source };
     try {
       const res = await fetch("/api/settings", {
         method: "PATCH",
@@ -69,7 +65,7 @@ function WebSearchSettingsCard({ searchProviders, searchCombos, connections }) {
     .map((p) => ({ value: p.id, label: p.name }));
   const comboOptions = searchCombos.map((c) => ({ value: c.name, label: `${c.name} (combo)` }));
   const sourceOptions = [
-    { value: AUTO_SOURCE, label: "Auto (SearXNG if configured, else first connected provider)" },
+    { value: AUTO_SOURCE, label: "Auto (SearXNG if its URL is set on its panel, else first connected provider)" },
     ...providerOptions,
     ...comboOptions,
   ];
@@ -98,14 +94,6 @@ function WebSearchSettingsCard({ searchProviders, searchCombos, connections }) {
           value={source === "" ? AUTO_SOURCE : source}
           onChange={(e) => setSource(e.target.value === AUTO_SOURCE ? "" : e.target.value)}
           options={sourceOptions}
-        />
-
-        <Input
-          label="SearXNG URL"
-          value={searxngUrl}
-          onChange={(e) => setSearxngUrl(e.target.value)}
-          placeholder="http://searxng:8080 — leave blank to use SEARXNG_URL"
-          hint="The instance must have search.formats including json enabled. Private/internal hostnames are allowed here since the admin is the one setting it."
         />
 
         <div className="flex items-center gap-3">
