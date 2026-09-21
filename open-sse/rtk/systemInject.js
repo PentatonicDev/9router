@@ -251,7 +251,9 @@ function injectConverseSystem(body, prompt) {
     const sys = body.system;
     if (Array.isArray(sys)) {
       try { if (sys.some(b => b && hasPrompt(b.text, prompt))) return; } catch (_) {}
-      try { sys.push({ text: prompt }); } catch (_) {}
+      // Stay inside the cached prefix: the translator ends system with a cachePoint.
+      const at = sys.length && sys[sys.length - 1]?.cachePoint ? sys.length - 1 : sys.length;
+      try { sys.splice(at, 0, { text: prompt }); } catch (_) {}
       return;
     }
     try { body.system = [{ text: prompt }]; } catch (_) {}

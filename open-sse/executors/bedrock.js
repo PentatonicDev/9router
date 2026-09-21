@@ -124,6 +124,7 @@ export class BedrockExecutor extends BaseExecutor {
       },
     });
 
-    return { response: new Response(stream, { headers: SSE_HEADERS }) };
+    // The resolved id (connection prefix applied) is what gets billed — see pricing.js.
+    return { response: new Response(stream, { headers: SSE_HEADERS }), upstreamModel: modelId };
   }
 }

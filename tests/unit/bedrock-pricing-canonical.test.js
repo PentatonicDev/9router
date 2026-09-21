@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest";
 import { bedrockCanonicalModelName } from "../../open-sse/providers/bedrockGeoPrefix.js";
 import { getPricingForModel, MODEL_PRICING } from "../../open-sse/providers/pricing.js";
+import { BEDROCK_PRICING } from "../../open-sse/providers/bedrockPricing.js";
 
 describe("bedrockCanonicalModelName", () => {
   const cases = [
@@ -37,10 +38,20 @@ describe("bedrockCanonicalModelName", () => {
   }
 });
 
+describe("getPricingForModel('bedrock') — exact id before the stripped id", () => {
+  it("bills a regional profile above the bare id and 'global.' like the bare id", () => {
+    expect(getPricingForModel("bedrock", "anthropic.claude-sonnet-5").input).toBe(2);
+    expect(getPricingForModel("bedrock", "us.anthropic.claude-sonnet-5").input).toBe(2.2);
+    expect(getPricingForModel("bedrock", "global.anthropic.claude-opus-4-6-v1")).toEqual({ input: 5, output: 25, cached: 0.5, cache_creation: 6.25 });
+    expect(getPricingForModel("bedrock", "us.anthropic.claude-opus-4-6-v1").input).toBe(5.5);
+  });
+});
+
 describe("getPricingForModel('bedrock', ...) with canonical fallback", () => {
-  it("resolves an unlisted Anthropic point release via MODEL_PRICING", () => {
-    expect(getPricingForModel("bedrock", "global.anthropic.claude-opus-4-6-v1"))
-      .toEqual(MODEL_PRICING["claude-opus-4-6"]);
+  it("resolves an id models.dev does not list yet through the canonical pattern tables", () => {
+    expect(BEDROCK_PRICING["global.moonshotai.kimi-k3"]).toBeUndefined();
+    expect(getPricingForModel("bedrock", "global.moonshotai.kimi-k3")).toEqual(getPricingForModel("kimi", "kimi-k3"));
+    expect(MODEL_PRICING["kimi-k3"]).toBeDefined();
   });
 
   it("resolves an unlisted OpenAI-on-Bedrock id", () => {
@@ -49,7 +60,8 @@ describe("getPricingForModel('bedrock', ...) with canonical fallback", () => {
 
   it("still prefers the PROVIDER_PRICING.bedrock entry over canonicalization (step 1 wins)", () => {
     const direct = getPricingForModel("bedrock", "anthropic.claude-haiku-4-5-20251001-v1:0");
-    expect(direct).toEqual({ input: 1.00, output: 5.00, cached: 0.10, reasoning: 5.00, cache_creation: 1.25 });
+    expect(direct).toBe(BEDROCK_PRICING["anthropic.claude-haiku-4-5-20251001-v1:0"]);
+    expect(direct).toEqual({ input: 1, output: 5, cached: 0.1, cache_creation: 1.25 });
   });
 
   it("does not false-positive an unpriced Llama id just because it has a recognized vendor prefix", () => {

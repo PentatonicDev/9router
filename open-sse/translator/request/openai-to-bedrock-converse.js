@@ -21,6 +21,7 @@ import { FORMATS } from "../formats.js";
 import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
 import { DEFAULT_MAX_TOKENS } from "../../config/runtimeConfig.js";
 import { parseDataUri } from "../concerns/image.js";
+import { stripBedrockGeoPrefix } from "../../providers/bedrockGeoPrefix.js";
 
 const MIME_TO_BEDROCK_IMAGE_FORMAT = {
   "image/png": "png",
@@ -118,6 +119,20 @@ function toToolResultBlock(msg) {
   };
 }
 
+// Converse wants every toolResult of a turn inside ONE user message right after
+// the assistant's toolUse blocks ("Expected toolResult blocks at messages.N"),
+// while OpenAI carries one role:"tool" message per call — so same-role
+// neighbours are merged into a single message.
+function pushMerged(out, role, blocks) {
+  const last = out[out.length - 1];
+  if (last?.role === role) {
+    if (last.content.length === 1 && last.content[0].text === "") last.content.length = 0;
+    last.content.push(...blocks);
+    return;
+  }
+  out.push({ role, content: blocks.length ? blocks : [{ text: "" }] });
+}
+
 function convertMessages(messages = []) {
   const out = [];
   const systemTexts = [];
@@ -132,7 +147,7 @@ function convertMessages(messages = []) {
     }
 
     if (m.role === ROLE.TOOL) {
-      out.push({ role: ROLE.USER, content: [toToolResultBlock(m)] });
+      pushMerged(out, ROLE.USER, [toToolResultBlock(m)]);
       continue;
     }
 
@@ -150,11 +165,11 @@ function convertMessages(messages = []) {
           });
         }
       }
-      out.push({ role: ROLE.ASSISTANT, content: blocks.length ? blocks : [{ text: "" }] });
+      pushMerged(out, ROLE.ASSISTANT, blocks);
       continue;
     }
 
-    out.push({ role: ROLE.USER, content: toContentBlocks(m.content) });
+    pushMerged(out, ROLE.USER, toContentBlocks(m.content));
   }
 
   return { messages: out, system: systemTexts.length ? [{ text: systemTexts.join("\n\n") }] : undefined };
@@ -188,6 +203,33 @@ function convertToolChoice(choice) {
   return undefined;
 }
 
+const CACHE_POINT = { cachePoint: { type: "default" } };
+
+// Prompt caching per vendor, measured live: Anthropic accepts a cachePoint in
+// system, toolConfig.tools and message content; Nova rejects it inside tools
+// (ValidationException); MiniMax/Llama/DeepSeek reject it anywhere
+// (AccessDeniedException "unsupported model"). Below the model's minimum
+// prefix size Bedrock simply ignores the checkpoint, so placing them is free.
+function cacheVendor(model) {
+  const bare = stripBedrockGeoPrefix(typeof model === "string" ? model : "");
+  if (bare.startsWith("anthropic.")) return "anthropic";
+  if (bare.startsWith("amazon.nova")) return "nova";
+  return null;
+}
+
+// The client's own cache_control markers are lost in the OpenAI pivot, so the
+// anchors are placed where a Claude client would: after the system prompt,
+// after the tool definitions and after the latest message, so the next turn
+// reads everything up to here (3 of the 4 checkpoints Bedrock allows).
+function applyCachePoints(result, model) {
+  const vendor = cacheVendor(model);
+  if (!vendor) return;
+  if (result.system) result.system.push({ ...CACHE_POINT });
+  if (vendor === "anthropic" && result.toolConfig?.tools) result.toolConfig.tools.push({ ...CACHE_POINT });
+  const last = result.messages[result.messages.length - 1];
+  if (last) last.content.push({ ...CACHE_POINT });
+}
+
 export function openaiToBedrockConverseRequest(model, body, stream /* , credentials */) {
   const { messages, system } = convertMessages(body.messages);
 
@@ -216,6 +258,7 @@ export function openaiToBedrockConverseRequest(model, body, stream /* , credenti
     if (toolChoice) result.toolConfig.toolChoice = toolChoice;
   }
 
+  applyCachePoints(result, model);
   return result;
 }
 

@@ -374,6 +374,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
   // Most executors return their registry format. Cursor AgentService is an
   // exception: it is decoded by the executor into OpenAI-compatible output.
   let providerResponseFormat = targetFormat;
+  let upstreamModelId = null;
   try {
     const result = await executor.execute({
       model,
@@ -392,6 +393,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     providerHeaders = result.headers;
     finalBody = result.transformedBody;
     providerResponseFormat = result.responseFormat || targetFormat;
+    upstreamModelId = result.upstreamModel || null;
     Object.assign(phases, result.phases || {});
     reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
   } catch (error) {
@@ -492,7 +494,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     return createErrorResult(statusCode, errMsg, resetsAtMs, { ...errorContext, provider, model });
   }
 
-  const sharedCtx = { provider, model, body, stream, errorContext, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log, phases, comboName };
+  // Usage and details record the id the executor actually invoked when it says so (Bedrock prefixes).
+  const sharedCtx = { provider, model: upstreamModelId || model, body, stream, errorContext, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log, phases, comboName };
   const appendLog = (extra) => appendRequestLog({ model, provider, connectionId, ...extra }).catch(() => { });
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);
 

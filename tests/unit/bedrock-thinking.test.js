@@ -89,8 +89,8 @@ describe("translateRequest: openai → bedrock-converse keeps additionalModelReq
     };
     const out = translateRequest(FORMATS.OPENAI, FORMATS.BEDROCK_CONVERSE, SONNET, body, false, null, "bedrock");
     expect(out.additionalModelRequestFields.thinking).toEqual({ type: "enabled", budget_tokens: 8192 });
-    // messages/system from the request translator must survive untouched.
-    expect(out.messages).toEqual([{ role: "user", content: [{ text: "hi" }] }]);
+    // messages/system from the request translator must survive untouched (incl. its cache point).
+    expect(out.messages).toEqual([{ role: "user", content: [{ text: "hi" }, { cachePoint: { type: "default" } }] }]);
     expect(out.inferenceConfig.maxTokens).toBeGreaterThan(8192);
   });
 

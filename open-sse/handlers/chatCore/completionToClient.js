@@ -56,10 +56,22 @@ export function openAICompletionToClaudeMessage(responseBody) {
     content,
     stop_reason: fromOpenAIFinish(finishReason, FORMATS.CLAUDE),
     stop_sequence: null,
-    usage: {
-      input_tokens: usage.prompt_tokens || usage.input_tokens || 0,
-      output_tokens: usage.completion_tokens || usage.output_tokens || 0,
-    },
+    usage: toClaudeUsage(usage),
+  };
+}
+
+// OpenAI prompt_tokens is cache-inclusive; Claude input_tokens excludes the
+// cache reads/writes it reports alongside (same math as the streaming path in
+// translator/response/openai-to-claude.js).
+function toClaudeUsage(usage) {
+  const prompt = usage.prompt_tokens || usage.input_tokens || 0;
+  const cacheRead = usage.prompt_tokens_details?.cached_tokens || usage.cached_tokens || 0;
+  const cacheWrite = usage.prompt_tokens_details?.cache_creation_tokens || usage.cache_creation_input_tokens || 0;
+  return {
+    input_tokens: Math.max(0, prompt - cacheRead - cacheWrite),
+    output_tokens: usage.completion_tokens || usage.output_tokens || 0,
+    ...(cacheRead > 0 ? { cache_read_input_tokens: cacheRead } : {}),
+    ...(cacheWrite > 0 ? { cache_creation_input_tokens: cacheWrite } : {}),
   };
 }
 

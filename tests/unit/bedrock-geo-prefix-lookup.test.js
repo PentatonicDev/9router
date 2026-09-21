@@ -13,6 +13,7 @@ import { getCapabilitiesForModel } from "../../open-sse/providers/capabilities.j
 import { getPricingForModel } from "../../open-sse/providers/pricing.js";
 import { getThinkingLevels } from "../../open-sse/providers/thinkingLevels.js";
 import { stripBedrockGeoPrefix } from "../../open-sse/providers/bedrockGeoPrefix.js";
+import { BEDROCK_PRICING } from "../../open-sse/providers/bedrockPricing.js";
 import { applyThinking } from "../../open-sse/translator/concerns/thinkingUnified.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 
@@ -50,10 +51,11 @@ describe("getCapabilitiesForModel('bedrock', <inference-profile id>)", () => {
 
 describe("getPricingForModel('bedrock', <inference-profile id>)", () => {
   for (const [label, id] of [["us.-prefixed", US_PREFIXED], ["global.-prefixed", GLOBAL_PREFIXED]]) {
-    it(`resolves the ${label} id to non-zero pricing matching the bare id`, () => {
+    it(`resolves the ${label} id to non-zero pricing (exact id first, then the bare id)`, () => {
       const prefixed = getPricingForModel("bedrock", id);
       const bare = getPricingForModel("bedrock", BARE);
-      expect(prefixed).toEqual(bare);
+      // Regional profiles are billed above the bare id; "global." matches it.
+      expect(prefixed).toEqual(BEDROCK_PRICING[id] || bare);
       expect(prefixed.input).toBeGreaterThan(0);
       expect(prefixed.output).toBeGreaterThan(0);
     });

@@ -33,6 +33,13 @@ describe("non-streaming client shaping (stage 2)", () => {
     expect(out.usage).toEqual({ input_tokens: 10, output_tokens: 5 });
   });
 
+  it("Claude usage excludes cache reads/writes from input_tokens and reports them separately", () => {
+    const out = shapeCompletionForClient(completion({
+      usage: { prompt_tokens: 27869, completion_tokens: 6, total_tokens: 27875, prompt_tokens_details: { cached_tokens: 27866 } },
+    }), "claude");
+    expect(out.usage).toEqual({ input_tokens: 3, output_tokens: 6, cache_read_input_tokens: 27866 });
+  });
+
   it("claude client on an openai-responses (codex) provider gets a Message", () => {
     const out = translateNonStreamingResponse(completion(), "openai-responses", "claude");
     expect(out.type).toBe("message");
