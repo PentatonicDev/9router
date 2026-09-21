@@ -13,10 +13,12 @@ const MODES = [
   { value: "enforce", label: "Enforce", desc: "Asks jev and applies the verdict." },
 ];
 
+// Narrowest first: each value is a strict superset of the one above it, so the
+// list reads as the ceiling it is rather than as three unrelated options.
 const TOOL_MODES = [
-  { value: "hint", label: "hint (default)" },
-  { value: "forced", label: "forced" },
-  { value: "none", label: "none" },
+  { value: "hint", label: "hint — suggest only (default)" },
+  { value: "none", label: "none — also allow “call nothing”" },
+  { value: "forced", label: "forced — also allow pinning a tool" },
 ];
 
 export default function DecisionRouterCard({ provider }) {
@@ -90,6 +92,42 @@ export default function DecisionRouterCard({ provider }) {
         It only ever routes to the models listed below.
       </p>
       <div className="flex flex-col gap-5">
+        {/* jev has no credential of its own — each route names the chat provider
+            whose connection already holds the key. So an empty Connections card
+            above is expected, and this is where the credential actually in use
+            has to be visible, or the panel reads as unconfigured. */}
+        <div className="flex flex-col gap-2">
+          <p className="text-sm font-medium">Credential</p>
+          <div className="flex flex-col gap-1.5">
+            {(defaults.routes || []).map((route) => {
+              const conn = activeProviders.find((c) => c.provider === route.credentialProvider);
+              const broken = conn?.testStatus === "unavailable";
+              return (
+                <div key={route.id} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="rounded bg-black/5 px-1.5 py-0.5 dark:bg-white/5">{route.label}</span>
+                  <span className="text-text-muted">borrows</span>
+                  <a
+                    href={`/dashboard/providers/${route.credentialProvider}`}
+                    className="underline decoration-dotted underline-offset-2 hover:text-primary"
+                  >
+                    {route.credentialProvider}
+                  </a>
+                  {conn ? (
+                    <span className={broken ? "text-amber-600 dark:text-amber-500" : "text-text-muted"}>
+                      — {conn.name || "connection"}
+                      {broken ? " (marked unavailable by the last health check; decisions still resolve its key)" : ""}
+                    </span>
+                  ) : (
+                    <span className="text-amber-600 dark:text-amber-500">
+                      — no connection yet, so this route cannot ask jev
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="flex flex-col gap-2">
           <SegmentedControl options={MODES} value={config.mode} onChange={(v) => set("mode", v)} size="sm" />
           <p className="text-xs text-text-muted">{activeMode.desc}</p>
@@ -161,7 +199,7 @@ export default function DecisionRouterCard({ provider }) {
             options={TOOL_MODES}
             value={config.toolMode}
             onChange={(e) => set("toolMode", e.target.value)}
-            hint="How a tool verdict is applied. Only `forced` differs today: the text hint is allowed for every value but it — `hint` and `none` are still treated alike."
+            hint="Ceiling on what a tool verdict may do, widest last. `hint` appends a suggestion and never touches tool_choice; `none` also allows pinning “call nothing”; `forced` also allows pinning a specific tool. A verdict above the ceiling is downgraded to a hint, not dropped."
           />
           <Input
             label="Min confidence"
