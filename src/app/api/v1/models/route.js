@@ -18,6 +18,7 @@ import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
+import { comboContextLimits } from "@/lib/comboContext";
 import { extractApiKey } from "@/sse/services/auth.js";
 
 // Per-provider live model resolvers. Each receives a connection record and
@@ -348,6 +349,12 @@ export async function buildModelsList(kindFilter, options = {}) {
     };
     if (combo.kind === "webSearch" || combo.kind === "webFetch") {
       entry.kind = combo.kind;
+    } else {
+      // Clients (Hermes, OpenClaw) size their context window from these
+      // fields; without them a combo is guessed at a fixed default.
+      const limits = comboContextLimits(combo, connections);
+      if (limits?.contextWindow) entry.context_length = limits.contextWindow;
+      if (limits?.maxOutput) entry.max_completion_tokens = limits.maxOutput;
     }
     models.push(entry);
   }
