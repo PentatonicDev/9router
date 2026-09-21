@@ -44,21 +44,26 @@ function trimCodePoints(value, limit) {
   return [...String(value || "")].slice(0, limit).join("");
 }
 
-function uniqueName(rawName, index, usedNames) {
+// Shared with the Bedrock Converse translator: Amazon Q and Bedrock enforce the
+// same tool-name rule ([a-zA-Z0-9_-], 1-64 chars), and the client's names
+// (e.g. `mcp__server__tool`) regularly exceed it.
+export function uniqueToolName(rawName, index, usedNames, maxLength = KIRO_TOOL_NAME_MAX_LENGTH) {
   const cleaned = String(rawName || "")
     .trim()
     .replace(TOOL_NAME_PATTERN, "_")
     .replace(/^_+|_+$/g, "");
-  const base = trimCodePoints(cleaned || `tool_${index + 1}`, KIRO_TOOL_NAME_MAX_LENGTH);
+  const base = trimCodePoints(cleaned || `tool_${index + 1}`, maxLength);
   let candidate = base;
   let suffix = 2;
   while (usedNames.has(candidate)) {
     const tail = `_${suffix++}`;
-    candidate = `${base.slice(0, KIRO_TOOL_NAME_MAX_LENGTH - tail.length)}${tail}`;
+    candidate = `${base.slice(0, maxLength - tail.length)}${tail}`;
   }
   usedNames.add(candidate);
   return candidate;
 }
+
+const uniqueName = uniqueToolName;
 
 function cleanSchemaValue(value) {
   if (Array.isArray(value)) return value.map(cleanSchemaValue);

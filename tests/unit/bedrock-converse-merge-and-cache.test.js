@@ -6,6 +6,9 @@ import { describe, it, expect } from "vitest";
 import { openaiToBedrockConverseRequest } from "../../open-sse/translator/request/openai-to-bedrock-converse.js";
 import { injectSystemPrompt } from "../../open-sse/rtk/systemInject.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
+import { bedrockConverseToOpenAIResponse } from "../../open-sse/translator/response/bedrock-converse-to-openai.js";
+import { initState } from "../../open-sse/translator/index.js";
+import { parseSSEToOpenAIResponse } from "../../open-sse/handlers/chatCore/sseToJsonHandler.js";
 
 const CP = { cachePoint: { type: "default" } };
 const SONNET = "global.anthropic.claude-sonnet-4-6";
@@ -70,5 +73,69 @@ describe("openai-to-bedrock-converse — cache points", () => {
     const out = openaiToBedrockConverseRequest(SONNET, { messages: [{ role: "system", content: "sys" }, { role: "user", content: "hi" }] }, true);
     injectSystemPrompt(out, FORMATS.BEDROCK_CONVERSE, "CAVEMAN");
     expect(out.system).toEqual([{ text: "sys" }, { text: "CAVEMAN" }, CP]);
+  });
+});
+
+describe("openai-to-bedrock-converse — tool descriptions", () => {
+  it("omits an empty or missing description instead of sending \"\" (Converse requires length >= 1)", () => {
+    const out = openaiToBedrockConverseRequest("m", {
+      messages: [{ role: "user", content: "hi" }],
+      tools: [
+        { type: "function", function: { name: "a", description: "", parameters: { type: "object", properties: {} } } },
+        { type: "function", function: { name: "b", parameters: { type: "object", properties: {} } } },
+        { type: "function", function: { name: "c", description: "  keep  ", parameters: { type: "object", properties: {} } } },
+      ],
+    }, true);
+    const specs = out.toolConfig.tools.map((t) => t.toolSpec);
+    expect("description" in specs[0]).toBe(false);
+    expect("description" in specs[1]).toBe(false);
+    expect(specs[2].description).toBe("keep");
+  });
+});
+
+describe("openai-to-bedrock-converse — tool names longer than 64 chars", () => {
+  const LONG = "mcp__claude_ai_Snowflake_Vidas_Alocac_es__complete_authentication"; // 65 chars
+  const body = {
+    messages: [
+      { role: "user", content: "go" },
+      { role: "assistant", content: null, tool_calls: [{ id: "t1", type: "function", function: { name: LONG, arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "t1", content: "ok" },
+    ],
+    tools: [
+      { type: "function", function: { name: LONG, description: "d", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "short", description: "d", parameters: { type: "object", properties: {} } } },
+    ],
+    tool_choice: { type: "function", function: { name: LONG } },
+  };
+
+  it("shortens the name everywhere it appears and exposes the reverse map", () => {
+    expect(LONG.length).toBe(65);
+    const out = openaiToBedrockConverseRequest("m", body, true);
+    const safe = out.toolConfig.tools[0].toolSpec.name;
+    expect(safe.length).toBeLessThanOrEqual(64);
+    expect(safe).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(out.toolConfig.tools[1].toolSpec.name).toBe("short");
+    expect(out.toolConfig.toolChoice).toEqual({ tool: { name: safe } });
+    expect(out.messages[1].content[0].toolUse.name).toBe(safe);
+    expect(out._toolNameMap).toEqual(new Map([[safe, LONG]]));
+  });
+
+  it("restores the client's name on the streamed toolUse and in the forced-JSON aggregation", () => {
+    const out = openaiToBedrockConverseRequest("m", body, true);
+    const [safe] = out._toolNameMap.keys();
+    const state = { ...initState(FORMATS.OPENAI), toolNameMap: out._toolNameMap, model: "m" };
+    const chunk = bedrockConverseToOpenAIResponse({ contentBlockStart: { contentBlockIndex: 0, start: { toolUse: { toolUseId: "x", name: safe } } } }, state);
+    const first = Array.isArray(chunk) ? chunk[0] : chunk;
+    expect(first.choices[0].delta.tool_calls[0].function.name).toBe(LONG);
+
+    const sse = [
+      `data: ${JSON.stringify({ messageStart: { role: "assistant" } })}`,
+      `data: ${JSON.stringify({ contentBlockStart: { contentBlockIndex: 0, start: { toolUse: { toolUseId: "x", name: safe } } } })}`,
+      `data: ${JSON.stringify({ contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: "{}" } } } })}`,
+      `data: ${JSON.stringify({ contentBlockStop: { contentBlockIndex: 0 } })}`,
+      `data: ${JSON.stringify({ messageStop: { stopReason: "tool_use" } })}`,
+    ].join("\n");
+    const json = parseSSEToOpenAIResponse(sse, "m", FORMATS.BEDROCK_CONVERSE, out._toolNameMap);
+    expect(json.choices[0].message.tool_calls[0].function.name).toBe(LONG);
   });
 });

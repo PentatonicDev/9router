@@ -52,11 +52,11 @@ function pickAssistantMessageForChatCompletion(output) {
  * translator first. Checking per-line (not just once) keeps already-openai
  * lines (e.g. a mid-stream error frame) from being mis-translated.
  */
-export function parseSSEToOpenAIResponse(rawSSE, fallbackModel, targetFormat) {
+export function parseSSEToOpenAIResponse(rawSSE, fallbackModel, targetFormat, toolNameMap = null) {
   const chunks = [];
   let streamError = null;
   const translateState = targetFormat && targetFormat !== FORMATS.OPENAI
-    ? { ...initState(FORMATS.OPENAI), model: fallbackModel }
+    ? { ...initState(FORMATS.OPENAI), model: fallbackModel, toolNameMap }
     : null;
 
   for (const line of String(rawSSE || "").split("\n")) {
@@ -135,7 +135,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel, targetFormat) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log, errorContext, phases: entryPhases }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, toolNameMap = null, customToolNames, trackDone, appendLog, reqTag, log, errorContext, phases: entryPhases }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
@@ -272,7 +272,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
   // Standard Chat Completions SSE path
   try {
     const sseText = await providerResponse.text();
-    const parsed = parseSSEToOpenAIResponse(sseText, model, targetFormat);
+    const parsed = parseSSEToOpenAIResponse(sseText, model, targetFormat, toolNameMap);
     if (!parsed) return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request", undefined, errorContext);
     if (parsed.error) {
       return createErrorResult(

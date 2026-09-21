@@ -59,7 +59,7 @@ export function bedrockConverseToOpenAIResponse(chunk, state) {
         index: idx,
         id: toolUse.toolUseId || fallbackToolCallId(idx),
         type: OPENAI_BLOCK.FUNCTION,
-        function: { name: toolUse.name || "", arguments: "" },
+        function: { name: state.toolNameMap?.get(toolUse.name) || toolUse.name || "", arguments: "" },
       }],
     });
   }

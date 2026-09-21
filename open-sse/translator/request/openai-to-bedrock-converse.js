@@ -22,6 +22,7 @@ import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
 import { DEFAULT_MAX_TOKENS } from "../../config/runtimeConfig.js";
 import { parseDataUri } from "../concerns/image.js";
 import { stripBedrockGeoPrefix } from "../../providers/bedrockGeoPrefix.js";
+import { uniqueToolName } from "../concerns/kiroConversation.js";
 
 const MIME_TO_BEDROCK_IMAGE_FORMAT = {
   "image/png": "png",
@@ -133,7 +134,7 @@ function pushMerged(out, role, blocks) {
   out.push({ role, content: blocks.length ? blocks : [{ text: "" }] });
 }
 
-function convertMessages(messages = []) {
+function convertMessages(messages = [], toolNames = new Map()) {
   const out = [];
   const systemTexts = [];
 
@@ -159,7 +160,7 @@ function convertMessages(messages = []) {
           blocks.push({
             toolUse: {
               toolUseId: tc.id || "",
-              name: fn.name || "",
+              name: toolNames.get(fn.name) || fn.name || "",
               input: safeParseJson(fn.arguments),
             },
           });
@@ -175,16 +176,33 @@ function convertMessages(messages = []) {
   return { messages: out, system: systemTexts.length ? [{ text: systemTexts.join("\n\n") }] : undefined };
 }
 
-function convertTools(tools) {
+const BEDROCK_TOOL_NAME_MAX_LENGTH = 64;
+
+// original name -> Converse-safe name ([a-zA-Z0-9_-]{1,64}); identity when already valid.
+function buildToolNameMap(tools) {
+  const map = new Map();
+  const used = new Set();
+  for (const [index, t] of (Array.isArray(tools) ? tools : []).entries()) {
+    const name = t?.function?.name;
+    if (typeof name !== "string" || !name || map.has(name)) continue;
+    map.set(name, uniqueToolName(name, index, used, BEDROCK_TOOL_NAME_MAX_LENGTH));
+  }
+  return map;
+}
+
+function convertTools(tools, toolNames) {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
   const toolSpecs = [];
   for (const t of tools) {
     if (!t) continue;
     if (t.type === OPENAI_BLOCK.FUNCTION && t.function) {
+      // description is optional in ToolSpecification but must be non-empty when present
+      // (400 "Member must have length greater than or equal to 1").
+      const description = typeof t.function.description === "string" ? t.function.description.trim() : "";
       toolSpecs.push({
         toolSpec: {
-          name: t.function.name,
-          description: t.function.description,
+          name: toolNames.get(t.function.name) || t.function.name,
+          ...(description ? { description } : {}),
           inputSchema: { json: t.function.parameters || { type: "object", properties: {} } },
         },
       });
@@ -193,12 +211,12 @@ function convertTools(tools) {
   return toolSpecs.length ? toolSpecs : undefined;
 }
 
-function convertToolChoice(choice) {
+function convertToolChoice(choice, toolNames) {
   if (!choice || choice === "none") return undefined;
   if (choice === "auto") return { auto: {} };
   if (choice === "required" || choice === "any") return { any: {} };
   if (typeof choice === "object" && choice.type === OPENAI_BLOCK.FUNCTION && choice.function?.name) {
-    return { tool: { name: choice.function.name } };
+    return { tool: { name: toolNames.get(choice.function.name) || choice.function.name } };
   }
   return undefined;
 }
@@ -231,7 +249,8 @@ function applyCachePoints(result, model) {
 }
 
 export function openaiToBedrockConverseRequest(model, body, stream /* , credentials */) {
-  const { messages, system } = convertMessages(body.messages);
+  const toolNames = buildToolNameMap(body.tools);
+  const { messages, system } = convertMessages(body.messages, toolNames);
 
   const result = { messages };
   if (system) result.system = system;
@@ -251,12 +270,18 @@ export function openaiToBedrockConverseRequest(model, body, stream /* , credenti
   }
   result.inferenceConfig = inferenceConfig;
 
-  const tools = convertTools(body.tools);
+  const tools = convertTools(body.tools, toolNames);
   if (tools) {
     result.toolConfig = { tools };
-    const toolChoice = convertToolChoice(body.tool_choice);
+    const toolChoice = convertToolChoice(body.tool_choice, toolNames);
     if (toolChoice) result.toolConfig.toolChoice = toolChoice;
   }
+
+  // Reverse map (safe -> original) so tool calls come back under the client's names;
+  // chatCore lifts `_toolNameMap` off the body before dispatch (same contract as Kiro).
+  const restored = new Map();
+  for (const [original, safe] of toolNames) if (original !== safe) restored.set(safe, original);
+  if (restored.size) result._toolNameMap = restored;
 
   applyCachePoints(result, model);
   return result;
