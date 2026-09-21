@@ -17,6 +17,7 @@ const MODES = [
 // Narrowest first: each value is a strict superset of the one above it, so the
 // list reads as the ceiling it is rather than as three unrelated options.
 const TOOL_MODES = [
+  { value: "off", label: "off — tool routing disabled" },
   { value: "hint", label: "hint — suggest only (default)" },
   { value: "none", label: "none — also allow “call nothing”" },
   { value: "forced", label: "forced — also allow pinning a tool" },

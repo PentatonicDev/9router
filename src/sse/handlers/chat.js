@@ -211,6 +211,10 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
 function createToolDecider({ settings, apiKey, log }) {
   const config = normalizeDecisionConfig(settings.decisionRouter);
   if (config.mode === "off") return null;
+  // toolMode "off" means tool routing is not wanted, so the call is not made at
+  // all: model routing still runs, and no tokens are spent on a verdict that
+  // would only be discarded.
+  if (config.toolMode === "off") return null;
 
   let credentialPromise = null;
   const memo = new Map();

@@ -117,15 +117,18 @@ export function resolveToolDecision({
   tools = [],
   plans = [],
   cacheSafe = true,
-  /** How far the operator lets a decision go, narrowest first. "hint" never
-   *  rewrites tool_choice at all; "none" adds the ability to say "call nothing";
-   *  "forced" adds pinning a tool. Each is a strict superset of the one before,
-   *  so the three settings mean three different things. */
+  /** How far the operator lets a decision go, narrowest first. "off" never
+   *  touches the request at all, which lets model routing run on its own;
+   *  "hint" appends a suggestion and never rewrites tool_choice; "none" adds the
+   *  ability to say "call nothing"; "forced" adds pinning a tool. Each is a
+   *  strict superset of the one before, so each setting means something. */
   allowed = "forced",
   minConfidence = DEFAULT_MIN_CONFIDENCE,
 } = {}) {
-  const rank = { hint: 0, none: 1, forced: 2 };
-  const ceiling = rank[allowed] ?? rank.forced;
+  const rank = { off: -1, hint: 0, none: 1, forced: 2 };
+  // An unrecognised value falls to the NARROWEST, not the widest: a typo in a
+  // setting must never hand the decision more authority than the operator granted.
+  const ceiling = rank[allowed] ?? rank.off;
   const allows = (mode) => rank[mode] <= ceiling;
 
   if (tools.length === 0) return { mode: "passthrough", reason: "no_tools" };

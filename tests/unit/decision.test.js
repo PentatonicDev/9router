@@ -396,3 +396,26 @@ describe("resolveCriteria with a vendor-prefixed model id", () => {
       .toContain("MINE");
   });
 });
+
+describe("toolMode as a ceiling", () => {
+  const tools = ["Bash", "Read"];
+  const plans = tools.map((name) => ({ name, kind: "function" }));
+  const answers = (pick, conf, needs) => ({
+    tool: { type: "choice", choice: pick, confidence: conf, probabilities: { [pick]: conf } },
+    needs_tool: { type: "noul", noul: needs },
+  });
+
+  it("off touches nothing, so model routing can run on its own", () => {
+    // Needed to isolate the two features in a bench, and to run model routing
+    // without tool routing on a roster where the latter measured poorly.
+    expect(resolveToolDecision({ answers: answers("Bash", 0.99, 0.9), tools, plans, allowed: "off" }))
+      .toMatchObject({ mode: "passthrough", reason: "mode_not_allowed" });
+    expect(resolveToolDecision({ answers: answers(NO_TOOL, 0.99, 0.1), tools, plans, allowed: "off" }))
+      .toMatchObject({ mode: "passthrough", reason: "mode_not_allowed" });
+  });
+
+  it("an unrecognised value grants the narrowest authority, not the widest", () => {
+    expect(resolveToolDecision({ answers: answers("Bash", 0.99, 0.9), tools, plans, allowed: "forc3d" }))
+      .toMatchObject({ mode: "passthrough", reason: "mode_not_allowed" });
+  });
+});
