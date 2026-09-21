@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const localDb = vi.hoisted(() => ({
+  getProviderConnections: vi.fn(async () => [{ provider: "vercel-ai-gateway", apiKey: "vk-test", isActive: true }]),
+}));
 vi.mock("@/lib/localDb", () => ({
   getSettings: async () => ({}),
-  getProviderConnections: async () => [{ provider: "vercel-ai-gateway", apiKey: "vk-test", isActive: true }],
+  getProviderConnections: localDb.getProviderConnections,
 }));
 vi.mock("@/lib/auth/resourceScope", () => ({
   getScopeFilter: async () => ({}),
@@ -127,5 +130,31 @@ describe("decision router config", () => {
     const vercel = decisionProviders().find((p) => p.id === "vercel-ai-gateway");
     expect(vercel.defaultModel).toBe("typesafe-ai/jev");
     expect(vercel.modelType).toBe("evaluation");
+  });
+});
+
+describe("proving a key that has no connection yet", () => {
+  // The Add-connection dialog validates a key it has not stored. Reading only from
+  // the stored connection made a working Vercel key answer "no active connection"
+  // — measured, and it left the provider impossible to add from the UI at all.
+  it("uses the key from the body even though a stored connection exists", async () => {
+    // No queued value here on purpose: the body key short-circuits the lookup, so
+    // `getProviderConnections` is never called and a queued `mockResolvedValueOnce`
+    // would leak into the next test.
+    mockFetch.mockResolvedValue(reply(200, JSON.stringify({ model: "typesafe-ai/jev", answers: {}, usage: { input_tokens: 271, output_tokens: 1 } })));
+
+    const data = await (await call({ provider: "vercel-ai-gateway", apiKey: "vk-from-dialog" })).json();
+
+    expect(data.valid).toBe(true);
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe("Bearer vk-from-dialog");
+  });
+
+  it("still reads the stored connection when the body carries no key", async () => {
+    mockFetch.mockResolvedValue(reply(200, JSON.stringify({ model: "typesafe-ai/jev", answers: {}, usage: { input_tokens: 271, output_tokens: 1 } })));
+
+    const data = await (await call({ provider: "vercel-ai-gateway" })).json();
+
+    expect(data.valid).toBe(true);
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe("Bearer vk-test");
   });
 });

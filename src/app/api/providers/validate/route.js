@@ -45,7 +45,7 @@ async function probeSearxng(base) {
 //
 // The decision model comes from the saved setting, not from the registry default,
 // so the probe tests what a request would actually use.
-async function probeJev(provider) {
+async function probeJev(provider, bodyApiKey) {
   const entry = REGISTRY.find((e) => e.id === provider || e.alias === provider);
   const url = decisionUrlFor(entry);
   if (!url) return null;
@@ -57,11 +57,17 @@ async function probeJev(provider) {
     return { ok: false, error: `${label} has no decision model configured. Set one in the Decisions panel.` };
   }
 
-  const connections = scopeVisible(
-    await getProviderConnections({ provider: entry.id, isActive: true }),
-    await getScopeFilter()
-  );
-  const apiKey = connections[0]?.apiKey || connections[0]?.accessToken;
+  // The Add-connection dialog proves a key it has not stored yet, so a key in the
+  // body wins. The decision panel proves the connection, which is why the stored
+  // one is the fallback rather than the only source.
+  let apiKey = bodyApiKey;
+  if (!apiKey) {
+    const connections = scopeVisible(
+      await getProviderConnections({ provider: entry.id, isActive: true }),
+      await getScopeFilter()
+    );
+    apiKey = connections[0]?.apiKey || connections[0]?.accessToken;
+  }
   if (!apiKey) {
     return { ok: false, error: `${label} has no active connection, so the decision route cannot authenticate. Add one in the ${label} panel.` };
   }
@@ -376,7 +382,7 @@ export async function POST(request) {
       }
 
       // Decision provider (jev): config-driven, key resolved from the route.
-      const decisionResult = await probeJev(provider);
+      const decisionResult = await probeJev(provider, apiKey);
       if (decisionResult && typeof decisionResult === "object") {
         return NextResponse.json({ valid: decisionResult.ok, error: decisionResult.error });
       }
