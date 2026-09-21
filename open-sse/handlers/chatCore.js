@@ -10,7 +10,6 @@ import { getModelTargetFormat, getModelSupportedFormats, getModelStrip, getModel
 import { PROVIDERS } from "../config/providers.js";
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
 import { HTTP_STATUS, TOKEN_SAVER_HEADER, DECISION_HEADER } from "../config/runtimeConfig.js";
-import { hasCacheBreakpoint } from "../decision/state.js";
 import { injectHint } from "../decision/injectHint.js";
 import { applyToolChoice } from "../decision/tools.js";
 import { handleBypassRequest } from "../utils/bypassHandler.js";
@@ -323,7 +322,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
         format: finalFormat,
         provider,
         model: upstreamModel,
-        cacheSafe: !hasCacheBreakpoint(translatedBody),
       });
       if (result?.mode && result.mode !== "passthrough") {
         const applied = result.mode === "hint"

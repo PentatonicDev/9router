@@ -8,7 +8,7 @@ import {
 } from "../../open-sse/decision/decide.js";
 import { normalizeAnswers, decisionUrlFor, DECISION_MODEL_TYPE } from "../../open-sse/decision/jev.js";
 import { buildState, hasCacheBreakpoint } from "../../open-sse/decision/state.js";
-import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist } from "../../open-sse/decision/questions.js";
+import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist, shortlistTools, SHORTLIST_MAX } from "../../open-sse/decision/questions.js";
 import { injectHint, hintText } from "../../open-sse/decision/injectHint.js";
 import { resolveCriteria } from "../../open-sse/decision/modelBriefs.js";
 import { extractTools, applyToolChoice, supportsToolChoice, UNSUPPORTED_EXECUTORS } from "../../open-sse/decision/tools.js";
@@ -112,26 +112,22 @@ describe("resolveToolDecision", () => {
   const answers = (pick, conf, needs) => ({ tool: choice(pick, conf), needs_tool: noul(needs) });
 
   it("forces the picked tool when there is no cache to protect", () => {
-    expect(resolveToolDecision({ answers: answers("Bash", 0.9, 0.8), tools, plans, cacheSafe: true }))
+    expect(resolveToolDecision({ answers: answers("Bash", 0.9, 0.8), tools, plans }))
       .toMatchObject({ mode: "forced", tool: "Bash" });
   });
 
   it("pins no-tool only when it is safe to mutate tool_choice", () => {
-    expect(resolveToolDecision({ answers: answers(NO_TOOL, 0.9, 0.1), tools, plans, cacheSafe: true }))
+    expect(resolveToolDecision({ answers: answers(NO_TOOL, 0.9, 0.1), tools, plans }))
       .toMatchObject({ mode: "none" });
   });
 
   // The cache rule. Mutating tool_choice rewrites the cached prefix; on a 60k
   // prefix at the top tier that costs more than many turns of the saving.
-  it("falls back to a tail hint when a cache breakpoint is present", () => {
-    expect(resolveToolDecision({ answers: answers("Bash", 0.9, 0.8), tools, plans, cacheSafe: false }))
+  it("moves to a hint rather than abstaining when forced is not allowed", () => {
+    // A hint is available at every ceiling, so a downgrade beats doing nothing.
+    expect(resolveToolDecision({ answers: answers("Bash", 0.9, 0.8), tools, plans, allowed: "hint" }))
       .toMatchObject({ mode: "hint", tool: "Bash" });
-    expect(resolveToolDecision({ answers: answers(NO_TOOL, 0.9, 0.1), tools, plans, cacheSafe: false }))
-      .toMatchObject({ mode: "passthrough", reason: "cache_breakpoint" });
-    // An operator who allows only hints gets no tool_choice mutation anywhere.
-    expect(resolveToolDecision({ answers: answers("Bash", 0.9, 0.8), tools, plans, cacheSafe: true, allowed: "hint" }))
-      .toMatchObject({ mode: "hint", tool: "Bash" });
-    expect(resolveToolDecision({ answers: answers(NO_TOOL, 0.9, 0.1), tools, plans, cacheSafe: true, allowed: "hint" }))
+    expect(resolveToolDecision({ answers: answers(NO_TOOL, 0.9, 0.1), tools, plans, allowed: "hint" }))
       .toMatchObject({ mode: "passthrough", reason: "mode_not_allowed" });
   });
 
@@ -417,5 +413,39 @@ describe("toolMode as a ceiling", () => {
   it("an unrecognised value grants the narrowest authority, not the widest", () => {
     expect(resolveToolDecision({ answers: answers("Bash", 0.99, 0.9), tools, plans, allowed: "forc3d" }))
       .toMatchObject({ mode: "passthrough", reason: "mode_not_allowed" });
+  });
+});
+
+describe("shortlistTools", () => {
+  const roster = Array.from({ length: 200 }, (_, i) => ({
+    name: `tool${i}`,
+    description: i === 7 ? "Runs the project test suite and reports failures." : `Operation ${i} on the project.`,
+  }));
+
+  it("leaves a roster that already fits untouched", () => {
+    const small = roster.slice(0, 10);
+    expect(shortlistTools(small, { messages: [{ role: "user", content: "x" }] })).toBe(small);
+  });
+
+  it("keeps the tool the request is about", () => {
+    const body = { messages: [{ role: "user", content: "run the project test suite" }] };
+    const kept = shortlistTools(roster, body);
+    expect(kept.length).toBe(SHORTLIST_MAX);
+    expect(kept.map((t) => t.name)).toContain("tool7");
+  });
+
+  it("keeps a tool the conversation already called", () => {
+    const body = {
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", name: "tool150", input: {} }] },
+        { role: "user", content: "agora faca outra coisa completamente diferente" },
+      ],
+    };
+    expect(shortlistTools(roster, body).map((t) => t.name)).toContain("tool150");
+  });
+
+  it("survives a body with no recognisable turns", () => {
+    expect(shortlistTools(roster, {})).toHaveLength(SHORTLIST_MAX);
+    expect(shortlistTools(roster, { messages: [null] })).toHaveLength(SHORTLIST_MAX);
   });
 });

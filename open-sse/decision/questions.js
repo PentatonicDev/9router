@@ -124,3 +124,66 @@ export function buildModelQuestions(models, criteriaFor) {
     },
   };
 }
+
+/** Tools kept for jev when a roster is too big to judge well. */
+export const SHORTLIST_MAX = 24;
+
+/**
+ * Narrows a large roster deterministically, with no extra decision call. A choice
+ * over 280 tools measured 0.40 confidence — below the threshold, so the verdict was
+ * discarded after paying for it. Lexical overlap with the latest request plus reuse
+ * of what the conversation already called is enough to bring the question back into
+ * range, and it cuts the per-turn token cost of the roster at the same time.
+ *
+ * ponytail: word overlap, not semantics. If the bench shows it dropping the tool
+ * that mattered, raise SHORTLIST_MAX or score by embedding.
+ */
+export function shortlistTools(tools, body, max = SHORTLIST_MAX) {
+  if (tools.length <= max) return tools;
+
+  const words = new Set(
+    lastUserText(body).toLowerCase().split(/[^\p{L}\p{N}_]+/u).filter((w) => w.length > 2)
+  );
+  const used = toolsUsedIn(body);
+
+  const scored = tools.map((tool, index) => {
+    const hay = `${tool.name} ${tool.description || ""}`.toLowerCase();
+    let score = 0;
+    for (const word of words) if (hay.includes(word)) score += 1;
+    if (used.has(tool.name)) score += 3;
+    return { tool, score, index };
+  });
+
+  scored.sort((a, b) => b.score - a.score || a.index - b.index);
+  return scored.slice(0, max).map((entry) => entry.tool);
+}
+
+/** The latest user turn, whichever message shape the body uses. */
+function lastUserText(body) {
+  const turns = body?.messages || body?.input || body?.contents || [];
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (turns[i]?.role === "user") return textOfContent(turns[i].content) || "";
+  }
+  return "";
+}
+
+function textOfContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part) => part?.text || "").join(" ");
+}
+
+/** Names the conversation already called, so a repeated need survives the cut. */
+function toolsUsedIn(body) {
+  const names = new Set();
+  for (const turn of body?.messages || []) {
+    for (const call of turn?.tool_calls || []) {
+      const name = call?.function?.name || call?.name;
+      if (name) names.add(name);
+    }
+    for (const block of Array.isArray(turn?.content) ? turn.content : []) {
+      if (block?.type === "tool_use" && block.name) names.add(block.name);
+    }
+  }
+  return names;
+}

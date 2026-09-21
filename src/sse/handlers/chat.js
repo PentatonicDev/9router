@@ -219,7 +219,7 @@ function createToolDecider({ settings, apiKey, log }) {
   let credentialPromise = null;
   const memo = new Map();
 
-  return async ({ body, format, provider, model, cacheSafe }) => {
+  return async ({ body, format, provider, model }) => {
     if (UNSUPPORTED_EXECUTORS.has(provider) || !supportsToolChoice(format)) {
       return { mode: "passthrough", reason: "executor_unsupported" };
     }

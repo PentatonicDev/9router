@@ -8,8 +8,8 @@
 import REGISTRY from "open-sse/providers/registry/index.js";
 import { getProviderCredentials } from "./auth.js";
 import { askJev, decisionUrlFor } from "open-sse/decision/jev.js";
-import { buildState, hasCacheBreakpoint } from "open-sse/decision/state.js";
-import { buildModelQuestions, buildToolQuestions } from "open-sse/decision/questions.js";
+import { buildState } from "open-sse/decision/state.js";
+import { buildModelQuestions, buildToolQuestions, shortlistTools } from "open-sse/decision/questions.js";
 import { resolveModelDecision, resolveToolDecision } from "open-sse/decision/decide.js";
 import { resolveCriteria } from "open-sse/decision/modelBriefs.js";
 
@@ -188,7 +188,8 @@ export async function decideComboModel({ body, models, comboName, config, target
 export async function decideTool({ body, tools, plans = [], config, target, log }) {
   if (tools.length === 0) return null;
 
-  const { questions } = buildToolQuestions(tools);
+  const kept = shortlistTools(tools, body);
+  const { questions } = buildToolQuestions(kept);
   // A much smaller window than the model decision uses: the conversation dominates
   // a decision's cost (~3,400 of 4,442 input tokens at 30 turns, against ~740 for a
   // 21-tool roster) and "what next" needs the latest request, not the whole
@@ -199,18 +200,15 @@ export async function decideTool({ body, tools, plans = [], config, target, log 
   if (!response) return null;
   await recordUsage({ response, log });
 
-  const cacheSafe = !hasCacheBreakpoint(body);
   return {
     ...resolveToolDecision({
       answers: response.answers,
-      tools: tools.map((t) => t.name),
+      tools: kept.map((t) => t.name),
       plans,
-      cacheSafe,
       allowed: config.toolMode,
       minConfidence: config.minConfidence,
     }),
     latencyMs: response.latencyMs,
-    cacheSafe,
   };
 }
 
