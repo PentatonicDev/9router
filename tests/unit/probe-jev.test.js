@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/localDb", () => ({
   getSettings: async () => ({}),
@@ -21,6 +21,15 @@ let mockFetch;
 beforeEach(() => {
   mockFetch = vi.fn();
   vi.stubGlobal("fetch", mockFetch);
+});
+
+// Leaving a stubbed global behind leaks into every other test file sharing this
+// worker: a file running next — or concurrently — that expects the real fetch, or
+// whose own `restoreAllMocks` removes this stub mid-test, then makes a real
+// network call and times out. Measured: unit/xai-oauth-service.test.js failed in
+// the full suite and passed alone for exactly this reason.
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 const reply = (status, text = "") => ({ ok: status >= 200 && status < 300, status, text: async () => text });
