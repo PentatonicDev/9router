@@ -35,3 +35,11 @@ export const MANAGEMENT_ENDPOINTS = [
   { method: "GET", path: "/v1/admin/request-details/{id}", purpose: "Get one raw request/response trace", adminOnly: false },
   { method: "GET", path: "/v1/models", purpose: "List routable models", adminOnly: false },
 ];
+
+// What the Profile page's reference table shows: a non-admin's administration
+// key can't call an adminOnly route at all, so those rows are dropped rather
+// than shown as unreachable; an admin sees everything, including which rows
+// are admin-only (the caller renders that as a badge, not a filtered set).
+export function visibleEndpointsFor(isAdmin) {
+  return isAdmin ? MANAGEMENT_ENDPOINTS : MANAGEMENT_ENDPOINTS.filter((ep) => !ep.adminOnly);
+}

@@ -1111,16 +1111,6 @@ export default function APIPageClient({ machineId }) {
           </div>
         )}
 
-        {isAdmin && (
-          <p className="mb-4 text-xs text-text-muted">
-            Administration keys moved to{" "}
-            <Link href="/dashboard/account" className="text-primary hover:underline">
-              Profile
-            </Link>
-            .
-          </p>
-        )}
-
         {keys.length === 0 ? (
           <div className="text-center py-12">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 text-primary mb-4">

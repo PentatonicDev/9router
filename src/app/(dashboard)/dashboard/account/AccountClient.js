@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Card, Button, Input, Modal, ConfirmModal, CardSkeleton } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
-import { MANAGEMENT_ENDPOINTS } from "@/shared/constants/managementEndpoints";
+import { visibleEndpointsFor } from "@/shared/constants/managementEndpoints";
 
 function maskKey(fullKey) {
   if (!fullKey || fullKey.length <= 10) return fullKey || "";
@@ -39,6 +39,7 @@ export default function AccountClient() {
 
   const ownOwner = status?.owner ?? null;
   const isAdmin = !!status?.isAdmin;
+  const visibleEndpoints = visibleEndpointsFor(isAdmin);
   const showIdentityPanel = status?.loginMethod === "OIDC" || status?.loginMethod === "SAML";
 
   const myAdminKey = keys.find((k) => k.kind === "admin" && k.owner === ownOwner) || null;
@@ -208,8 +209,9 @@ export default function AccountClient() {
           <p className="text-xs text-text-muted mb-3">
             Send the key as <code className="font-mono">Authorization: Bearer &lt;key&gt;</code> or{" "}
             <code className="font-mono">x-api-key: &lt;key&gt;</code>. Administration keys are refused
-            on <code className="font-mono">/v1/*</code> routing endpoints — they only drive this
-            management API.
+            on <code className="font-mono">/v1/*</code> routing endpoints. Your administration key can
+            call the endpoints below{isAdmin ? "" : ", not the admin-only ones"} — when resource scoping
+            is on, responses are limited to your own combos, providers and keys.
           </p>
           <div className="overflow-x-auto rounded-lg border border-border">
             <table className="w-full text-sm text-left">
@@ -218,16 +220,21 @@ export default function AccountClient() {
                   <th className="px-3 py-2">Method</th>
                   <th className="px-3 py-2">Path</th>
                   <th className="px-3 py-2">Purpose</th>
-                  <th className="px-3 py-2">Admin only</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {MANAGEMENT_ENDPOINTS.map((ep) => (
+                {visibleEndpoints.map((ep) => (
                   <tr key={`${ep.method} ${ep.path}`}>
                     <td className="px-3 py-2 font-mono text-xs">{ep.method}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{ep.path}</td>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      {ep.path}
+                      {ep.adminOnly && (
+                        <span className="ml-2 rounded bg-bg-subtle px-1.5 py-0.5 text-[10px] font-sans uppercase text-text-muted">
+                          admin
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-text-muted">{ep.purpose}</td>
-                    <td className="px-3 py-2">{ep.adminOnly ? "Yes" : "No"}</td>
                   </tr>
                 ))}
               </tbody>

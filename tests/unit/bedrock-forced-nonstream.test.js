@@ -24,6 +24,7 @@ vi.mock("@/lib/usageDb.js", () => ({
 }));
 
 const { FORMATS } = await import("../../open-sse/translator/formats.js");
+const { saveRequestDetail } = await import("@/lib/usageDb.js");
 const {
   handleForcedSSEToJson,
   parseSSEToOpenAIResponse
@@ -130,5 +131,47 @@ describe("handleForcedSSEToJson full path for Bedrock (targetFormat=bedrock-conv
     const json = await result.response.json();
     expect(json.choices[0].message.content).toBe("ok");
     expect(json.usage.total_tokens).toBe(12);
+  });
+
+  it("saves a request detail with phases + upstream event counts, like the streaming path does", async () => {
+    saveRequestDetail.mockClear();
+    const requestStartTime = Date.now() - 50;
+
+    await handleForcedSSEToJson({
+      providerResponse: bedrockResponse([
+        { messageStart: { role: "assistant" } },
+        { contentBlockDelta: { delta: { text: "ok" }, contentBlockIndex: 0 } },
+        { messageStop: { stopReason: "end_turn" } },
+        { metadata: { usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } } },
+      ]),
+      sourceFormat: FORMATS.OPENAI,
+      targetFormat: FORMATS.BEDROCK_CONVERSE,
+      provider: "bedrock",
+      model: MODEL,
+      body: { model: MODEL, messages: [] },
+      stream: false,
+      requestStartTime,
+      connectionId: "test-connection",
+      clientRawRequest: { endpoint: "/v1/chat/completions" },
+      trackDone: vi.fn(),
+      appendLog: vi.fn(),
+      phases: { t0: requestStartTime, entry_ms: 3, preprocess_ms: 4 }
+    });
+
+    expect(saveRequestDetail).toHaveBeenCalledTimes(1);
+    const detail = saveRequestDetail.mock.calls[0][0];
+
+    // phases carries the entry-side stages through, plus its own completion mark
+    expect(detail.phases.entry_ms).toBe(3);
+    expect(detail.phases.preprocess_ms).toBe(4);
+    expect(typeof detail.phases.client_complete_ms).toBe("number");
+    expect(detail.phases.client_complete_ms).toBeGreaterThanOrEqual(0);
+
+    // upstream mirrors buildUpstreamSummary's shape from the streaming path
+    expect(detail.upstream).toEqual({
+      events: { messageStart: 1, contentBlockDelta: 1, messageStop: 1, metadata: 1 },
+      finish_reason: "stop",
+      errored: false
+    });
   });
 });

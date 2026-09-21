@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve, dirname } from "node:path";
 import { describe, expect, it } from "vitest";
-import { MANAGEMENT_ENDPOINTS } from "@/shared/constants/managementEndpoints.js";
+import { MANAGEMENT_ENDPOINTS, visibleEndpointsFor } from "@/shared/constants/managementEndpoints.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -18,5 +18,18 @@ describe("MANAGEMENT_ENDPOINTS", () => {
   it.each(MANAGEMENT_ENDPOINTS)("$method $path resolves to a real route file", ({ path }) => {
     const file = routeFileFor(path);
     expect(existsSync(resolve(REPO_ROOT, file))).toBe(true);
+  });
+});
+
+describe("visibleEndpointsFor", () => {
+  it("hides every adminOnly entry from a non-admin", () => {
+    const visible = visibleEndpointsFor(false);
+    expect(visible.some((ep) => ep.adminOnly)).toBe(false);
+    expect(visible.length).toBeGreaterThan(0);
+  });
+
+  it("shows an admin every entry, admin-only included", () => {
+    expect(visibleEndpointsFor(true)).toEqual(MANAGEMENT_ENDPOINTS);
+    expect(visibleEndpointsFor(true).some((ep) => ep.adminOnly)).toBe(true);
   });
 });

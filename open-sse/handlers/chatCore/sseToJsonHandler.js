@@ -4,6 +4,7 @@ import { HTTP_STATUS } from "../../config/runtimeConfig.js";
 import { FORMATS } from "../../translator/formats.js";
 import { PROVIDERS } from "../../config/providers.js";
 import { translateResponse, initState } from "../../translator/index.js";
+import { countUpstreamEvents } from "../../utils/stream.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { shapeCompletionForClient } from "./completionToClient.js";
 
@@ -134,7 +135,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel, targetFormat) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log, errorContext }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log, errorContext, phases: entryPhases }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
@@ -145,6 +146,15 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
     provider, model, connectionId, apiKey,
     request: extractRequestConfig(body, stream),
     providerRequest: finalBody || translatedBody || null
+  };
+
+  // Same phases shape the streaming path records (see buildOnStreamComplete) —
+  // this handler aggregates a forced upstream stream into one JSON response,
+  // so "when did the client actually get its answer" is just as meaningful.
+  const buildPhases = () => {
+    const phases = { ...(entryPhases || {}) };
+    phases.client_complete_ms = Date.now() - (phases.t0 || requestStartTime);
+    return phases;
   };
 
   // Codex/Responses API SSE path
@@ -183,6 +193,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         // No streaming happened, so there is no first-token time to report. Writing
       // total here made a non-streamed call look like an instant TTFT.
       latency: { ttft: null, total: totalLatency },
+        phases: buildPhases(),
         tokens: { prompt_tokens: inTokensForLog, completion_tokens: usage.output_tokens || 0 },
         response: { content: textContent, thinking: null, finish_reason: jsonResponse.status || "unknown" },
         status: "success"
@@ -285,6 +296,11 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       // No streaming happened, so there is no first-token time to report. Writing
       // total here made a non-streamed call look like an instant TTFT.
       latency: { ttft: null, total: totalLatency },
+      phases: buildPhases(),
+      // Same upstream summary the streaming path records (buildUpstreamSummary in
+      // open-sse/utils/stream.js) — this SSE was just aggregated into one JSON
+      // response instead of piped live, the event counts are just as real.
+      upstream: { events: countUpstreamEvents(sseText), finish_reason: parsed.choices?.[0]?.finish_reason || null, errored: false },
       tokens: usage,
       response: {
         content: parsed.choices?.[0]?.message?.content || null,

@@ -5,6 +5,7 @@ import { addBufferToUsage, filterUsageForFormat } from "../../utils/usageTrackin
 import { createErrorResult } from "../../utils/error.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
 import { parseSSEToOpenAIResponse } from "./sseToJsonHandler.js";
+import { countUpstreamEvents } from "../../utils/stream.js";
 import { shapeCompletionForClient } from "./completionToClient.js";
 import { unwrapClineEnvelope } from "../../shared/clineEnvelope.js";
 import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, saveUsageStats, formatDoneLine } from "./requestDetail.js";
@@ -160,10 +161,14 @@ function toOpenAICompletion(responseBody, targetFormat) {
 /**
  * Handle non-streaming response from provider.
  */
-export async function handleNonStreamingResponse({ providerResponse, provider, errorContext, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log }) {
+export async function handleNonStreamingResponse({ providerResponse, provider, errorContext, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log, phases: entryPhases }) {
   trackDone();
   const contentType = providerResponse.headers.get("content-type") || "";
   let responseBody;
+  // Only set when a forced upstream event stream was aggregated into this JSON
+  // response (mirrors buildUpstreamSummary in open-sse/utils/stream.js) — a
+  // genuinely non-streaming JSON provider has no such summary to give.
+  let upstreamSummary;
 
   if (contentType.includes("text/event-stream")) {
     const sseText = await providerResponse.text();
@@ -173,6 +178,7 @@ export async function handleNonStreamingResponse({ providerResponse, provider, e
       return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request", undefined, errorContext);
     }
     responseBody = parsed;
+    upstreamSummary = { events: countUpstreamEvents(sseText), finish_reason: parsed.choices?.[0]?.finish_reason || null, errored: false };
   } else {
     try {
       responseBody = await providerResponse.json();
@@ -255,11 +261,15 @@ export async function handleNonStreamingResponse({ providerResponse, provider, e
   reqLogger.logConvertedResponse(translatedResponse);
 
   const totalLatency = Date.now() - requestStartTime;
+  const phases = { ...(entryPhases || {}) };
+  phases.client_complete_ms = Date.now() - (phases.t0 || requestStartTime);
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId, apiKey,
     // No streaming happened, so there is no first-token time to report. Writing
     // total here made a non-streamed call look like an instant TTFT.
     latency: { ttft: null, total: totalLatency },
+    phases,
+    upstream: upstreamSummary,
     tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
     request: extractRequestConfig(body, stream),
     providerRequest: finalBody || translatedBody || null,

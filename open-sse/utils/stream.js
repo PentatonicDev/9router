@@ -15,6 +15,45 @@ export { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER };
 // sharedEncoder is stateless — safe to share across streams
 const sharedEncoder = new TextEncoder();
 
+// Event-name counts feed both the debug flush line and the stored request
+// detail's upstream summary. Most upstreams name their events on an `event:`
+// line; JSON-only upstreams (Bedrock's re-encoded ConverseStreamOutput) never
+// send one and instead key each `data:` object by its single top-level field
+// (messageStart, contentBlockDelta, messageStop, metadata, …) — only treated
+// as an event name when there is exactly one key, so multi-field payloads
+// (OpenAI chunks, Claude/Responses events) can never collide with a real
+// `event:` line's count.
+function accumulateEventTypeCount(trimmed, eventTypeCounts) {
+  if (trimmed.startsWith("event:")) {
+    const evt = trimmed.slice(6).trim();
+    eventTypeCounts[evt] = (eventTypeCounts[evt] || 0) + 1;
+    return;
+  }
+  if (!trimmed.startsWith("data:")) return;
+  const dataStr = trimmed.slice(5).trim();
+  if (!dataStr || dataStr === "[DONE]") return;
+  try {
+    const parsed = JSON.parse(dataStr);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const keys = Object.keys(parsed);
+      if (keys.length === 1) eventTypeCounts[keys[0]] = (eventTypeCounts[keys[0]] || 0) + 1;
+    }
+  } catch {
+    // Not JSON, or malformed — real parsing/error handling happens downstream.
+  }
+}
+
+// Batch counterpart of accumulateEventTypeCount, for callers that already have
+// the full raw SSE text in hand (forced-stream → JSON aggregation) instead of
+// a live TransformStream — keeps upstream.events consistent across both paths.
+export function countUpstreamEvents(rawSSEText) {
+  const counts = {};
+  for (const line of String(rawSSEText || "").split("\n")) {
+    accumulateEventTypeCount(line.trim(), counts);
+  }
+  return counts;
+}
+
 /**
  * Stream modes
  */
@@ -156,12 +195,8 @@ export function createSSEStream(options = {}) {
       for (const line of lines) {
         if (streamErrored) break; // nothing may follow an error terminal
         const trimmed = line.trim();
-        // Event-name counts feed both the debug flush line and the stored request
-        // detail's upstream summary, so they're tracked regardless of debug mode.
-        if (trimmed.startsWith("event:")) {
-          const evt = trimmed.slice(6).trim();
-          eventTypeCounts[evt] = (eventTypeCounts[evt] || 0) + 1;
-        }
+        // Tracked regardless of debug mode — see accumulateEventTypeCount.
+        accumulateEventTypeCount(trimmed, eventTypeCounts);
         if (isDebugEnabled && trimmed) sseLineCount++;
 
         // Capture Responses API event name to preserve framing in same-format passthrough

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FORMATS } from "../../open-sse/translator/formats.js";
-import { createSSETransformStreamWithLogger } from "../../open-sse/utils/stream.js";
+import { createSSETransformStreamWithLogger, createPassthroughStreamWithLogger } from "../../open-sse/utils/stream.js";
 
 // Feeds a synthetic Responses-API SSE stream through the OPENAI_RESPONSES -> OPENAI
 // pivot (the shape a chat-completions client sees when talking to Codex) and
@@ -127,5 +127,71 @@ describe("Responses upstream diagnostics on the pivot to a chat-completions clie
     expect(finalChunk.choices[0].finish_reason).toBe("tool_calls");
     expect(upstream.terminal_event).toBe("response.completed");
     expect(upstream.output_items).toEqual({ function_call: 1 });
+  });
+});
+
+// Bedrock's executor re-encodes raw ConverseStreamOutput 1:1 as `data: {json}` lines
+// with no `event:` name — the event type is the single top-level key of the JSON
+// object (messageStart, contentBlockDelta, …). See accumulateEventTypeCount in
+// open-sse/utils/stream.js.
+describe("JSON-only upstream (no event: lines) counts events by their single top-level key", () => {
+  async function runPassthrough(lines) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(lines.join("\n")));
+        controller.close();
+      },
+    });
+
+    let upstream = null;
+    const transform = createPassthroughStreamWithLogger(
+      "bedrock", null, "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "conn", {},
+      (content, usage, ttftAt, firstContentAt, upstreamArg) => { upstream = upstreamArg; },
+    );
+
+    const output = stream.pipeThrough(transform);
+    const reader = output.getReader();
+    while (true) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+    return upstream;
+  }
+
+  function bedrockLine(event) {
+    return [`data: ${JSON.stringify(event)}`, ""];
+  }
+
+  it("counts messageStart/contentBlockDelta/contentBlockStop/messageStop/metadata", async () => {
+    const upstream = await runPassthrough([
+      ...bedrockLine({ messageStart: { role: "assistant" } }),
+      ...bedrockLine({ contentBlockDelta: { delta: { text: "hi" }, contentBlockIndex: 0 } }),
+      ...bedrockLine({ contentBlockDelta: { delta: { text: " there" }, contentBlockIndex: 0 } }),
+      ...bedrockLine({ contentBlockStop: { contentBlockIndex: 0 } }),
+      ...bedrockLine({ messageStop: { stopReason: "end_turn" } }),
+      ...bedrockLine({ metadata: { usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } } }),
+    ]);
+
+    expect(upstream.events).toEqual({
+      messageStart: 1,
+      contentBlockDelta: 2,
+      contentBlockStop: 1,
+      messageStop: 1,
+      metadata: 1,
+    });
+  });
+
+  it("does not miscount a [DONE] sentinel or a multi-key (non-Bedrock-shaped) data line", async () => {
+    const upstream = await runPassthrough([
+      ...bedrockLine({ messageStart: { role: "assistant" } }),
+      "data: [DONE]",
+      "",
+      // Two top-level keys — never mistaken for a single event name.
+      `data: ${JSON.stringify({ id: "chatcmpl-1", choices: [{ delta: { content: "hi" } }] })}`,
+      "",
+    ]);
+
+    expect(upstream.events).toEqual({ messageStart: 1 });
   });
 });
