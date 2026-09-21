@@ -13,6 +13,13 @@ export default defineConfig({
     // own copies of the test files but lack an installed node_modules (open-sse,
     // etc.), which makes provider imports fail during collection.
     exclude: ["**/node_modules/**", "**/.claude/**", "**/dist/**"],
+    // Files that dynamically import a heavy module graph spend most of this budget
+    // on the import itself, not on the assertions: measured, unit/xai-oauth-service
+    // takes ~3.2s alone against vitest's 5s default, so under parallel load (or a
+    // concurrent production build) it timed out instead of failing, and the red
+    // moved to another file on the next run. A file that needs more can still set
+    // its own budget; this is the floor for the whole suite.
+    testTimeout: 15000,
     // Restore `vi.stubGlobal` between tests. Without it a file that stubs `fetch`
     // and never unfixes leaks the stub into every other file sharing the worker,
     // and a file whose own `restoreAllMocks` removes a stub mid-test then makes a
