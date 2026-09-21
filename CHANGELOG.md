@@ -12,6 +12,8 @@
 - **Observability**: `GET /v1/admin/request-details` (and `/v1/admin/request-details/{id}`) expose the stored request metrics — latency, phases, tokens, provider, model, status, comboName, upstream summary — for `curl`-based debugging. Any active API key with an owner may call it once `requireLogin` and `enableObservability` are both on; a non-admin owner sees only the rows of its own keys and accounts (filtered in SQL, so pagination counts are exact), an admin owner sees everything. The collection route strips request/provider bodies unless `?full=1` is given, the by-id route returns the full stored record and answers 404 outside the caller's scope.
 
 ## Fixes
+- **Amazon Bedrock**: with Caveman or Ponytail on, every Bedrock call failed with `Unexpected field type`: the system-prompt injector treated the Converse body as OpenAI Chat and pushed a `system` role into `messages[]`. It now appends to the top-level `system: [{text}]` block.
+- **Amazon Bedrock**: the model picker (combos, key restrictions) listed only the built-in Bedrock catalog; it now shows the connection's discovered models and inference profiles, like Cursor and Cline.
 - **Console Log**: the pod picker only lists instances that wrote in the last 15 minutes, so pods that no longer exist stop appearing.
 - **Usage**: `usageDaily` and the lifetime request counter lost concurrent updates on Postgres (read, merge in JS, write back with no lock); the rows are now seeded and locked with `SELECT ... FOR UPDATE` inside the transaction. 50 concurrent writes count 50 (was 1). SQLite is unchanged.
 - **Quota jobs**: auto-ping and unlock start on process boot (`instrumentation.js`) instead of on the first dashboard render, so an instance serving only `/v1` runs them too.

@@ -260,6 +260,31 @@ describe("system-inject gemini", () => {
   });
 });
 
+describe("system-inject bedrock converse", () => {
+  it("appends {text} to the top-level system array, never a system role in messages[]", () => {
+    const body = { messages: [{ role: ROLE.USER, content: [{ text: "hi" }] }], system: [{ text: "sys" }] };
+    injectSystemPrompt(body, FORMATS.BEDROCK_CONVERSE, P1);
+    expect(body.system).toEqual([{ text: "sys" }, { text: P1 }]);
+    expect(body.messages).toEqual([{ role: ROLE.USER, content: [{ text: "hi" }] }]);
+  });
+
+  it("creates system array when absent and stays idempotent", () => {
+    const body = { messages: [{ role: ROLE.USER, content: [{ text: "hi" }] }] };
+    injectSystemPrompt(body, FORMATS.BEDROCK_CONVERSE, P1);
+    injectSystemPrompt(body, FORMATS.BEDROCK_CONVERSE, P1);
+    expect(body.system).toEqual([{ text: P1 }]);
+    expect(body.messages.some(m => m.role === ROLE.SYSTEM)).toBe(false);
+  });
+
+  it("caveman + ponytail stack in system[] on a converse body", () => {
+    const body = { messages: [{ role: ROLE.USER, content: [{ text: "hi" }] }] };
+    injectCaveman(body, FORMATS.BEDROCK_CONVERSE, "ultra");
+    injectPonytail(body, FORMATS.BEDROCK_CONVERSE, "ultra");
+    expect(body.system.map(b => b.text)).toEqual([CAVEMAN_PROMPTS.ultra, PONYTAIL_PROMPTS.ultra]);
+    expect(body.messages).toHaveLength(1);
+  });
+});
+
 describe("system-inject kiro", () => {
   // The kiro.dev gateway rejects any body carrying a top-level `systemPrompt`
   // with 400 REQUEST_BODY_INVALID, so the prompt goes into the user turn only.
