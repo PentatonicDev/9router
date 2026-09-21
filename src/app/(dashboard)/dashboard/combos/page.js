@@ -390,6 +390,9 @@ const STRATEGY_OPTIONS = [
   { value: "fallback", label: "Fallback — try in order" },
   { value: "round-robin", label: "Round Robin — rotate" },
   { value: "fusion", label: "Fusion — panel + judge" },
+  // System One picks which model of the pool serves each turn. Configure the
+  // provider, the allowlist and each model's brief under Decision Providers.
+  { value: "auto", label: "Auto — System One picks per turn" },
 ];
 
 function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdit, onDelete, onHide = null, strategy = {}, onSetStrategy }) {

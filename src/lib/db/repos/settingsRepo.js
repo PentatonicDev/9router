@@ -79,6 +79,23 @@ const DEFAULT_SETTINGS = {
   webSearchEmulation: true,
   // Admin-configured SearXNG base URL. Empty = SEARXNG_URL env / registry default.
   searxngUrl: "",
+  // System One decision routing. `mode` is one field with three states rather
+  // than an `enabled` flag plus a mode string: "off" never asks, "shadow" asks
+  // and logs but applies nothing (the baseline needed to measure before
+  // trusting), "enforce" applies. `models` is the allowlist — model strings
+  // and/or combo names, empty meaning nothing routes — and `briefs` holds the
+  // operator's own "what this model is FOR" text per model, which is what makes
+  // the decision accurate; the repo table is only the default.
+  decisionRouter: {
+    mode: "off",
+    route: "vercel",
+    models: [],
+    briefs: {},
+    toolMode: "hint",
+    minConfidence: 0.7,
+    switchConfidence: 0.85,
+    timeoutMs: 800,
+  },
 };
 
 async function readRaw() {

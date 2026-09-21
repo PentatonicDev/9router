@@ -14,6 +14,7 @@ import { TtsExampleCard } from "./components/TtsExampleCard";
 import { GenericExampleCard } from "./components/GenericExampleCard";
 import { SttExampleCard } from "./components/SttExampleCard";
 import SearxngInstanceCard from "./components/SearxngInstanceCard";
+import DecisionRouterCard from "./components/DecisionRouterCard";
 
 // MediaProviderDetailPage
 export default function MediaProviderDetailPage() {
@@ -164,9 +165,11 @@ export default function MediaProviderDetailPage() {
         <ConnectionsCard providerId={id} isOAuth={false} />
       )}
       {id === "searxng" && <SearxngInstanceCard onUrlChange={setSearxngUrl} />}
+      {id === "jev" && <DecisionRouterCard provider={provider} />}
 
-      {/* Models - hidden for tts/webSearch/webFetch (provider IS the model); custom uses prefix as alias */}
-      {kind !== "tts" && kind !== "webSearch" && kind !== "webFetch" && (
+      {/* Models - hidden for tts/webSearch/webFetch (provider IS the model) and for
+          decision (jev carries no `models` on purpose); custom uses prefix as alias */}
+      {kind !== "tts" && kind !== "webSearch" && kind !== "webFetch" && kind !== "decision" && (
         <ModelsCard
           providerId={id}
           kindFilter={kind}
@@ -174,13 +177,14 @@ export default function MediaProviderDetailPage() {
         />
       )}
 
-      {/* Provider Info — config-driven, supports searchConfig, fetchConfig, ttsConfig, embeddingConfig, searchViaChat */}
-      {!isCustom && (provider.searchConfig || provider.fetchConfig || provider.ttsConfig || provider.sttConfig || provider.embeddingConfig || provider.searchViaChat) && (
+      {/* Provider Info — config-driven, supports searchConfig, fetchConfig, ttsConfig, embeddingConfig, searchViaChat, decisionConfig */}
+      {!isCustom && (provider.searchConfig || provider.fetchConfig || provider.ttsConfig || provider.sttConfig || provider.embeddingConfig || provider.searchViaChat || provider.decisionConfig) && (
         <ProviderInfoCard
           config={
             kind === "webFetch" ? provider.fetchConfig
               : kind === "tts" ? provider.ttsConfig
               : kind === "stt" ? provider.sttConfig
+              : kind === "decision" ? provider.decisionConfig
               : kind === "embedding" ? provider.embeddingConfig
               : id === "searxng" && searxngUrl ? { ...provider.searchConfig, baseUrl: `${searxngUrl.replace(/\/+$/, "")}/search` }
               : provider.searchConfig || { mode: "chat-completions", defaultModel: provider.searchViaChat?.defaultModel, pricingUrl: provider.searchViaChat?.pricingUrl, freeTier: provider.searchViaChat?.freeTier }

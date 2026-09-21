@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -15,6 +15,17 @@ import { ConfirmModal } from "./Modal";
 const VISIBLE_MEDIA_KINDS = ["embedding", "image", "video", "tts", "stt"];
 // Combined entry: webSearch + webFetch share one page at /dashboard/media-providers/web
 const COMBINED_WEB_ITEM = { id: "web", label: "Web Fetch & Search", icon: "travel_explore", href: "/dashboard/media-providers/web" };
+
+// Kinds carrying a `group` get their own accordion below "Media Providers".
+const GROUPED_KINDS = MEDIA_PROVIDER_KINDS.reduce((acc, kind) => {
+  if (kind.group) (acc[kind.group] ||= []).push(kind);
+  return acc;
+}, {});
+
+const mediaKindFromPath = (pathname) => {
+  const match = pathname.match(/^\/dashboard\/media-providers\/([^/]+)/);
+  return match ? MEDIA_PROVIDER_KINDS.find((k) => k.id === match[1]) : null;
+};
 
 const navItems = [
   { href: "/dashboard/endpoint", label: "Endpoint & Key", icon: "api" },
@@ -41,6 +52,7 @@ const systemItems = [
 export default function Sidebar({ onClose }) {
   const pathname = usePathname();
   const [mediaOpen, setMediaOpen] = useState(false);
+  const [groupOpen, setGroupOpen] = useState({});
   const [isDisconnected, setIsDisconnected] = useState(false);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
@@ -76,6 +88,8 @@ export default function Sidebar({ onClose }) {
       .then(data => { if (data.hasUpdate) setUpdateInfo(data); })
       .catch(() => {});
   }, []);
+
+  const activeMediaKind = mediaKindFromPath(pathname);
 
   const isActive = (href) => {
     if (href === "/dashboard/endpoint") {
@@ -205,7 +219,7 @@ export default function Sidebar({ onClose }) {
               onClick={() => setMediaOpen((v) => !v)}
               className={cn(
                 "w-full flex items-center gap-3 px-3 py-1 rounded-lg transition-all group",
-                pathname.startsWith("/dashboard/media-providers")
+                pathname.startsWith("/dashboard/media-providers") && !activeMediaKind?.group
                   ? "bg-primary/10 text-primary"
                   : "text-text-muted hover:bg-surface-2 hover:text-text-main"
               )}
@@ -251,6 +265,47 @@ export default function Sidebar({ onClose }) {
               </div>
             )}
             </>)}
+
+            {/* Grouped provider categories — one sibling accordion per `group` */}
+            {showAdminItems && Object.entries(GROUPED_KINDS).map(([group, kinds]) => (
+              <Fragment key={group}>
+                <button
+                  onClick={() => setGroupOpen((s) => ({ ...s, [group]: !s[group] }))}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-3 py-1 rounded-lg transition-all group",
+                    activeMediaKind?.group === group
+                      ? "bg-primary/10 text-primary"
+                      : "text-text-muted hover:bg-surface-2 hover:text-text-main"
+                  )}
+                >
+                  <span className="material-symbols-outlined text-[18px]">{kinds[0].icon}</span>
+                  <span className="text-[13px] font-medium flex-1 text-left">{group}</span>
+                  <span className="material-symbols-outlined text-[14px] transition-transform" style={{ transform: groupOpen[group] ? "rotate(180deg)" : "rotate(0deg)" }}>
+                    expand_more
+                  </span>
+                </button>
+                {groupOpen[group] && (
+                  <div className="pl-4">
+                    {kinds.map((kind) => (
+                      <Link
+                        key={kind.id}
+                        href={`/dashboard/media-providers/${kind.id}`}
+                        onClick={onClose}
+                        className={cn(
+                          "flex items-center gap-3 px-4 py-1 rounded-lg transition-all group",
+                          pathname.startsWith(`/dashboard/media-providers/${kind.id}`)
+                            ? "bg-primary/10 text-primary"
+                            : "text-text-muted hover:bg-surface-2 hover:text-text-main"
+                        )}
+                      >
+                        <span className="material-symbols-outlined text-[16px]">{kind.icon}</span>
+                        <span className="text-sm">{kind.label}</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </Fragment>
+            ))}
 
             {(showAdminItems ? systemItems : []).map((item) => (
               <Link

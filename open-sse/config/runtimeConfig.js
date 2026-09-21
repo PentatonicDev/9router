@@ -81,6 +81,10 @@ export const DEFAULT_MIN_TOKENS = 32000;
 
 export const TOKEN_SAVER_HEADER = "x-9router-token-saver";
 
+// Per-request opt-out for decision routing (System One), same semantics as
+// TOKEN_SAVER_HEADER: the header value "off" disables it for that one request.
+export const DECISION_HEADER = "x-9router-decision";
+
 // Retry config for 429 responses (legacy - kept for backward compatibility)
 export const RETRY_CONFIG = {
   maxAttempts: 2,

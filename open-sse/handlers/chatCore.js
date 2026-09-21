@@ -9,7 +9,10 @@ import { createRequestLogger } from "../utils/requestLogger.js";
 import { getModelTargetFormat, getModelSupportedFormats, getModelStrip, getModelUpstreamId, getModelType, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.js";
 import { PROVIDERS } from "../config/providers.js";
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
-import { HTTP_STATUS, TOKEN_SAVER_HEADER } from "../config/runtimeConfig.js";
+import { HTTP_STATUS, TOKEN_SAVER_HEADER, DECISION_HEADER } from "../config/runtimeConfig.js";
+import { hasCacheBreakpoint } from "../decision/state.js";
+import { injectHint } from "../decision/injectHint.js";
+import { applyToolChoice } from "../decision/tools.js";
 import { handleBypassRequest } from "../utils/bypassHandler.js";
 import { trackPendingRequest, appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { getExecutor } from "../executors/index.js";
@@ -58,7 +61,7 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, errorContext = {}, onCredentialsRefreshed, onRequestSuccess, onDisconnect, signal, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, entryPhases, comboName, maxThinkingLevel = null }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, errorContext = {}, onCredentialsRefreshed, onRequestSuccess, onDisconnect, signal, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, entryPhases, comboName, maxThinkingLevel = null, decideTool = null }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   // Phases measured before this point (handler entry, auth, routing) plus the ones
@@ -307,6 +310,39 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     if (pxpipeResult.body) translatedBody = pxpipeResult.body;
     if (pxpipeSummary?.applied) xf.push(`PXPIPE:${pxpipeSummary.imageCount}img`);
     try { onPxpipeEvent?.({ provider, model, ...pxpipeSummary }); } catch { /* stats must not break requests */ }
+  }
+
+  // System One decision routing: which tool the model should call next.
+  //
+  // Placed last on purpose — after every token saver, because pxpipe reassigns
+  // `translatedBody` outright, and before anchorClaudeCache, which must pin the
+  // final body. A hint is appended at the tail (never inside the cached prefix),
+  // and tool_choice is only mutated when the request carries no cache breakpoint.
+  //
+  // The decision itself is delegated: open-sse cannot reach the app's settings or
+  // provider connections, so chat.js injects the caller through coreOptions.
+  if (typeof decideTool === "function"
+      && clientRawRequest?.headers?.[DECISION_HEADER]?.toLowerCase() !== "off") {
+    try {
+      const result = await decideTool({
+        body: translatedBody,
+        format: finalFormat,
+        provider,
+        model: upstreamModel,
+        cacheSafe: !hasCacheBreakpoint(translatedBody),
+      });
+      if (result?.mode && result.mode !== "passthrough") {
+        const applied = result.mode === "hint"
+          ? injectHint(translatedBody, finalFormat, result.tool)
+          : applyToolChoice(translatedBody, finalFormat, result);
+        xf.push(`DECISION:${result.mode}:${result.tool || "-"}:${applied ? "applied" : "noop"}`);
+      } else if (result) {
+        xf.push(`DECISION:skip:${result.reason || "-"}`);
+      }
+    } catch (error) {
+      // Fails open: a decision provider must never break the request it advises.
+      log?.warn?.("DECISION", `tool decision failed: ${error.message}`);
+    }
   }
 
   phases.preprocess_ms = Date.now() - preprocessT0;
