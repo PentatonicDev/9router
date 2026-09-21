@@ -3,7 +3,7 @@ import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 import { SSE_DONE, SSE_HEADERS } from "../utils/sseConstants.js";
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
-import { createBedrockRuntimeClient } from "../services/bedrockClient.js";
+import { createBedrockRuntimeClient, resolveBedrockModelId } from "../services/bedrockClient.js";
 
 const encoder = new TextEncoder();
 
@@ -68,7 +68,7 @@ export class BedrockExecutor extends BaseExecutor {
 
   async execute({ model, body, credentials, signal, log }) {
     const psd = credentials?.providerSpecificData || {};
-    const modelId = psd.inferenceProfilePrefix ? `${psd.inferenceProfilePrefix}${model}` : model;
+    const modelId = resolveBedrockModelId(model, psd);
 
     // One client per request — never cached/shared across connections (see class doc).
     const client = this.buildClient(credentials);

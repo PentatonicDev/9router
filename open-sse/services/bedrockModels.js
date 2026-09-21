@@ -76,52 +76,85 @@ async function checkModelAccess(client, modelId) {
       res.entitlementAvailability === "AVAILABLE" &&
       res.regionAvailability === "AVAILABLE" &&
       (!res.agreementAvailability || res.agreementAvailability.status === "AVAILABLE");
-    return granted ? "granted" : "denied";
-  } catch {
+    return { access: granted ? "granted" : "denied", error: null };
+  } catch (err) {
     // Includes AccessDeniedException for the availability call itself, and any
     // network/throttling failure — never escalate a single model's check into
-    // a discovery-wide failure.
-    return "unknown";
+    // a discovery-wide failure, but surface *why* access reads "unknown".
+    return { access: "unknown", error: humanizeBedrockError(err, "Checking model availability") };
   }
 }
 
-// region mode: concrete AWS region -> on-demand text models + the SYSTEM_DEFINED
-// inference profiles that cover it.
-async function discoverRegionMode(client, apiRegion, psd, errors) {
-  const modelItems = [];
-  const modelById = new Map();
+const ACCESS_RANK = { granted: 2, denied: 1, unknown: 0 };
 
+// Runs GetFoundationModelAvailability once per id (caller already deduped the
+// set) and folds failures into `errors`, deduped by message so N models
+// failing for the same permission reason produce one line, not N.
+async function resolveAccessById(client, modelIds, errors) {
+  const accessById = new Map();
+  if (modelIds.length === 0) return accessById;
+  const seenErrors = new Set();
+  await mapWithConcurrency(modelIds, ACCESS_CHECK_CONCURRENCY, async (modelId) => {
+    const { access, error } = await checkModelAccess(client, modelId);
+    accessById.set(modelId, access);
+    if (error && !seenErrors.has(error)) {
+      seenErrors.add(error);
+      errors.push(error);
+    }
+  });
+  return accessById;
+}
+
+function bestAccess(ids, accessById) {
+  let best = "unknown";
+  for (const id of ids) {
+    const a = accessById.get(id);
+    if (a && ACCESS_RANK[a] > ACCESS_RANK[best]) best = a;
+  }
+  return best;
+}
+
+// ACTIVE TEXT-modality models, on-demand or inference-profile-only alike —
+// the superset profiles are checked against (many Claude/Llama/Nova models
+// are INFERENCE_PROFILE-only and never appear in the on-demand list).
+async function buildTextModelMap(client, errors, context) {
+  const map = new Map();
   try {
     const res = await client.send(new ListFoundationModelsCommand({ byOutputModality: "TEXT" }));
     for (const m of res.modelSummaries || []) {
       if (!m.modelId) continue;
       if (m.modelLifecycle?.status !== "ACTIVE") continue;
-      if (m.responseStreamingSupported === false) continue;
-      if (!m.inferenceTypesSupported?.includes("ON_DEMAND")) continue;
-      const item = {
-        id: m.modelId,
+      map.set(m.modelId, {
+        inferenceTypesSupported: m.inferenceTypesSupported || [],
+        responseStreamingSupported: m.responseStreamingSupported !== false,
         name: m.modelName || m.modelId,
         vendor: m.providerName || vendorFromModelId(m.modelId),
-        kind: "model",
-        access: "unknown",
-        streaming: m.responseStreamingSupported !== false,
-      };
-      modelItems.push(item);
-      modelById.set(item.id, item);
+      });
     }
   } catch (err) {
-    errors.push(humanizeBedrockError(err, "Listing foundation models"));
+    errors.push(humanizeBedrockError(err, context));
   }
+  return map;
+}
 
-  // Access is per-model, checked once the model list is known, before
-  // profiles (which inherit access from the model they wrap) are built.
-  if (modelItems.length > 0) {
-    await mapWithConcurrency(modelItems, ACCESS_CHECK_CONCURRENCY, async (item) => {
-      item.access = await checkModelAccess(client, item.id);
-    });
+function onDemandModelItemsFrom(textModelById) {
+  const items = [];
+  for (const [id, info] of textModelById) {
+    if (!info.responseStreamingSupported) continue;
+    if (!info.inferenceTypesSupported.includes("ON_DEMAND")) continue;
+    items.push({ id, name: info.name, vendor: info.vendor, kind: "model", access: "unknown", streaming: true });
   }
+  return items;
+}
+
+// region mode: concrete AWS region -> on-demand text models + the SYSTEM_DEFINED
+// inference profiles that cover it.
+async function discoverRegionMode(client, apiRegion, psd, errors) {
+  const textModelById = await buildTextModelMap(client, errors, "Listing foundation models");
+  const modelItems = onDemandModelItemsFrom(textModelById);
 
   const profileItems = [];
+  const keptWrappedIds = new Set();
   try {
     const res = await client.send(new ListInferenceProfilesCommand({ typeEquals: "SYSTEM_DEFINED" }));
     for (const p of res.inferenceProfileSummaries || []) {
@@ -134,14 +167,23 @@ async function discoverRegionMode(client, apiRegion, psd, errors) {
       // An empty `regions` means the ARNs didn't parse — "can't confirm" must
       // exclude, not include, so this is `||` (not `&&`) on the empty case.
       if (!regions.length || !regions.includes(apiRegion)) continue;
-      const wrappedModel = wraps.map((id) => modelById.get(id)).find(Boolean);
+      let wrappedId = null;
+      let wrappedInfo = null;
+      for (const id of wraps) {
+        const info = textModelById.get(id);
+        if (info) { wrappedId = id; wrappedInfo = info; break; }
+      }
+      // Drop profiles that wrap no known TEXT model at all — these are
+      // image/video/embedding profiles (stability.*, twelvelabs.*, ...) that
+      // ListInferenceProfiles still returns but don't belong in a chat list.
+      if (!wrappedInfo) continue;
       const profileItem = {
         id: p.inferenceProfileId,
         name: p.inferenceProfileName || p.inferenceProfileId,
-        vendor: wrappedModel?.vendor || (wraps[0] ? vendorFromModelId(wraps[0]) : "unknown"),
+        vendor: wrappedInfo.vendor || vendorFromModelId(wrappedId),
         kind: "profile",
-        access: wrappedModel?.access || "unknown",
-        streaming: wrappedModel ? wrappedModel.streaming : true,
+        access: "unknown",
+        streaming: wrappedInfo.responseStreamingSupported !== false,
         regions,
         wraps,
       };
@@ -151,22 +193,37 @@ async function discoverRegionMode(client, apiRegion, psd, errors) {
         profileItem.matchesPrefix = p.inferenceProfileId.startsWith(psd.inferenceProfilePrefix);
       }
       profileItems.push(profileItem);
+      wraps.forEach((id) => keptWrappedIds.add(id));
     }
   } catch (err) {
     errors.push(humanizeBedrockError(err, "Listing inference profiles"));
   }
+
+  // Access is checked once per foundation model id, over the union of
+  // on-demand models and the models wrapped by kept profiles (a profile
+  // wrapping an INFERENCE_PROFILE-only model has no "model" item of its own
+  // to inherit access from otherwise). A profile's access is the best result
+  // among the models it wraps.
+  const idsToCheck = Array.from(new Set([...modelItems.map((i) => i.id), ...keptWrappedIds]));
+  const accessById = await resolveAccessById(client, idsToCheck, errors);
+  for (const item of modelItems) item.access = accessById.get(item.id) || "unknown";
+  for (const p of profileItems) p.access = bestAccess(p.wraps, accessById);
 
   return [...modelItems, ...profileItems];
 }
 
 // global mode: "global" is a runtime-only pseudo-region for Bedrock's
 // cross-region low-latency routing endpoint (bedrock-runtime.global.amazonaws.com)
-// — the control-plane API (ListFoundationModels/ListInferenceProfiles/
-// GetFoundationModelAvailability) has no such region, so discovery always
-// talks to a concrete home region and only lists the "global."-prefixed
-// SYSTEM_DEFINED profiles that route through it.
+// — the control plane has no such region, so discovery always talks to a
+// concrete home region and only lists the "global."-prefixed SYSTEM_DEFINED
+// profiles that route through it. There is no ListFoundationModels call here
+// (no on-demand/text-modality list to cross-check against, unlike region
+// mode) — but GetFoundationModelAvailability is a per-model-id call that
+// works fine against the concrete home region, so access is resolved
+// directly against the wrapped model ids.
 async function discoverGlobalMode(client, errors) {
   const items = [];
+  const keptWrappedIds = new Set();
   try {
     const res = await client.send(new ListInferenceProfilesCommand({ typeEquals: "SYSTEM_DEFINED" }));
     for (const p of res.inferenceProfileSummaries || []) {
@@ -177,16 +234,19 @@ async function discoverGlobalMode(client, errors) {
         name: p.inferenceProfileName || p.inferenceProfileId,
         vendor: wraps[0] ? vendorFromModelId(wraps[0]) : "unknown",
         kind: "profile",
-        // No sibling "model" items are listed in global mode, so there is
-        // nothing to inherit access from — left "unknown" rather than guessed.
         access: "unknown",
         streaming: true,
         wraps,
       });
+      wraps.forEach((id) => keptWrappedIds.add(id));
     }
   } catch (err) {
     errors.push(humanizeBedrockError(err, "Listing global inference profiles"));
   }
+
+  const accessById = await resolveAccessById(client, Array.from(keptWrappedIds), errors);
+  for (const item of items) item.access = bestAccess(item.wraps, accessById);
+
   return items;
 }
 
@@ -225,6 +285,8 @@ async function discoverBedrockModels(credentials) {
   const at = new Date().toISOString();
   // Every call that could produce an item failed -> nothing real to show.
   // Fall back to the registry's seeded static list rather than an empty page.
+  // (Checked against the raw list, before denied items are hidden below — a
+  // discovery that succeeded but found only denied items is not a failure.)
   if (items.length === 0 && errors.length > 0) {
     return {
       at,
@@ -232,10 +294,13 @@ async function discoverBedrockModels(credentials) {
       mode,
       items: seededFallbackItems(),
       errors: [...errors, "Bedrock discovery failed; showing the built-in model list instead."],
+      hidden: { denied: 0 },
     };
   }
 
-  return { at, region: apiRegion, mode, items, errors };
+  const deniedCount = items.filter((i) => i.access === "denied").length;
+  const visibleItems = items.filter((i) => i.access !== "denied");
+  return { at, region: apiRegion, mode, items: visibleItems, errors, hidden: { denied: deniedCount } };
 }
 
 const INVALID_CREDENTIAL_ERRORS = new Set([

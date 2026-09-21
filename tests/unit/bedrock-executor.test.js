@@ -115,6 +115,19 @@ describe("BedrockExecutor — credential branching", () => {
     const [command] = sendMock.mock.calls[0];
     expect(command.input.modelId).toBe("us.anthropic.claude-sonnet-4-5-20250929-v1:0");
   });
+
+  it("does not double-prefix a model id that already carries a geo prefix", async () => {
+    sendMock.mockResolvedValue(fakeConverseStream([{ messageStop: { stopReason: "end_turn" } }]));
+    const executor = new BedrockExecutor();
+    await executor.execute({
+      model: "us.anthropic.claude-3-haiku-20240307-v1:0",
+      body: { messages: [] },
+      credentials: { apiKey: "x", providerSpecificData: { authMethod: "api_key", region: "us-east-1", inferenceProfilePrefix: "global." } },
+      log: { warn: vi.fn() },
+    });
+    const [command] = sendMock.mock.calls[0];
+    expect(command.input.modelId).toBe("us.anthropic.claude-3-haiku-20240307-v1:0");
+  });
 });
 
 describe("BedrockExecutor — stream re-encoding", () => {

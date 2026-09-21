@@ -504,7 +504,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
                 </Button>
                 {bedrockDiscovery?.discovery && (
                   <span className="text-xs text-text-muted">
-                    {summarizeDiscoveryItems(bedrockDiscovery.discovery.items)}
+                    {summarizeDiscoveryItems(bedrockDiscovery.discovery)}
                   </span>
                 )}
               </div>

@@ -21,4 +21,17 @@ describe("summarizeDiscoveryItems", () => {
     expect(summarizeDiscoveryItems([])).toBe("0 models, 0 profiles · 0 with access granted");
     expect(summarizeDiscoveryItems(undefined)).toBe("0 models, 0 profiles · 0 with access granted");
   });
+
+  it("accepts the whole discovery object and appends the hidden-denied count", () => {
+    const discovery = {
+      items: [{ id: "a", kind: "model", access: "granted" }],
+      hidden: { denied: 3 },
+    };
+    expect(summarizeDiscoveryItems(discovery)).toBe("1 model, 0 profiles · 1 with access granted · 3 without access hidden");
+  });
+
+  it("omits the hidden-denied clause when there is nothing hidden", () => {
+    const discovery = { items: [{ id: "a", kind: "model", access: "granted" }], hidden: { denied: 0 } };
+    expect(summarizeDiscoveryItems(discovery)).toBe("1 model, 0 profiles · 1 with access granted");
+  });
 });

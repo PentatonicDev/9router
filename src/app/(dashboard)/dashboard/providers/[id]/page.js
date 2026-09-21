@@ -1134,9 +1134,8 @@ export default function ProviderDetailPage() {
                       setDiscoveryMessage(conn.id, { text: data?.error || "Failed to discover Bedrock models", isError: true });
                       return;
                     }
-                    const items = data?.discovery?.items || [];
                     const errors = data?.discovery?.errors || [];
-                    const summaryText = `Discovered ${summarizeDiscoveryItems(items)}`;
+                    const summaryText = `Discovered ${summarizeDiscoveryItems(data?.discovery)}`;
                     setDiscoveryMessage(conn.id, {
                       text: errors.length ? `${summaryText} — ${errors.join(" ")}` : summaryText,
                       isError: false,

@@ -1,6 +1,15 @@
 import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { BedrockClient } from "@aws-sdk/client-bedrock";
 
+// Bedrock cross-region inference profile prefixes — the geo/routing segment
+// that precedes the vendor id in a SYSTEM_DEFINED inference profile ("us.",
+// "eu.", "global.", ...). A model id already carrying one of these must never
+// get a connection's inferenceProfilePrefix prepended again (see
+// resolveBedrockModelId below).
+export const BEDROCK_INFERENCE_PROFILE_PREFIXES = [
+  "us-gov", "us", "eu", "apac", "global", "jp", "au", "ca", "sa", "me", "af",
+];
+
 /**
  * Shared per-connection Bedrock client config — the single source of truth for
  * both the data-plane executor (open-sse/executors/bedrock.js) and the
@@ -59,6 +68,24 @@ export function buildBedrockClientConfig(credentials) {
     clientConfig.authSchemePreference = ["httpBearerAuth"];
   }
   return clientConfig;
+}
+
+/**
+ * Resolves the modelId to send to Converse/ConverseStream: an ARN or a model
+ * id already carrying a cross-region inference profile prefix is passed
+ * through unchanged; only a bare vendor model id gets the connection's
+ * inferenceProfilePrefix prepended. Discovery (bedrockModels.js) surfaces
+ * profile ids that already have a geo prefix (e.g. "us.anthropic...",
+ * "global.anthropic..."), so prepending unconditionally produced invalid
+ * double-prefixed ids like "global.us.anthropic..." — see bedrock.js execute().
+ */
+export function resolveBedrockModelId(model, providerSpecificData) {
+  if (!model) return model;
+  if (model.startsWith("arn:aws:bedrock:")) return model;
+  const firstSegment = model.split(".")[0];
+  if (BEDROCK_INFERENCE_PROFILE_PREFIXES.includes(firstSegment)) return model;
+  const prefix = providerSpecificData?.inferenceProfilePrefix;
+  return prefix ? `${prefix}${model}` : model;
 }
 
 /** Data-plane client (Converse/ConverseStream) — one per request, never shared/cached. */

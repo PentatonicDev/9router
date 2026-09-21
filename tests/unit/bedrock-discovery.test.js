@@ -169,13 +169,14 @@ describe("resolveBedrockModels — region mode", () => {
     expect(profiles.find((p) => p.id.startsWith("eu.")).matchesPrefix).toBe(false);
   });
 
-  it("tolerates a denied or unknown availability result without failing discovery", async () => {
+  it("hides a denied model from items but counts it in hidden.denied", async () => {
     mockSend({
       models: [modelSummary()],
       availability: () => ({ authorizationStatus: "NOT_AUTHORIZED", entitlementAvailability: "AVAILABLE", regionAvailability: "AVAILABLE" }),
     });
     const result = await resolveBedrockModels(credsFor({ region: "us-east-1" }));
-    expect(result.items[0].access).toBe("denied");
+    expect(result.items).toHaveLength(0);
+    expect(result.hidden).toEqual({ denied: 1 });
     expect(result.errors).toEqual([]);
   });
 
@@ -186,10 +187,11 @@ describe("resolveBedrockModels — region mode", () => {
     ["entitlementAvailability", { authorizationStatus: "AUTHORIZED", entitlementAvailability: "NOT_AVAILABLE", regionAvailability: "AVAILABLE" }],
     ["regionAvailability", { authorizationStatus: "AUTHORIZED", entitlementAvailability: "AVAILABLE", regionAvailability: "NOT_AVAILABLE" }],
     ["agreementAvailability", { authorizationStatus: "AUTHORIZED", entitlementAvailability: "AVAILABLE", regionAvailability: "AVAILABLE", agreementAvailability: { status: "PENDING" } }],
-  ])("denies access when only %s is unavailable", async (_field, availabilityResult) => {
+  ])("denies (and hides) access when only %s is unavailable", async (_field, availabilityResult) => {
     mockSend({ models: [modelSummary()], availability: () => availabilityResult });
     const result = await resolveBedrockModels(credsFor({ region: "us-east-1" }));
-    expect(result.items[0].access).toBe("denied");
+    expect(result.items).toHaveLength(0);
+    expect(result.hidden.denied).toBe(1);
   });
 
   it("grants access when agreementAvailability is present and AVAILABLE", async () => {
@@ -201,14 +203,65 @@ describe("resolveBedrockModels — region mode", () => {
     expect(result.items[0].access).toBe("granted");
   });
 
-  it("maps an AccessDenied (or any) availability error to 'unknown', never failing the whole discovery", async () => {
+  it("maps an AccessDenied (or any) availability error to 'unknown', kept visible, with one error entry", async () => {
     mockSend({
       models: [modelSummary()],
       availability: () => Object.assign(new Error("nope"), { name: "AccessDeniedException" }),
     });
     const result = await resolveBedrockModels(credsFor({ region: "us-east-1" }));
     expect(result.items[0].access).toBe("unknown");
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatch(/Not authorized/);
+  });
+
+  it("dedupes repeated availability-check failures into a single error entry", async () => {
+    mockSend({
+      models: [modelSummary(), modelSummary({ modelId: "anthropic.claude-other-v1:0" })],
+      availability: () => Object.assign(new Error("nope"), { name: "AccessDeniedException" }),
+    });
+    const result = await resolveBedrockModels(credsFor({ region: "us-east-1" }));
+    expect(result.items.every((i) => i.access === "unknown")).toBe(true);
+    expect(result.errors).toHaveLength(1);
+  });
+
+  it("becomes granted for a Claude profile that wraps an INFERENCE_PROFILE-only text model (no on-demand sibling)", async () => {
+    mockSend({
+      models: [modelSummary({ inferenceTypesSupported: ["INFERENCE_PROFILE"] })],
+      profiles: [profileSummary()],
+    });
+    const result = await resolveBedrockModels(credsFor({ region: "us-east-1" }));
+
+    // The wrapped model is INFERENCE_PROFILE-only, so no "model" kind item exists for it.
+    expect(result.items.some((i) => i.kind === "model")).toBe(false);
+    const profile = result.items.find((i) => i.kind === "profile");
+    expect(profile).toBeTruthy();
+    expect(profile.access).toBe("granted");
+  });
+
+  it("drops a profile that wraps a non-text (e.g. image) model", async () => {
+    mockSend({
+      models: [modelSummary()], // TEXT-modality list never includes the image model below
+      profiles: [profileSummary({
+        inferenceProfileId: "us.stability.stable-image-core-v1:0",
+        models: [
+          { modelArn: "arn:aws:bedrock:us-east-1::foundation-model/stability.stable-image-core-v1:0" },
+          { modelArn: "arn:aws:bedrock:us-west-2::foundation-model/stability.stable-image-core-v1:0" },
+        ],
+      })],
+    });
+    const result = await resolveBedrockModels(credsFor({ region: "us-east-1" }));
+    expect(result.items.some((i) => i.kind === "profile")).toBe(false);
+    // Dropped by the modality filter, not by a crash while building the item.
     expect(result.errors).toEqual([]);
+  });
+
+  it("dedupes the availability check for a model id shared by an on-demand model item and a profile wrapping it", async () => {
+    mockSend({ models: [modelSummary()], profiles: [profileSummary()] });
+    await resolveBedrockModels(credsFor({ region: "us-east-1" }));
+    const availabilityCalls = sendMock.mock.calls.filter(
+      ([cmd]) => cmd.kind === "GetFoundationModelAvailability" && cmd.input.modelId === "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    );
+    expect(availabilityCalls).toHaveLength(1);
   });
 });
 
@@ -227,14 +280,56 @@ describe("resolveBedrockModels — global mode", () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0].id).toBe("global.anthropic.claude-sonnet-4-5-20250929-v1:0");
     expect(result.items[0].kind).toBe("profile");
-    // No ListFoundationModels call is ever made in global mode.
+    // Global mode never calls ListFoundationModels (no home-region on-demand
+    // list to cross-check against), but it does resolve access directly via
+    // GetFoundationModelAvailability against the wrapped model ids.
     expect(sendMock.mock.calls.some(([cmd]) => cmd.kind === "ListFoundationModels")).toBe(false);
+    expect(result.items[0].access).toBe("granted");
   });
 
   it("defaults the home region to us-east-1 when unset", async () => {
     mockSend({ profiles: [] });
     const result = await resolveBedrockModels(credsFor({ region: "global" }));
     expect(result.region).toBe("us-east-1");
+  });
+
+  it("hides a denied global profile and counts it in hidden.denied", async () => {
+    mockSend({
+      profiles: [profileSummary({ inferenceProfileId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0" })],
+      availability: () => ({ authorizationStatus: "NOT_AUTHORIZED", entitlementAvailability: "AVAILABLE", regionAvailability: "AVAILABLE" }),
+    });
+    const result = await resolveBedrockModels(credsFor({ region: "global", homeRegion: "us-east-1" }));
+    expect(result.items).toHaveLength(0);
+    expect(result.hidden).toEqual({ denied: 1 });
+  });
+
+  it("maps a global profile's availability failure to 'unknown', kept visible, with one error entry", async () => {
+    mockSend({
+      profiles: [profileSummary({ inferenceProfileId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0" })],
+      availability: () => Object.assign(new Error("nope"), { name: "AccessDeniedException" }),
+    });
+    const result = await resolveBedrockModels(credsFor({ region: "global", homeRegion: "us-east-1" }));
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].access).toBe("unknown");
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatch(/Not authorized/);
+  });
+
+  it("dedupes the availability check across two global profiles wrapping the same model id", async () => {
+    mockSend({
+      profiles: [
+        profileSummary({ inferenceProfileId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0" }),
+        profileSummary({
+          inferenceProfileId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0-alt",
+          models: [{ modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0" }],
+        }),
+      ],
+    });
+    await resolveBedrockModels(credsFor({ region: "global", homeRegion: "us-east-1" }));
+    const availabilityCalls = sendMock.mock.calls.filter(
+      ([cmd]) => cmd.kind === "GetFoundationModelAvailability" && cmd.input.modelId === "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    );
+    expect(availabilityCalls).toHaveLength(1);
   });
 });
 
