@@ -154,7 +154,7 @@ export const PROVIDER_PRICING = {
   gh: {
     "gpt-5.3-codex": { input: 1.75, output: 14.00, cached: 0.175, reasoning: 14.00, cache_creation: 1.75 },
   },
-  // Amazon Bedrock — generated from models.dev (scripts/sync-bedrock-pricing.mjs),
+  // Amazon Bedrock — generated from models.dev (bedrock-pricing skill),
   // keyed by the exact Bedrock id because regional profiles cost more than the
   // bare/global id. See bedrockPricing.js.
   bedrock: BEDROCK_PRICING,
@@ -407,7 +407,7 @@ export function getPricingForModel(provider, model) {
   // 4. Bedrock only: an id models.dev does not list yet (new launches) is
   // reduced to its canonical name and tried against the provider-agnostic
   // tables. ponytail: those are direct-API list prices, an approximation until
-  // scripts/sync-bedrock-pricing.mjs picks the model up.
+  // the bedrock-pricing skill picks the model up.
   if (provider === "bedrock") {
     const canonical = bedrockCanonicalModelName(model);
     if (MODEL_PRICING[canonical]) return MODEL_PRICING[canonical];

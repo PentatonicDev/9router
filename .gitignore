@@ -78,8 +78,10 @@ open-sse.old/
 .graphifyignore
 graphify-out/*
 
-# Local-only working dirs (notes, vendored repos, scripts, skills)
-.claude/
+# Local-only working dirs (notes, vendored repos, scripts). Repo skills under
+# .claude/skills/ are shared; everything else in .claude/ stays local.
+.claude/*
+!.claude/skills/
 .docs/
 .repo/
 .script/
