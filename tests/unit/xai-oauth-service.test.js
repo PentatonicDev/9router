@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("xai/oauth service", () => {
+// Every test re-imports the module graph from scratch, because the provider caches
+// its discovery at module scope and `vi.resetModules()` is what clears it. That
+// import is real work inside the test's budget: measured, this file takes ~3.2s
+// alone against vitest's 5s default, so with 60 files transforming in parallel it
+// was timing out rather than failing. The budget is the fix, not the assertions.
+describe("xai/oauth service", { timeout: 30000 }, () => {
   beforeEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();
