@@ -171,7 +171,7 @@ export async function decideComboModel({ body, models, comboName, config, apiKey
  */
 export async function decideTool({ body, tools, plans = [], config, apiKey, log }) {
   if (tools.length === 0) return null;
-  const questions = buildToolQuestions(tools);
+  const { questions } = buildToolQuestions(tools);
   const state = buildState(body, { maxStateChars: 24000 });
 
   const startedAt = Date.now();

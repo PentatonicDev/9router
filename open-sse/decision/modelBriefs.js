@@ -69,7 +69,7 @@ export const MODEL_BRIEFS = {
 export function resolveCriteria({ provider, model, briefs = {}, maxChars = 600 }) {
   const id = String(model || "");
   const override = briefs[`${provider}/${id}`] || briefs[id];
-  const curated = MODEL_BRIEFS[id] || matchSuffix(MODEL_BRIEFS, id);
+  const curated = MODEL_BRIEFS[id] || briefsFor(vendorSuffix(id)) || matchSuffix(MODEL_BRIEFS, id);
 
   const price = getPricingForModel(provider, id);
   const cost = price && typeof price.input === "number" ? describeCost(price) : "";
@@ -92,6 +92,22 @@ function describeCapabilities(provider, model) {
   if (caps.contextWindow) bits.push(`${Math.round(caps.contextWindow / 1000)}k context`);
   if (caps.vision) bits.push("reads images");
   return bits.length ? bits.join(", ") + "." : "";
+}
+
+/**
+ * Passthrough providers address a model with a vendor prefix baked in
+ * ("anthropic/claude-haiku-4.5" under the `vercel` alias), and the table is keyed
+ * by the bare id. Without this the lookup misses and the model silently falls to
+ * the derived criteria — the one measured to decide 0/4 correctly.
+ */
+function vendorSuffix(id) {
+  const slash = id.indexOf("/");
+  return slash > 0 ? id.slice(slash + 1) : null;
+}
+
+function briefsFor(id) {
+  if (!id) return null;
+  return MODEL_BRIEFS[id] || null;
 }
 
 /** Versioned ids ("claude-sonnet-4-5-20250929") fall back to their family brief. */

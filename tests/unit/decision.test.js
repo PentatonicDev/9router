@@ -202,18 +202,32 @@ describe("hasCacheBreakpoint", () => {
 });
 
 describe("questions", () => {
+  // Every builder returns { questions, ... }. The mixed contract is what let a
+  // caller destructure `{ questions }` from a bare map, get undefined, and fail
+  // open silently — the bug survived a live API test because fail-open hides it.
+  it("all builders use the same { questions } shape", () => {
+    const model = buildModelQuestions(["p/a"], () => "brief");
+    const tool = buildToolQuestions([{ name: "Bash", description: "runs" }]);
+    const short = buildShortlistQuestions(Array.from({ length: 200 }, (_, i) => ({ name: `t${i}` })));
+    for (const [name, built] of Object.entries({ model, tool, short })) {
+      expect(built, name).toHaveProperty("questions");
+      expect(typeof built.questions, name).toBe("object");
+      expect(Object.keys(built.questions).length, name).toBeGreaterThan(0);
+    }
+  });
+
   it("keeps non-tool options out of a model choice", () => {
     // A non-model option in a model question absorbed 39-45% of the probability
     // mass and wrecked the decision.
-    const { model } = buildModelQuestions(["p/haiku", "p/opus"], (m) => `brief for ${m}`);
+    const { questions: { model } } = buildModelQuestions(["p/haiku", "p/opus"], (m) => `brief for ${m}`);
     expect(Object.keys(model.criteria).sort()).toEqual(["p/haiku", "p/opus"]);
     expect(model.criteria).not.toHaveProperty(NO_TOOL);
   });
 
   it("offers the no-tool escape only in the tool choice", () => {
-    const q = buildToolQuestions([{ name: "Bash", description: "runs a command" }]);
-    expect(q.tool.criteria).toHaveProperty(NO_TOOL);
-    expect(q.needs_tool.type).toBe("noul");
+    const { questions } = buildToolQuestions([{ name: "Bash", description: "runs a command" }]);
+    expect(questions.tool.criteria).toHaveProperty(NO_TOOL);
+    expect(questions.needs_tool.type).toBe("noul");
   });
 
   it("shortlists the best few per shard when the roster is too big", () => {
@@ -346,5 +360,22 @@ describe("tool extraction and application", () => {
     expect(converse.toolConfig.toolChoice).toEqual({ none: {} });
     // hint is text, not tool_choice; nothing to write here
     expect(applyToolChoice({}, "claude", { mode: "hint", tool: "Bash" })).toBe(false);
+  });
+});
+
+describe("resolveCriteria with a vendor-prefixed model id", () => {
+  // Passthrough providers bake the vendor into the id. Missing the table lookup
+  // here is silent: the model falls to the derived criteria, measured to decide
+  // 0/4 correctly instead of 5/5.
+  it("finds the brief behind a passthrough prefix", () => {
+    const bare = resolveCriteria({ provider: "anthropic", model: "claude-opus-5" });
+    const prefixed = resolveCriteria({ provider: "vercel", model: "anthropic/claude-opus-5" });
+    expect(prefixed).toBe(bare);
+    expect(prefixed).toMatch(/root-cause debugging/i);
+  });
+
+  it("still lets the operator's own brief win, keyed either way", () => {
+    expect(resolveCriteria({ provider: "vercel", model: "anthropic/claude-opus-5", briefs: { "vercel/anthropic/claude-opus-5": "MINE" } }))
+      .toContain("MINE");
   });
 });

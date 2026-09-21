@@ -1,4 +1,9 @@
-// Builds the typed questions jev answers. Questions are cheap — extra ones barely
+// Builds the typed questions jev answers.
+//
+// Every builder here returns `{ questions, ... }` — one shape, no exception. An
+// earlier version had two builders return the map bare and one wrap it, and the
+// caller that destructured `{ questions }` from the bare one got undefined; the
+// decision then failed open silently, which is how it survived a live test. Questions are cheap — extra ones barely
 // change latency because they are evaluated in parallel — so one call can ask
 // both "which one" and "does this even need one".
 //
@@ -49,18 +54,20 @@ export function buildToolQuestions(tools) {
     "No tool call is needed right now: reply to the user in plain text (answer " +
     "directly, ask a clarifying question, or report what tools already returned).";
   return {
-    [TOOL_KEY]: {
-      type: "choice",
-      instructions:
-        "Given the conversation, what should the assistant do next? Pick the single " +
-        "tool whose call best advances the user's latest request.",
-      criteria,
-    },
-    [NEEDS_TOOL_KEY]: {
-      type: "noul",
-      instructions:
-        "Does the assistant need to call one of its tools now, rather than reply to " +
-        "the user in plain text?",
+    questions: {
+      [TOOL_KEY]: {
+        type: "choice",
+        instructions:
+          "Given the conversation, what should the assistant do next? Pick the single " +
+          "tool whose call best advances the user's latest request.",
+        criteria,
+      },
+      [NEEDS_TOOL_KEY]: {
+        type: "noul",
+        instructions:
+          "Does the assistant need to call one of its tools now, rather than reply to " +
+          "the user in plain text?",
+      },
     },
   };
 }
@@ -119,18 +126,20 @@ export function buildModelQuestions(models, criteriaFor) {
     if (text) criteria[model] = text;
   }
   return {
-    [MODEL_KEY]: {
-      type: "choice",
-      instructions:
-        "Which model should handle the next step? Pick the cheapest one that still " +
-        "handles this task well — weigh the task's real difficulty against the cost.",
-      criteria,
-    },
-    [DELIBERATION_KEY]: {
-      type: "noul",
-      instructions:
-        "Does this next step need real deliberation (multi-step reasoning, " +
-        "architecture, non-obvious debugging), or is it mechanical?",
+    questions: {
+      [MODEL_KEY]: {
+        type: "choice",
+        instructions:
+          "Which model should handle the next step? Pick the cheapest one that still " +
+          "handles this task well — weigh the task's real difficulty against the cost.",
+        criteria,
+      },
+      [DELIBERATION_KEY]: {
+        type: "noul",
+        instructions:
+          "Does this next step need real deliberation (multi-step reasoning, " +
+          "architecture, non-obvious debugging), or is it mechanical?",
+      },
     },
   };
 }
