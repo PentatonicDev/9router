@@ -17,7 +17,9 @@ export const COLORS = {
   cyan: "\x1b[36m"
 };
 
-// Buffer tokens to prevent context errors
+// Headroom added only to ESTIMATED usage (provider sent none): a client that
+// budgets its context window from our numbers must not overrun on a guess.
+// Real provider usage is forwarded unpadded.
 const BUFFER_TOKENS = 2000;
 
 // Get HH:MM:SS timestamp
@@ -26,9 +28,7 @@ function getTimeString() {
 }
 
 /**
- * Add buffer tokens to usage to prevent context errors
- * @param {object} usage - Usage object (any format)
- * @returns {object} Usage with buffer added
+ * Add the headroom buffer to an estimated usage object (any format).
  */
 export function addBufferToUsage(usage) {
   if (!usage || typeof usage !== "object") return usage;
