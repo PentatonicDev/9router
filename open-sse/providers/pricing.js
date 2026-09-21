@@ -4,6 +4,7 @@
 //   1. PROVIDER_PRICING[provider][model]  — provider-specific override
 //   2. MODEL_PRICING[model]               — canonical model price (provider-agnostic)
 //   3. PATTERN_PRICING                    — glob pattern match (e.g. "codex-*")
+import { stripBedrockGeoPrefix } from "./bedrockGeoPrefix.js";
 
 /**
  * Canonical model pricing — provider-agnostic.
@@ -402,6 +403,11 @@ export function matchPattern(pattern, model) {
  */
 export function getPricingForModel(provider, model) {
   if (!model) return null;
+
+  // Requests carry the inference-profile id ("us.anthropic.claude-sonnet-4-5-...")
+  // but PROVIDER_PRICING.bedrock is keyed by the bare vendor id — strip it up
+  // front, same as capabilities.js, or every lookup below misses and cost is 0.
+  if (provider === "bedrock") model = stripBedrockGeoPrefix(model);
 
   // 1. Provider-specific override
   if (provider && PROVIDER_PRICING[provider]?.[model]) {

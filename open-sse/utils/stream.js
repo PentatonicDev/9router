@@ -81,6 +81,7 @@ export function createSSEStream(options = {}) {
   let openAIResponsesDoneSent = false;
   let streamDoneSent = false;  // track duplicate [DONE] across transform + flush
   let streamErrored = false;   // an upstream error was emitted: no success terminal may follow
+  let finishChunkSentToClient = false; // an OpenAI finish_reason chunk actually reached the client
   let finalized = false;
 
   // Diagnostics for the stored request detail — why a turn ended the way it did.
@@ -449,6 +450,7 @@ export function createSSEStream(options = {}) {
             reqLogger?.appendConvertedChunk?.(output);
             controller.enqueue(sharedEncoder.encode(output));
             sseEmittedCount++;
+            if (sourceFormat === FORMATS.OPENAI && isFinishChunk) finishChunkSentToClient = true;
           }
         }
 
@@ -458,6 +460,24 @@ export function createSSEStream(options = {}) {
         // Claude/Gemini-family targets use their own termination framing instead.
         if (isOpenAIResponsesStream && !keepsOpenAIResponsesFormat && openAIResponsesTerminalSeen
           && sourceFormat === FORMATS.OPENAI && !streamDoneSent) {
+          const doneOutput = "data: [DONE]\n\n";
+          reqLogger?.appendConvertedChunk?.(doneOutput);
+          controller.enqueue(sharedEncoder.encode(doneOutput));
+          streamDoneSent = true;
+          finalizeStream();
+        }
+
+        // Any other (non-Responses) upstream pivoted to an OpenAI-format client
+        // needs the same treatment: the provider's own terminal framing (Claude
+        // message_stop, Bedrock Converse messageStop/metadata, Kiro/commandcode's
+        // own stop event, ...) has no [DONE] of its own once translated, and an
+        // OpenAI-compatible client SDK (e.g. openai-python) waits on the sentinel
+        // before it stops reading — some hang until timeout without it instead of
+        // treating EOF as done. Guarded by finishChunkSentToClient (the real
+        // OpenAI finish_reason chunk, not just state.finishReason, which a
+        // provider can set one event before the chunk carrying it is emitted).
+        if (!isOpenAIResponsesStream && sourceFormat === FORMATS.OPENAI
+          && finishChunkSentToClient && !streamDoneSent) {
           const doneOutput = "data: [DONE]\n\n";
           reqLogger?.appendConvertedChunk?.(doneOutput);
           controller.enqueue(sharedEncoder.encode(doneOutput));

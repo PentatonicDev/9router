@@ -1,14 +1,14 @@
 import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { BedrockClient } from "@aws-sdk/client-bedrock";
+import { BEDROCK_INFERENCE_PROFILE_PREFIXES } from "../providers/bedrockGeoPrefix.js";
 
-// Bedrock cross-region inference profile prefixes — the geo/routing segment
-// that precedes the vendor id in a SYSTEM_DEFINED inference profile ("us.",
-// "eu.", "global.", ...). A model id already carrying one of these must never
-// get a connection's inferenceProfilePrefix prepended again (see
-// resolveBedrockModelId below).
-export const BEDROCK_INFERENCE_PROFILE_PREFIXES = [
-  "us-gov", "us", "eu", "apac", "global", "jp", "au", "ca", "sa", "me", "af",
-];
+// Re-exported for callers that already import the prefix list from here —
+// canonical source is providers/bedrockGeoPrefix.js (dependency-free, so
+// browser-bundled modules like capabilities.js/pricing.js can use it too
+// without pulling in the AWS SDK). A model id already carrying one of these
+// prefixes must never get a connection's inferenceProfilePrefix prepended
+// again (see resolveBedrockModelId below).
+export { BEDROCK_INFERENCE_PROFILE_PREFIXES };
 
 /**
  * Shared per-connection Bedrock client config — the single source of truth for
@@ -78,13 +78,30 @@ export function buildBedrockClientConfig(credentials) {
  * profile ids that already have a geo prefix (e.g. "us.anthropic...",
  * "global.anthropic..."), so prepending unconditionally produced invalid
  * double-prefixed ids like "global.us.anthropic..." — see bedrock.js execute().
+ *
+ * When a persisted discovery is available, it is consulted BEFORE the prefix
+ * rule below: some on-demand-only models (e.g. Nova Micro) have no cross-region
+ * profile at all, so blindly prefixing a discovered on-demand id also produced
+ * an invalid modelId ("global.amazon.nova-micro-v1:0") that Bedrock rejected
+ * with ValidationException. If `model` (or `prefix + model`) matches a
+ * discovered item id exactly, that match wins; otherwise this falls through to
+ * the existing prefix rules unchanged (including when there's no discovery
+ * data at all).
  */
 export function resolveBedrockModelId(model, providerSpecificData) {
   if (!model) return model;
   if (model.startsWith("arn:aws:bedrock:")) return model;
+
+  const prefix = providerSpecificData?.inferenceProfilePrefix;
+  const discoveredItems = providerSpecificData?.discoveredModels?.items;
+  if (discoveredItems?.length) {
+    const discoveredIds = new Set(discoveredItems.map((item) => item.id));
+    if (discoveredIds.has(model)) return model;
+    if (prefix && discoveredIds.has(`${prefix}${model}`)) return `${prefix}${model}`;
+  }
+
   const firstSegment = model.split(".")[0];
   if (BEDROCK_INFERENCE_PROFILE_PREFIXES.includes(firstSegment)) return model;
-  const prefix = providerSpecificData?.inferenceProfilePrefix;
   return prefix ? `${prefix}${model}` : model;
 }
 

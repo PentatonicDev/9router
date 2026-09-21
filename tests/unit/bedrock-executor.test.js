@@ -116,6 +116,32 @@ describe("BedrockExecutor — credential branching", () => {
     expect(command.input.modelId).toBe("us.anthropic.claude-sonnet-4-5-20250929-v1:0");
   });
 
+  it("does not prefix a discovered on-demand-only model even when the connection has an inferenceProfilePrefix (Nova Micro)", async () => {
+    sendMock.mockResolvedValue(fakeConverseStream([{ messageStop: { stopReason: "end_turn" } }]));
+    const executor = new BedrockExecutor();
+    await executor.execute({
+      model: "amazon.nova-micro-v1:0",
+      body: { messages: [] },
+      credentials: {
+        apiKey: "x",
+        providerSpecificData: {
+          authMethod: "api_key",
+          region: "us-east-1",
+          inferenceProfilePrefix: "global.",
+          discoveredModels: {
+            items: [
+              { id: "amazon.nova-micro-v1:0", kind: "model", access: "granted" },
+              { id: "us.amazon.nova-micro-v1:0", kind: "profile" },
+            ],
+          },
+        },
+      },
+      log: { warn: vi.fn() },
+    });
+    const [command] = sendMock.mock.calls[0];
+    expect(command.input.modelId).toBe("amazon.nova-micro-v1:0");
+  });
+
   it("does not double-prefix a model id that already carries a geo prefix", async () => {
     sendMock.mockResolvedValue(fakeConverseStream([{ messageStop: { stopReason: "end_turn" } }]));
     const executor = new BedrockExecutor();

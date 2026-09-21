@@ -69,6 +69,26 @@ describe("Bedrock stream, end to end through createSSETransformStreamWithLogger"
     expect(completed.upstream.finish_reason).toBe("stop");
   });
 
+  it("terminates the client stream with data: [DONE] after the finish chunk", async () => {
+    const events = [
+      { messageStart: { role: "assistant" } },
+      { contentBlockDelta: { delta: { text: "hi" }, contentBlockIndex: 0 } },
+      { messageStop: { stopReason: "end_turn" } },
+      { metadata: { usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } } },
+    ];
+
+    const out = await runBedrockStream(events, () => {});
+
+    // The finish chunk (carrying usage) must be the frame right before [DONE] —
+    // not just present somewhere in the stream — matching every other
+    // translate-mode provider's termination shape for an OpenAI-format client.
+    const frames = out.split("\n\n").filter(Boolean);
+    expect(frames.at(-1)).toBe("data: [DONE]");
+    const finishFrame = JSON.parse(frames.at(-2).slice(5));
+    expect(finishFrame.choices[0].finish_reason).toBe("stop");
+    expect(finishFrame.usage).toBeTruthy();
+  });
+
   it("propagates finish_reason: tool_calls when the model stops for a tool call", async () => {
     let completed = null;
     const events = [

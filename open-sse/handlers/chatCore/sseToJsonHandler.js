@@ -3,6 +3,7 @@ import { createErrorResult } from "../../utils/error.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
 import { FORMATS } from "../../translator/formats.js";
 import { PROVIDERS } from "../../config/providers.js";
+import { translateResponse, initState } from "../../translator/index.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { shapeCompletionForClient } from "./completionToClient.js";
 
@@ -38,21 +39,45 @@ function pickAssistantMessageForChatCompletion(output) {
 /**
  * Parse OpenAI-style SSE text into a single chat completion JSON.
  * Used when provider forces streaming but client wants non-streaming.
+ *
+ * `targetFormat` is the format the raw SSE lines are actually IN (the
+ * provider's own wire format, e.g. bedrock-converse). It is optional because
+ * most forceStream providers (plain OpenAI-compatible, plus kiro/commandcode,
+ * which self-translate to OpenAI-shaped chunks inside their own executor
+ * before this function ever sees them) already hand back OpenAI chat-
+ * completion-chunk JSON — those lines carry `.choices` and are used as-is.
+ * A provider whose executor re-encodes its native event objects 1:1 (bedrock)
+ * does not, so those lines are run through the normal target->openai response
+ * translator first. Checking per-line (not just once) keeps already-openai
+ * lines (e.g. a mid-stream error frame) from being mis-translated.
  */
-export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
+export function parseSSEToOpenAIResponse(rawSSE, fallbackModel, targetFormat) {
   const chunks = [];
   let streamError = null;
+  const translateState = targetFormat && targetFormat !== FORMATS.OPENAI
+    ? { ...initState(FORMATS.OPENAI), model: fallbackModel }
+    : null;
 
   for (const line of String(rawSSE || "").split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("data:")) continue;
     const payload = trimmed.slice(5).trim();
     if (!payload || payload === "[DONE]") continue;
+    let chunk;
     try {
-      const chunk = JSON.parse(payload);
-      if (chunk?.error) streamError = chunk.error;
-      else chunks.push(chunk);
-    } catch { /* ignore malformed lines */ }
+      chunk = JSON.parse(payload);
+    } catch { continue; /* ignore malformed lines */ }
+
+    if (chunk?.error) { streamError = chunk.error; continue; }
+
+    if (translateState && !chunk?.choices) {
+      const translated = translateResponse(targetFormat, FORMATS.OPENAI, chunk, translateState);
+      if (Array.isArray(translated)) {
+        for (const item of translated) if (item) chunks.push(item);
+      }
+      continue;
+    }
+    chunks.push(chunk);
   }
 
   if (streamError) return { error: streamError };
@@ -236,7 +261,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
   // Standard Chat Completions SSE path
   try {
     const sseText = await providerResponse.text();
-    const parsed = parseSSEToOpenAIResponse(sseText, model);
+    const parsed = parseSSEToOpenAIResponse(sseText, model, targetFormat);
     if (!parsed) return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request", undefined, errorContext);
     if (parsed.error) {
       return createErrorResult(

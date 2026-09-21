@@ -148,6 +148,13 @@ const getPageInfo = (pathname) => {
       icon: "api",
       breadcrumbs: [],
     };
+  if (pathname.includes("/account"))
+    return {
+      title: "Profile",
+      description: "Your identity and administration keys",
+      icon: "person",
+      breadcrumbs: [],
+    };
   if (pathname.includes("/profile"))
     return {
       title: "Settings",
