@@ -235,7 +235,7 @@ export default function DecisionRouterCard({ provider }) {
             options={TOOL_MODES}
             value={config.toolMode}
             onChange={(e) => set("toolMode", e.target.value)}
-            hint="Ceiling on what a tool verdict may do, widest last. `hint` appends a suggestion and never touches tool_choice; `none` also allows pinning “call nothing”; `forced` also allows pinning a specific tool. A verdict above the ceiling is downgraded to a hint, not dropped."
+            hint="Ceiling on what a tool verdict may do, widest last. `hint` appends a suggestion and never touches tool_choice; `none` also allows pinning “call nothing”; `forced` also allows pinning a specific tool. A verdict above the ceiling is downgraded to a hint, not dropped. Measured warning: `none` failed every coding task it was tried on - with tool calling pinned off the model writes its tool call as text the client cannot run, so the work silently never happens. `hint` runs the same tasks cleanly; `off` is the cheapest that works."
           />
           <Input
             label="Min confidence"
