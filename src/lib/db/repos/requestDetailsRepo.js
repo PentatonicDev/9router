@@ -16,24 +16,16 @@ async function getObservabilityConfig() {
   try {
     const { getSettings } = await import("./settingsRepo.js");
     const settings = await getSettings();
+    // The dashboard toggle (settings.enableObservability) owns this. ENABLE_REQUEST_LOGS
+    // belongs to the debug file logs (open-sse/utils/requestLogger.js): "true" may still
+    // force details on for a headless setup, but "false" must never veto the toggle —
+    // it did, and a .env carrying ENABLE_REQUEST_LOGS=false silently dropped every row.
     const envRequestLogs = process.env.ENABLE_REQUEST_LOGS;
-    if (envRequestLogs !== undefined) {
-      const enabled = envRequestLogs.toLowerCase() === "true";
-      cachedConfig = {
-        enabled,
-        maxRecords: settings.observabilityMaxRecords || parseInt(process.env.OBSERVABILITY_MAX_RECORDS || String(DEFAULT_MAX_RECORDS), 10),
-        batchSize: settings.observabilityBatchSize || parseInt(process.env.OBSERVABILITY_BATCH_SIZE || String(DEFAULT_BATCH_SIZE), 10),
-        flushIntervalMs: settings.observabilityFlushIntervalMs || parseInt(process.env.OBSERVABILITY_FLUSH_INTERVAL_MS || String(DEFAULT_FLUSH_INTERVAL_MS), 10),
-        maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || "5", 10)) * 1024,
-      };
-      cachedConfigTs = Date.now();
-      return cachedConfig;
-    }
-    const envFallback = process.env.OBSERVABILITY_ENABLED !== "false";
+    const envForcesOn = envRequestLogs !== undefined && envRequestLogs.toLowerCase() === "true";
     const uiFlag = typeof settings.enableObservability === "boolean";
     const enabled = uiFlag
-      ? settings.enableObservability
-      : envFallback;
+      ? (settings.enableObservability || envForcesOn)
+      : (envRequestLogs !== undefined ? envForcesOn : process.env.OBSERVABILITY_ENABLED !== "false");
 
     cachedConfig = {
       enabled,
