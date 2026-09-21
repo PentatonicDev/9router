@@ -74,7 +74,17 @@ export async function handleSearch(request) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: query");
   }
 
-  // Combo expansion: providerInput may be a combo name → run fallback/round-robin across providers
+  return runSearch(body, providerInput, apiKey, settings);
+}
+
+/**
+ * Combo expansion (providerInput may be a combo name → fallback/round-robin
+ * across providers) + single-provider dispatch. Split out from handleSearch
+ * so webSearchRunner.js can call it directly after resolving auth itself.
+ *
+ * @returns {Promise<Response>}
+ */
+export async function runSearch(body, providerInput, apiKey, settings) {
   const combos = await getCombos();
   const comboModels = getComboModelsFromData(providerInput, combos);
   if (comboModels) {
@@ -85,7 +95,7 @@ export async function handleSearch(request) {
     return handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleProviderSearch(b, m, request, apiKey, settings),
+      handleSingleModel: (b, m) => handleSingleProviderSearch(b, m, apiKey, settings),
       log,
       comboName: providerInput,
       comboStrategy,
@@ -93,10 +103,10 @@ export async function handleSearch(request) {
     });
   }
 
-  return handleSingleProviderSearch(body, providerInput, request, apiKey, settings);
+  return handleSingleProviderSearch(body, providerInput, apiKey, settings);
 }
 
-async function handleSingleProviderSearch(body, providerInput, request, apiKey, settings) {
+async function handleSingleProviderSearch(body, providerInput, apiKey, settings) {
   const query = body.query;
   const providerId = resolveProviderId(providerInput);
   const resolvedProvider = AI_PROVIDERS[providerId];
@@ -106,7 +116,13 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
     return errorResponse(HTTP_STATUS.BAD_REQUEST, `Unknown provider: ${providerInput}`);
   }
 
-  const providerConfig = resolvedProvider.searchConfig;
+  let providerConfig = resolvedProvider.searchConfig;
+  // Admin-configured SearXNG URL (settings, not client input) overrides the
+  // registry default and is trusted past the SSRF guard — see
+  // tryDedicatedProvider in open-sse/handlers/search/index.js.
+  if (providerId === "searxng" && typeof settings.searxngUrl === "string" && settings.searxngUrl.trim()) {
+    providerConfig = { ...providerConfig, baseUrl: settings.searxngUrl.trim(), trustedBaseUrl: true };
+  }
   const supportsSearch = !!providerConfig || !!resolvedProvider.searchViaChat;
 
   if (!supportsSearch) {

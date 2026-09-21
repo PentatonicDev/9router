@@ -73,6 +73,12 @@ const DEFAULT_SETTINGS = {
   pxpipeAutoInstall: true,
   pxpipeMinChars: 25000,
   pxpipeTimeoutMs: 15000,
+  // Gateway-side emulation of Anthropic's web_search server tool for upstreams
+  // that can't run it natively (Bedrock, etc). Empty source = auto-pick.
+  webSearchSource: "",
+  webSearchEmulation: true,
+  // Admin-configured SearXNG base URL. Empty = SEARXNG_URL env / registry default.
+  searxngUrl: "",
 };
 
 async function readRaw() {

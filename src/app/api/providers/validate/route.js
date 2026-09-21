@@ -7,6 +7,7 @@ import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-t
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { probeBedrockCredential } from "open-sse/services/bedrockModels.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
+import { getSettings } from "@/lib/localDb";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
 // Returns true if API key is accepted (status !== 401 && !== 403).
@@ -19,7 +20,26 @@ async function probeWebProvider(provider, apiKey) {
   if (!isWebOnly) return null;
   const cfg = p.searchConfig || p.fetchConfig;
   if (!cfg) return null;
-  if (cfg.authType === "none") return true; // no-auth (e.g. searxng)
+  if (cfg.authType === "none") {
+    // searxng has no key to validate, but an admin-set base URL is worth a
+    // reachability check — the field is easy to typo and there's nothing
+    // else that would flag it before the first real search fails.
+    if (provider === "searxng") {
+      const settings = await getSettings();
+      const base = settings?.searxngUrl?.trim();
+      if (base) {
+        try {
+          const res = await fetch(`${base.replace(/\/+$/, "")}/search?q=ping&format=json`, {
+            signal: AbortSignal.timeout(5000),
+          });
+          return res.ok;
+        } catch {
+          return false;
+        }
+      }
+    }
+    return true; // no-auth (e.g. searxng with no custom URL)
+  }
 
   let url = cfg.validateUrl || cfg.baseUrl;
   const headers = { "Content-Type": "application/json" };

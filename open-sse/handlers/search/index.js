@@ -100,8 +100,13 @@ async function tryDedicatedProvider({ provider, providerConfig, body, credential
 
   log?.info?.("SEARCH", `${provider.id} | "${params.query.slice(0, 80)}" | type=${params.searchType}`);
 
+  // trustedBaseUrl means the admin set this URL in settings (not a client-supplied
+  // override) — e.g. a self-hosted SearXNG on an internal Docker network or
+  // localhost, which fetchPublic's SSRF guard would otherwise block.
+  const doFetch = providerConfig.trustedBaseUrl === true ? fetch : fetchPublic;
+
   try {
-    const resp = await fetchPublic(url, { ...init, headers: sanitizeHeaders(init.headers), signal: controller.signal });
+    const resp = await doFetch(url, { ...init, headers: sanitizeHeaders(init.headers), signal: controller.signal });
     clearTimeout(timer);
     if (!resp.ok) {
       const errText = await resp.text().catch(() => "");

@@ -3,9 +3,121 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Card, Badge, Button } from "@/shared/components";
+import { Card, Badge, Button, Toggle, Select, Input } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import { AI_PROVIDERS, getProvidersByKind } from "@/shared/constants/providers";
+
+// The shared Select always renders its own value="" placeholder option ahead
+// of whatever options are passed in, so a real "" option (our Auto choice)
+// would collide with it and never win the DOM's first-match-wins selection.
+// A non-empty sentinel sidesteps that instead of touching the shared component.
+const AUTO_SOURCE = "__auto__";
+
+function WebSearchSettingsCard({ searchProviders, searchCombos, connections }) {
+  const [emulation, setEmulation] = useState(true);
+  const [source, setSource] = useState("");
+  const [searxngUrl, setSearxngUrl] = useState("");
+  const [initial, setInitial] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/settings", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        const loaded = {
+          webSearchEmulation: data.webSearchEmulation !== false,
+          webSearchSource: data.webSearchSource || "",
+          searxngUrl: data.searxngUrl || "",
+        };
+        setEmulation(loaded.webSearchEmulation);
+        setSource(loaded.webSearchSource);
+        setSearxngUrl(loaded.searxngUrl);
+        setInitial(loaded);
+      } catch { /* noop */ }
+    })();
+  }, []);
+
+  const dirty = !!initial && (
+    emulation !== initial.webSearchEmulation ||
+    source !== initial.webSearchSource ||
+    searxngUrl !== initial.searxngUrl
+  );
+
+  const handleSave = async () => {
+    setSaving(true);
+    setJustSaved(false);
+    const payload = { webSearchEmulation: emulation, webSearchSource: source, searxngUrl };
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setInitial(payload);
+        setJustSaved(true);
+      }
+    } catch { /* noop */ }
+    setSaving(false);
+  };
+
+  const providerOptions = searchProviders
+    .filter((p) => p.noAuth || connections.some((c) => c.provider === p.id))
+    .map((p) => ({ value: p.id, label: p.name }));
+  const comboOptions = searchCombos.map((c) => ({ value: c.name, label: `${c.name} (combo)` }));
+  const sourceOptions = [
+    { value: AUTO_SOURCE, label: "Auto (SearXNG if configured, else first connected provider)" },
+    ...providerOptions,
+    ...comboOptions,
+  ];
+
+  return (
+    <Card padding="sm">
+      <h2 className="text-base font-semibold mb-1">Web search inside chat</h2>
+      <p className="text-xs text-text-muted mb-4">
+        Controls how the gateway answers a web_search request on upstreams that cannot run it natively.
+      </p>
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">
+              Emulate Anthropic web_search for providers without native search
+            </p>
+            <p className="text-xs text-text-muted mt-0.5">
+              Lets Claude Code&rsquo;s WebSearch work on Bedrock/OpenAI-compatible upstreams through the source below.
+            </p>
+          </div>
+          <Toggle checked={emulation} onChange={setEmulation} />
+        </div>
+
+        <Select
+          label="Search source"
+          value={source === "" ? AUTO_SOURCE : source}
+          onChange={(e) => setSource(e.target.value === AUTO_SOURCE ? "" : e.target.value)}
+          options={sourceOptions}
+        />
+
+        <Input
+          label="SearXNG URL"
+          value={searxngUrl}
+          onChange={(e) => setSearxngUrl(e.target.value)}
+          placeholder="http://searxng:8080 — leave blank to use SEARXNG_URL"
+          hint="The instance must have search.formats including json enabled. Private/internal hostnames are allowed here since the admin is the one setting it."
+        />
+
+        <div className="flex items-center gap-3">
+          <Button size="sm" onClick={handleSave} disabled={!dirty || saving}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+          {justSaved && !dirty && <span className="text-xs text-success">Saved</span>}
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 function getEffectiveStatus(conn) {
   const isCooldown = Object.entries(conn).some(
@@ -190,6 +302,10 @@ export default function WebProvidersPage() {
 
   return (
     <div className="flex flex-col gap-8">
+      <WebSearchSettingsCard
+        searchProviders={searchProviders} searchCombos={searchCombos} connections={connections}
+      />
+
       <Section
         title="Web Search" icon="search" kind="webSearch"
         providers={searchProviders} connections={connections} combos={searchCombos}

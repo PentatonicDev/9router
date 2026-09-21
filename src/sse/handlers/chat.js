@@ -28,6 +28,7 @@ import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { adminKeyRefusal } from "../utils/adminKeyGuard.js";
 import { THINKING_ORDER } from "open-sse/translator/concerns/thinking.js";
+import { hasWebSearchServerTool, emulateWebSearch } from "../services/webSearchEmulation.js";
 
 // Effective thinking cap for one candidate = the tighter (lower THINKING_ORDER
 // position) of the combo-wide cap and that candidate's own per-model cap;
@@ -344,8 +345,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       comboModelOptions?.maxThinking ?? null,
       comboModelOptions?.modelOptions?.[modelStr]?.maxThinking ?? null
     );
-    const result = await handleChatCore({
-      body: { ...body, model: `${provider}/${model}` },
+    // Detect source format by endpoint + body
+    const clientFormat = request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null;
+    const coreOptions = {
       modelInfo: { provider, model },
       credentials: refreshedCredentials,
       log,
@@ -377,8 +379,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       entryPhases,
       comboName: routingContext.comboName,
       signal,
-      // Detect source format by endpoint + body
-      sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,
+      sourceFormatOverride: clientFormat,
       onCredentialsRefreshed: async (newCreds) => {
         await updateProviderCredentials(credentials.connectionId, {
           ...newCreds,
@@ -391,7 +392,27 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         // "Consecutive" strikes: a success clears the breaker for this pair.
         clearAntigravityStrikes(credentials.connectionId, model);
       }
-    });
+    };
+    const coreBody = { ...body, model: `${provider}/${model}` };
+    // Bedrock and every non-native-Anthropic provider can't run Anthropic's
+    // server-side web_search tool — the translator turns it into an inert
+    // client tool otherwise. Native Anthropic (provider === "claude") always
+    // runs it itself.
+    const needsWebSearchEmulation = chatSettings.webSearchEmulation !== false
+      && clientFormat === FORMATS.CLAUDE
+      && provider !== "claude"
+      && hasWebSearchServerTool(body);
+    const result = needsWebSearchEmulation
+      ? await emulateWebSearch({
+        body: coreBody,
+        stream: body.stream === true,
+        provider,
+        settings: chatSettings,
+        apiKey,
+        log,
+        callCore: (b) => handleChatCore({ ...coreOptions, body: b }),
+      })
+      : await handleChatCore({ ...coreOptions, body: coreBody });
 
     if (result.success) return withRequestId(result.response, errorContext);
     if (result.status === 499 || signal?.aborted) return withRequestId(result.response, errorContext);

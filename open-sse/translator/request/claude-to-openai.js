@@ -129,6 +129,35 @@ function fixMissingToolResponsesOpenAI(messages) {
   }
 }
 
+// Gateway-synthesized web_search_result.encrypted_content carries "9r:" + base64url JSON
+// { snippet, published_at } so the emulated tool can surface a snippet. Anthropic's own
+// encrypted_content is opaque ciphertext with no "9r:" prefix — never attempt to decode that.
+function decodeSynthesizedSnippet(encryptedContent) {
+  if (typeof encryptedContent !== "string" || !encryptedContent.startsWith("9r:")) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encryptedContent.slice(3), "base64url").toString("utf8"));
+    return typeof parsed?.snippet === "string" ? parsed.snippet : null;
+  } catch {
+    return null;
+  }
+}
+
+// Render a Claude web_search_tool_result block's content as plain text for an OpenAI tool message.
+function renderWebSearchResult(content) {
+  if (Array.isArray(content)) {
+    if (content.length === 0) return "No results.";
+    return content.map((r, i) => {
+      let entry = `${i + 1}. ${r?.title || ""}\n${r?.url || ""}`;
+      if (r?.page_age) entry += `\n${r.page_age}`;
+      const snippet = decodeSynthesizedSnippet(r?.encrypted_content);
+      if (snippet) entry += `\n${snippet}`;
+      return entry;
+    }).join("\n\n");
+  }
+  if (content?.error_code) return `Error: ${content.error_code}`;
+  return "";
+}
+
 // Wrap mid-conversation system text so it ends as a user turn (avoids Anthropic prefill 400).
 // Uses <instructions> tags that Claude models treat as authoritative directives.
 function systemReminderText(content) {
@@ -167,11 +196,34 @@ function convertClaudeMessage(msg) {
     const parts = [];
     const toolCalls = [];
     const toolResults = [];
+    // Anthropic keeps a server_tool_use's result as an assistant-side block (unlike
+    // TOOL_RESULT, which arrives in a later user message) — collected separately so it
+    // becomes a "tool" message emitted right after this assistant message, not folded
+    // into the toolResults/user-message path below.
+    const serverToolResults = [];
 
     for (const block of msg.content) {
       switch (block.type) {
         case CLAUDE_BLOCK.TEXT:
           parts.push({ type: OPENAI_BLOCK.TEXT, text: block.text });
+          break;
+
+        case CLAUDE_BLOCK.SERVER_TOOL_USE:
+          toolCalls.push({
+            id: block.id,
+            type: OPENAI_BLOCK.FUNCTION,
+            function: {
+              name: block.name || "web_search",
+              arguments: JSON.stringify(block.input || {})
+            }
+          });
+          break;
+
+        case CLAUDE_BLOCK.WEB_SEARCH_TOOL_RESULT:
+          serverToolResults.push({
+            tool_use_id: block.tool_use_id,
+            content: renderWebSearchResult(block.content)
+          });
           break;
 
         case CLAUDE_BLOCK.IMAGE:
@@ -242,13 +294,24 @@ function convertClaudeMessage(msg) {
       return toolResults;
     }
 
-    // If has tool calls, return assistant message with tool_calls
-    if (toolCalls.length > 0) {
+    // If has tool calls (real or emulated server_tool_use), return the assistant message
+    // with tool_calls, followed by any web_search_tool_result messages from this same
+    // assistant turn — Anthropic keeps those in the assistant's own content, but OpenAI
+    // needs them as separate "tool" messages placed right after, before the next turn.
+    if (toolCalls.length > 0 || serverToolResults.length > 0) {
       const result = { role: ROLE.ASSISTANT };
       if (parts.length > 0) {
         result.content = collapseTextParts(parts);
       }
-      result.tool_calls = toolCalls;
+      if (toolCalls.length > 0) {
+        result.tool_calls = toolCalls;
+      }
+      if (serverToolResults.length > 0) {
+        return [
+          result,
+          ...serverToolResults.map(r => ({ role: ROLE.TOOL, tool_call_id: r.tool_use_id, content: r.content }))
+        ];
+      }
       return result;
     }
 
