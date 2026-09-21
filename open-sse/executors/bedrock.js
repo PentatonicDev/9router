@@ -29,6 +29,11 @@ const ERROR_STATUS_MAP = {
   ModelStreamErrorException: HTTP_STATUS.SERVER_ERROR,
 };
 
+export function nextUtcMidnightMs(now = Date.now()) {
+  const d = new Date(now);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+}
+
 function mapBedrockError(err) {
   const status = ERROR_STATUS_MAP[err?.name] || HTTP_STATUS.BAD_GATEWAY;
   return { status, message: err?.message || err?.name || "Bedrock request failed" };
@@ -59,7 +64,18 @@ export class BedrockExecutor extends BaseExecutor {
   parseError(response, bodyText) {
     let parsed = null;
     try { parsed = JSON.parse(bodyText || "{}"); } catch { parsed = null; }
-    return { status: response.status, message: parsed?.error?.message || bodyText || `HTTP ${response.status}` };
+    const message = parsed?.error?.message || bodyText || `HTTP ${response.status}`;
+    const out = { status: response.status, message };
+    // "Too many tokens per day" is the account's daily token quota for this
+    // model; retrying inside the same day only burns requests. Lock the model
+    // on this account until the day rolls over so combos fall back meanwhile.
+    // ponytail: AWS does not publish when "per day" resets; UTC midnight is the
+    // assumption, and the tracker's quota refresh lifts the lock earlier if it
+    // sees the model answering again.
+    if (response.status === HTTP_STATUS.RATE_LIMITED && /tokens per day/i.test(message)) {
+      out.resetsAtMs = nextUtcMidnightMs();
+    }
+    return out;
   }
 
   buildClient(credentials) {

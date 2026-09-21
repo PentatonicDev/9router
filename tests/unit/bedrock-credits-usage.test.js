@@ -26,7 +26,7 @@ describe("buildBedrockCreditsUsage", () => {
   it("returns a Credits (USD) quota row when creditsUsd is set, rounding spend to 4 decimals", () => {
     const usage = buildBedrockCreditsUsage(100, 12.34564);
     expect(usage).toEqual({
-      plan: "Amazon Bedrock credits",
+      plan: "Amazon Bedrock",
       quotas: {
         "Credits (USD)": { used: 12.3456, total: 100, resetAt: null, unlimited: false },
       },
@@ -46,7 +46,7 @@ describe("buildBedrockCreditsUsage", () => {
   for (const bad of [undefined, null, 0, -3, NaN, "abc"]) {
     it(`returns a message instead of quotas when creditsUsd is ${bad}`, () => {
       const usage = buildBedrockCreditsUsage(bad, 5);
-      expect(usage).toEqual({ message: "Set Credits (USD) on this connection to track spend against it." });
+      expect(usage).toEqual({ message: "Set Credits (USD) on this connection, or use IAM credentials so Bedrock quotas can be read." });
     });
   }
 });
@@ -125,5 +125,38 @@ describe("GET /api/providers/client — bedrock eligibility depends on creditsUs
 
     expect(ids).toContain("with-credits");
     expect(ids).not.toContain("without-credits");
+  });
+});
+
+describe("buildBedrockCreditsUsage with a quota snapshot", () => {
+  const now = Date.UTC(2026, 8, 21, 4, 0, 0);
+  const snapshot = {
+    account: { tokensToday: 26_648, dailyQuota: 150_000_000 },
+    models: [
+      { id: "global.anthropic.claude-haiku-4-5-20251001-v1:0", tokensToday: 25_004, dailyQuota: null },
+      { id: "anthropic.claude-opus-4-5-20251101-v1:0", tokensToday: 1_644, dailyQuota: 6_750_000 },
+      { id: "amazon.nova-micro-v1:0", tokensToday: 0, dailyQuota: null },
+    ],
+    errors: [],
+  };
+
+  it("adds the account row, a bounded row for a published quota and an unlimited-flagged row otherwise", () => {
+    const usage = buildBedrockCreditsUsage(null, 0, snapshot, now);
+    expect(usage.plan).toBe("Amazon Bedrock");
+    expect(usage.quotas["Tokens today · all models"]).toEqual({ used: 26_648, total: 150_000_000, resetAt: "2026-09-22T00:00:00.000Z", unlimited: false });
+    expect(usage.quotas["Tokens today · claude-opus-4-5-20251101"]).toMatchObject({ used: 1_644, total: 6_750_000, unlimited: false });
+    expect(usage.quotas["Tokens today · global · claude-haiku-4-5-20251001 (daily limit unpublished)"]).toMatchObject({ used: 25_004, unlimited: true });
+    expect(Object.keys(usage.quotas).some((k) => k.includes("nova"))).toBe(false);
+  });
+
+  it("keeps the credits row first alongside the quota rows and surfaces snapshot errors as a warning", () => {
+    const usage = buildBedrockCreditsUsage(250, 0.5, { ...snapshot, errors: ["quotas: AccessDenied"] }, now);
+    expect(Object.keys(usage.quotas)[0]).toBe("Credits (USD)");
+    expect(usage.warning).toContain("AccessDenied");
+  });
+
+  it("falls back to a message when neither credits nor quotas produce a row", () => {
+    const usage = buildBedrockCreditsUsage(null, 0, { account: {}, models: [], errors: ["needs IAM"] }, now);
+    expect(usage.message).toContain("needs IAM");
   });
 });

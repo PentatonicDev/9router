@@ -4,7 +4,7 @@
 // after apiKeyContext resolves, unconditionally (even when requireApiKey is
 // off) — using the same mock shape tests/unit/combo-thinking-cap.test.js
 // already proved works for driving handleChat() end to end.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
@@ -61,6 +61,10 @@ function chatRequest(apiKey) {
 }
 
 describe("chat.js — admin key refused on /v1", () => {
+  // chat.js pulls in most of the engine; under a loaded full-suite run that first
+  // import alone crossed the 5s per-test timeout. Warm it outside the tests.
+  beforeAll(async () => { await import("../../src/sse/handlers/chat.js"); }, 60_000);
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getSettings.mockResolvedValue({ requireApiKey: false });
