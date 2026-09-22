@@ -319,11 +319,13 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
     // a 90%-cached request from a cheap one without this.
     if (usage && Object.keys(usage).length > 0) parsed.usage = usage;
 
-    // Strip reasoning_content only when content is non-empty.
-    // When content is empty (e.g. thinking models that used all tokens for reasoning),
-    // reasoning_content is the only useful output and must be preserved.
-    // Previously this was unconditional, which broke Qwen3.5, Claude extended thinking, etc.
-    if (parsed?.choices) {
+    // Strip reasoning_content only when content is non-empty, and only for clients
+    // that have no place to put it. A Claude client turns it into a `thinking` block
+    // and a Responses client into a reasoning item, so stripping it here deleted
+    // extended thinking before it could be mapped — the same unconditional strip was
+    // fixed in nonStreamingHandler.js and this copy was left behind.
+    const clientWantsReasoning = sourceFormat === FORMATS.CLAUDE || sourceFormat === FORMATS.OPENAI_RESPONSES;
+    if (!clientWantsReasoning && parsed?.choices) {
       for (const choice of parsed.choices) {
         if (choice?.message?.reasoning_content && choice.message.content) {
           delete choice.message.reasoning_content;
