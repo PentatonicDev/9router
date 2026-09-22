@@ -246,6 +246,39 @@ async function recordUsage({ response, log, verdict, target }) {
       },
       meta: verdict ? { ...verdict, route: response.route, via: target?.provider || null } : undefined,
     });
+    // A detail row of its own, so the decision shows up in the request-details list
+    // and its provider reaches that list's filter — both are driven by this table,
+    // and a decision is a real upstream call with its own latency and tokens.
+    await saveDecisionDetail({ response, verdict, target });
+  } catch (error) {
+    log?.debug?.("DECISION", `usage not recorded: ${error.message}`);
+  }
+}
+
+async function saveDecisionDetail({ response, verdict, target }) {
+  try {
+    const { saveRequestDetail } = await import("@/lib/usageDb.js");
+    const { buildRequestDetail, buildDecisionDetail } = await import("open-sse/handlers/chatCore/requestDetail.js");
+    await saveRequestDetail(buildRequestDetail({
+      provider: "typesafe",
+      model: response.model || "jev-latest",
+      connectionId: target?.connectionId || undefined,
+      // No stream to time, so ttft stays null rather than a zero that would read
+      // as a measured instant first byte.
+      latency: { ttft: null, total: response.latencyMs ?? null },
+      tokens: {
+        prompt_tokens: response.usage.input_tokens,
+        completion_tokens: response.usage.output_tokens,
+      },
+      request: { route: response.route, kind: verdict?.kind || null },
+      response: { verdict: verdict || null },
+      // Shaped by the same builder the client request uses, so this row renders in
+      // the detail view exactly like any other request's decision block.
+      decision: verdict
+        ? buildDecisionDetail(verdict.kind === "model" ? verdict : null, verdict.kind === "tool" ? verdict : null)
+        : undefined,
+      status: "success",
+    }));
   } catch (error) {
     log?.debug?.("DECISION", `usage not recorded: ${error.message}`);
   }

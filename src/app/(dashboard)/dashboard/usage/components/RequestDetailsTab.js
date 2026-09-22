@@ -541,6 +541,65 @@ export default function RequestDetailsTab() {
               </div>
             </div>
 
+            {selectedDetail.decision && (
+              <div className="rounded-lg border border-black/5 dark:border-white/5 p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="material-symbols-outlined text-[18px] text-text-muted">rule</span>
+                  <span className="font-semibold text-sm text-text-main">Decision</span>
+                  {selectedDetail.decision.model && (
+                    <span className={cn(
+                      "text-xs px-2 py-0.5 rounded",
+                      selectedDetail.decision.model.applied
+                        ? "bg-green-500/15 text-green-600"
+                        : "bg-amber-500/15 text-amber-600"
+                    )}>
+                      {selectedDetail.decision.model.applied ? "Applied" : "Not applied"}
+                    </span>
+                  )}
+                </div>
+                {selectedDetail.decision.model && (
+                  <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                    <div>
+                      <span className="text-text-muted block text-xs">Chosen model</span>
+                      <span className="font-mono break-all">{selectedDetail.decision.model.chosen || "-"}</span>
+                    </div>
+                    <div>
+                      <span className="text-text-muted block text-xs">Reason</span>
+                      <span className="font-mono">{selectedDetail.decision.model.reason || "-"}</span>
+                    </div>
+                    <div>
+                      <span className="text-text-muted block text-xs">Confidence</span>
+                      <span className="font-mono">{selectedDetail.decision.model.confidence ?? "-"}</span>
+                    </div>
+                    <div>
+                      <span className="text-text-muted block text-xs">Deliberation</span>
+                      <span className="font-mono">{selectedDetail.decision.model.deliberation ?? "-"}</span>
+                    </div>
+                  </div>
+                )}
+                {selectedDetail.decision.tool && (
+                  <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4 mt-2">
+                    <div>
+                      <span className="text-text-muted block text-xs">Tool verdict</span>
+                      <span className="font-mono">{selectedDetail.decision.tool.mode || "-"}{selectedDetail.decision.tool.tool ? `: ${selectedDetail.decision.tool.tool}` : ""}</span>
+                    </div>
+                    <div>
+                      <span className="text-text-muted block text-xs">Reason</span>
+                      <span className="font-mono">{selectedDetail.decision.tool.reason || "-"}</span>
+                    </div>
+                    <div>
+                      <span className="text-text-muted block text-xs">Confidence</span>
+                      <span className="font-mono">{selectedDetail.decision.tool.confidence ?? "-"}</span>
+                    </div>
+                    <div>
+                      <span className="text-text-muted block text-xs">Latency</span>
+                      <span className="font-mono">{selectedDetail.decision.tool.latencyMs ?? "-"}ms</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {selectedDetail.pxpipe && (
               <div className="rounded-lg border border-black/5 dark:border-white/5 p-4">
                 <div className="flex items-center gap-2 mb-2">
