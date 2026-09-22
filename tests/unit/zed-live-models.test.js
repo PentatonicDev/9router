@@ -7,12 +7,17 @@ import { createProviderConnection } from "@/models/index.js";
 
 // Transport stub BELOW resolveZedModels: proxyAwareFetch captures the native
 // fetch at import time, so stubbing globalThis.fetch cannot intercept it.
-// Mock the module instead; untouched hosts pass through to native fetch.
-const stub = vi.hoisted(() => {
-  const nativeFetch = globalThis.fetch.bind(globalThis);
-  return { mode: "ok", calls: [], nativeFetch };
-});
-vi.mock("open-sse/utils/proxyFetch.js", () => ({
+// Mock the module instead; untouched hosts pass through to the real transport.
+//
+// That passthrough reads undici's own fetch rather than globalThis.fetch. A
+// hoisted capture of the global happens while the file loads, so another test's
+// stub still installed in this worker became `nativeFetch` and the passthrough
+// answered from the wrong mock — measured as this file failing in the full suite
+// (a different test each time) and passing alone.
+const stub = vi.hoisted(() => ({ mode: "ok", calls: [] }));
+vi.mock("open-sse/utils/proxyFetch.js", async () => {
+  const { fetch: nativeFetch } = await import("undici");
+  return {
   proxyAwareFetch: async (url, options) => {
     const u = String(url);
     stub.calls.push(u);
@@ -27,10 +32,11 @@ vi.mock("open-sse/utils/proxyFetch.js", () => ({
       if (stub.mode === "empty") return Response.json({ models: [] });
       return Response.json(stub.catalog);
     }
-    return stub.nativeFetch(url, options);
+    return nativeFetch(url, options);
   },
-  default: async (url, options) => stub.nativeFetch(url, options),
-}));
+  default: async (url, options) => nativeFetch(url, options),
+  };
+});
 
 stub.catalog = {
   models: [
