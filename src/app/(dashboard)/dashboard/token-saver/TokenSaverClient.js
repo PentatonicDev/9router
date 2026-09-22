@@ -967,7 +967,7 @@ export default function TokenSaverClient() {
             Decision Router
           </h2>
         </div>
-        <div className="flex items-center justify-between pt-2 pb-4 border-b border-border gap-4">
+        <div className={`flex items-center justify-between pt-2 gap-4 ${drConfig.mode === "off" ? "" : "pb-4 border-b border-border"}`}>
           <div className="min-w-0 flex-1">
             <p className="font-medium">Route combos automatically</p>
             <p className="text-sm text-text-muted">
