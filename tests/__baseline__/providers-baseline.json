@@ -775,7 +775,8 @@
     "usage": {
       "url": "https://openapi.qoder.com.cn/api/v2/quota/usage"
     },
-    "format": "openai"
+    "format": "openai",
+    "billing": "subscription"
   },
   "openai": {
     "baseUrl": "https://api.openai.com/v1/chat/completions",
@@ -858,7 +859,8 @@
           "scheme": "bearer"
         }
       }
-    ]
+    ],
+    "billing": "usage"
   },
   "opencode": {
     "baseUrl": "https://opencode.ai",
