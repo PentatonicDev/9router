@@ -463,8 +463,12 @@ export const PATTERN_CAPABILITIES = [
  *
  * Union:        vision, pdf, audioInput, videoInput, imageOutput, audioOutput, search
  * Intersection: tools
- * Primary:      reasoning fields from the first (primary) model
- * Conservative: contextWindow = min; maxOutput = max
+ * Primary:      reasoning fields and context/output limits from the first model
+ *
+ * The limits come as a pair from the primary because min(context)/max(output)
+ * described no member that exists: a pool of a 1M model and a 128k fallback
+ * advertised 128k, capping every client to the weakest member the request would
+ * only reach if the primary were down.
  *
  * @param {string[]} comboModels
  * @param {Object|null} [comboLookup] optional map of combo name → models array for nested resolution
@@ -498,8 +502,8 @@ export function aggregateComboCapabilities(comboModels, comboLookup = null, _dep
     thinkingFormat:     first.thinkingFormat,
     thinkingCanDisable: first.thinkingCanDisable,
     thinkingRange:      first.thinkingRange,
-    contextWindow: Math.min(...allCaps.map((c) => c.contextWindow)),
-    maxOutput:     Math.max(...allCaps.map((c) => c.maxOutput)),
+    contextWindow: first.contextWindow,
+    maxOutput:     first.maxOutput,
   };
 }
 

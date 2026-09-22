@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateComboCapabilities } from "../../open-sse/providers/capabilities.js";
+import { aggregateComboCapabilities, getCapabilitiesForModel } from "../../open-sse/providers/capabilities.js";
 
 describe("aggregateComboCapabilities — null / empty", () => {
   it("returns null for null", () => {
@@ -100,22 +100,31 @@ describe("aggregateComboCapabilities — primary model drives reasoning fields",
 });
 
 describe("aggregateComboCapabilities — context/output limits", () => {
-  it("contextWindow is the minimum across all models", () => {
-    // mimo-v2.5: 1048576; kimi-k2.5 (*kimi*k2* pattern): 262144
+  // mimo-v2.5: 1048576 / 131072; kimi-k2.5 (*kimi*k2* pattern): 262144 / 262144
+  it("contextWindow comes from the primary model, not the weakest member", () => {
     const caps = aggregateComboCapabilities([
       "opencode-go/mimo-v2.5",
       "opencode-go/kimi-k2.5",
     ]);
-    expect(caps.contextWindow).toBe(262144);
+    expect(caps.contextWindow).toBe(1048576);
   });
 
-  it("maxOutput is the maximum across all models", () => {
-    // mimo-v2.5: 131072; kimi-k2.5 (*kimi*k2* pattern): 262144
+  it("maxOutput comes from the primary model, not the most generous member", () => {
     const caps = aggregateComboCapabilities([
       "opencode-go/mimo-v2.5",
       "opencode-go/kimi-k2.5",
     ]);
-    expect(caps.maxOutput).toBe(262144);
+    expect(caps.maxOutput).toBe(131072);
+  });
+
+  // The pair has to describe one real model: a client that trusts context_length
+  // and max_completion_tokens together must get limits some member actually has.
+  it("reports a coherent pair taken from the same model", () => {
+    const members = ["opencode-go/kimi-k2.5", "opencode-go/mimo-v2.5"];
+    const caps = aggregateComboCapabilities(members);
+    const primary = getCapabilitiesForModel("opencode-go", "kimi-k2.5");
+    expect(caps.contextWindow).toBe(primary.contextWindow);
+    expect(caps.maxOutput).toBe(primary.maxOutput);
   });
 });
 
@@ -134,8 +143,8 @@ describe("aggregateComboCapabilities — nested combo resolution via comboLookup
     expect(caps.reasoning).toBe(true);
   });
 
-  it("contextWindow is min across all resolved leaves", () => {
-    // deepseek-v4-pro (*deepseek-v4*): 1000000; mimo-v2.5: 1048576 → min = 1000000
+  it("contextWindow comes from the nested combo when it is the primary member", () => {
+    // deepseek-v4-pro (*deepseek-v4*): 1000000; mimo-v2.5: 1048576
     const lookup = { "inner": ["opencode-go/deepseek-v4-pro"] };
     const caps = aggregateComboCapabilities(["inner", "opencode-go/mimo-v2.5"], lookup);
     expect(caps.contextWindow).toBe(1000000);
