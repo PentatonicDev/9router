@@ -148,15 +148,19 @@ export class OpenCodeGoExecutor extends DefaultExecutor {
     return super.execute({ ...args, credentials });
   }
 
-  buildHeaders(credentials, stream = true, url, model) {
-    const headers = super.buildHeaders(credentials || {}, stream, url, model);
+  // The body is part of the signature: the session id is resolved from the
+  // conversation, so omitting it made every non-passthrough request fall back to a
+  // session the transport never derived. The transport refuses those with
+  // "MissingSessionID", which surfaced as a bare 400 carrying only the request body.
+  buildHeaders(credentials, stream = true, url, model, body = null) {
+    const headers = super.buildHeaders(credentials || {}, stream, url, model, body);
     const prepared = credentials?.[SESSION_FIELD];
     if (prepared) {
       headers[SESSION_HEADER] = prepared;
       return headers;
     }
 
-    const fallback = this.prepareRequestCredentials({ credentials });
+    const fallback = this.prepareRequestCredentials({ credentials, body });
     headers[SESSION_HEADER] = fallback[SESSION_FIELD];
     return headers;
   }

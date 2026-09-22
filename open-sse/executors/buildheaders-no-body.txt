@@ -1,0 +1,7 @@
+# buildHeaders overrides that forward to super without taking the body.
+# Allowed only when the override derives nothing from it. One per line; "#" starts a comment.
+#
+# codex: derives the session in transformRequest, which runs before buildHeaders
+# (see the note at its buildHeaders), so the body is already spent by then.
+codex.js
+grok-cli.js

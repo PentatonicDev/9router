@@ -38,7 +38,7 @@ export class XiaomiMimoExecutor extends DefaultExecutor {
     return super.buildUrl(model, stream, urlIndex, credentials);
   }
 
-  buildHeaders(credentials, stream = true, url, model) {
+  buildHeaders(credentials, stream = true, url, model, body = null) {
     if (XiaomiMimoExecutor.isPreviewModel(model) && credentials?.[COOKIE_KEY]) {
       // Preview models authenticate with the account-session cookie, not the key.
       return {
@@ -48,7 +48,7 @@ export class XiaomiMimoExecutor extends DefaultExecutor {
         Cookie: credentials[COOKIE_KEY],
       };
     }
-    return super.buildHeaders(credentials, stream, url, model);
+    return super.buildHeaders(credentials, stream, url, model, body);
   }
 
   transformRequest(model, body, stream, credentials) {
