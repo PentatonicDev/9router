@@ -1,12 +1,27 @@
 import { defineConfig } from "vitest/config";
 import { resolve } from "path";
+import { tmpdir } from "os";
 import { fileURLToPath } from "url";
+
+// Tests get their own database, per run. Two reasons, both measured:
+//
+//  - Without it they open the operator's real one (~/.9router), so a test run
+//    writes fixtures into live data.
+//  - They also failed on it. SQLite allows one writer, the schema sets
+//    `busy_timeout = 5000`, and that real file carries enough history that writes
+//    under 60 parallel test files exceed it: "database is locked" surfaced as a
+//    different victim each run (xai, usage-dispatch, zed), every one of them
+//    passing when run alone. Against a fresh file the same suite is green.
+//
+// Per-run rather than a fixed path so every run starts from an empty schema.
+const TEST_DATA_DIR = resolve(tmpdir(), `9router-tests-${process.pid}`);
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
   test: {
     environment: "node",
+    env: { DATA_DIR: TEST_DATA_DIR },
     globals: true,
     include: ["**/*.test.js"],
     // Don't scan into git worktrees nested under .claude/ — they carry their
