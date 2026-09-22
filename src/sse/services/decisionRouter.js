@@ -14,6 +14,7 @@ import { resolveModelDecision, resolveToolDecision } from "open-sse/decision/dec
 import { getPricingForModel } from "open-sse/providers/pricing.js";
 import { resolveCriteria } from "open-sse/decision/modelBriefs.js";
 import { rankByCost } from "open-sse/decision/decide.js";
+import { getModelInfo } from "./model.js";
 
 export const DEFAULT_DECISION = {
   mode: "off",
@@ -138,6 +139,27 @@ export async function rankPool(models, resolveMember) {
   return rankByCost(unique, priceOf);
 }
 
+// ponytail: one availability read per candidate; batch by provider if this enters the routing latency budget.
+export async function availableDecisionPool(ranked, { apiKey, settings, comboOwner, allowedConnectionIds } = {}) {
+  const inspected = await Promise.all(ranked.map(async (name) => {
+    const { provider, model } = await getModelInfo(name, comboOwner);
+    if (!provider) return { name, available: false, cost: priceOf(name) };
+    const status = await getProviderCredentials(provider, null, model, {
+      apiKey, settings, keyOwner: comboOwner === undefined ? null : comboOwner,
+      allowedConnectionIds: allowedConnectionIds ?? null,
+      inspectOnly: true,
+    });
+    const available = status.available === true;
+    const cost = status.subscription || status.free ? 0 : (priceOf(name) ?? Infinity);
+    return { name, available, cost };
+  }));
+  const available = inspected.filter(item => item.available);
+  if (!available.length) return { pool: [], costOf: priceOf };
+  const costs = new Map(available.map(({ name, cost }) => [name, cost]));
+  const costOf = (name) => costs.has(name) ? costs.get(name) : priceOf(name);
+  return { pool: rankByCost(available.map(item => item.name), costOf), costOf };
+}
+
 /** Whether the request carries an Anthropic `thinking` block. Anthropic refuses a
  *  pinned tool_choice in that mode ("Thinking mode does not support this
  *  tool_choice"). The test is the field itself, not the intent: an OpenAI target
@@ -169,13 +191,13 @@ const ask = (target, config, state, questions, log) =>
  * unapplied decision is not an error: the caller's fallback loop walks the rest of
  * the list, so a wrong pick costs one attempt rather than a failure.
  */
-export async function decideComboModel({ body, models, comboName, config, target, log, previousVerdict = null, ranked = null }) {
+export async function decideComboModel({ body, models, comboName, config, target, log, previousVerdict = null, ranked = null, costOf = priceOf, fallback = null }) {
   // Cheapest first, and the list both the question and the verdict are served from.
   // The question MUST be built over this pool: for a combo-of-combos `models` holds
   // tier names, so asking with those and validating against the expanded pool has
   // jev answer a tier name the pool does not contain — every verdict discarded as
   // `no_usable_pick`, measured at 243 of 243 calls.
-  const pool = ranked?.length ? ranked : rankByCost(models, priceOf);
+  const pool = ranked?.length ? ranked : rankByCost(models, costOf);
   if (pool.length < 2) return { models, decision: null };
 
   const { questions } = buildModelQuestions(pool, criteriaResolver(config));
@@ -190,7 +212,8 @@ export async function decideComboModel({ body, models, comboName, config, target
   const decision = resolveModelDecision({
     answers: response.answers,
     models: pool,
-    priceOf,
+    priceOf: costOf,
+    hardTaskPriceOf: priceOf,
     minStrength: config.minStrength,
     switchStrength: config.switchStrength,
     previousVerdict,
@@ -207,7 +230,7 @@ export async function decideComboModel({ body, models, comboName, config, target
     "DECISION",
     `model: ${decision.model} for "${comboName}" (conf ${fmt(decision.confidence)}, deliberar ${fmt(decision.deliberation)}, ${response.latencyMs}ms)`
   );
-  return { models: [decision.model, ...pool.filter((m) => m !== decision.model)], decision };
+  return { models: [decision.model, ...pool.filter((m) => m !== decision.model), ...(fallback || [])], decision };
 }
 
 /**

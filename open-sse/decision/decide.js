@@ -119,6 +119,7 @@ export function resolveModelDecision({
   answers,
   models = [],
   priceOf = null,
+  hardTaskPriceOf = priceOf,
   minStrength = DEFAULT_MIN_STRENGTH,
   switchStrength = DEFAULT_SWITCH_STRENGTH,
   previousVerdict = null,
@@ -159,9 +160,9 @@ export function resolveModelDecision({
   if (!gate.change) return { apply: false, reason: gate.reason, ...usable };
 
   // The one contradiction worth blocking: a step that needs deliberation routed to
-  // the cheapest model loses quality silently. Mechanical work on an expensive model
-  // is only a cost miss, which confidence already covers.
-  const cheapest = cheapestOf(models, priceOf);
+  // the weakest-priced model loses quality silently. Use list price here: a flat-plan
+  // Opus costs zero per call, but is not a weak model.
+  const cheapest = cheapestOf(models, hardTaskPriceOf);
   const hard = deliberation.noul >= 0.7;
   if (hard && cheapest && chosen === cheapest) {
     return { apply: false, reason: "signals_disagree", ...usable };

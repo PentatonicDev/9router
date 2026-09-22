@@ -2,6 +2,7 @@
 // mutex made unrelated providers wait behind each other; per-provider locks keep
 // round-robin updates safe while independent pools proceed concurrently.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getModelLockKey } from "../../open-sse/services/accountFallback.js";
 
 const mocks = vi.hoisted(() => ({
   getProviderConnections: vi.fn(),
@@ -99,6 +100,59 @@ describe("credential-selection concurrency", () => {
 
     firstGate.resolve();
     await Promise.all([first, second]);
+  });
+
+  it("inspects eligible accounts without changing round-robin state", async () => {
+    const locked = connection("claude", "locked");
+    locked.authType = "oauth";
+    locked[getModelLockKey("model-a")] = new Date(Date.now() + 60_000).toISOString();
+    const usage = connection("claude", "usage");
+    usage.authType = "apikey";
+    const subscription = connection("claude", "subscription");
+    subscription.authType = "access_token";
+    mocks.getProviderConnections.mockResolvedValue([locked, usage, subscription]);
+    const options = { settings: { fallbackStrategy: "round-robin" }, keyOwner: null, allowedConnectionIds: ["locked", "usage"] };
+
+    expect(await getProviderCredentials("claude", null, "model-a", { ...options, inspectOnly: true }))
+      .toEqual({ available: true, subscription: false });
+    expect(await getProviderCredentials("claude", null, "model-b", { ...options, inspectOnly: true }))
+      .toEqual({ available: true, subscription: true });
+    expect(await getProviderCredentials("claude", null, "model-a", { ...options, inspectOnly: true, allowedConnectionIds: ["locked"] }))
+      .toEqual({ available: false, subscription: false });
+    expect(mocks.updateProviderConnection).not.toHaveBeenCalled();
+  });
+
+  it("keeps no-auth providers available without connection rows", async () => {
+    mocks.getProviderConnections.mockResolvedValue([]);
+    expect(await getProviderCredentials("mimo-free", null, "mimo-v2", { inspectOnly: true }))
+      .toEqual({ available: true, subscription: false, free: true });
+    expect(mocks.getProviderConnections).not.toHaveBeenCalled();
+  });
+
+  it("prefers a subscription in fill-first, but honors explicit account pinning", async () => {
+    const usage = connection("claude", "usage");
+    usage.authType = "apikey";
+    const subscription = connection("claude", "subscription");
+    subscription.authType = "oauth";
+    mocks.getProviderConnections.mockResolvedValue([usage, subscription]);
+    const options = { settings: { fallbackStrategy: "fill-first" }, keyOwner: null, allowedConnectionIds: null, preferSubscription: true };
+
+    expect((await getProviderCredentials("claude", null, "model", options)).connectionId).toBe("subscription");
+    expect((await getProviderCredentials("claude", null, "model", { ...options, preferredConnectionId: "usage" })).connectionId).toBe("usage");
+    expect((await getProviderCredentials("claude", null, "model", { ...options, allowedConnectionIds: ["usage"] })).connectionId).toBe("usage");
+  });
+
+  it("prefers a subscription without breaking round-robin within subscriptions", async () => {
+    const usage = connection("claude", "usage");
+    usage.authType = "apikey";
+    const subscription = connection("claude", "subscription");
+    subscription.authType = "oauth";
+    mocks.getProviderConnections.mockResolvedValue([usage, subscription]);
+    const credentials = await getProviderCredentials("claude", null, "model", {
+      settings: { fallbackStrategy: "round-robin" }, keyOwner: null, allowedConnectionIds: null, preferSubscription: true,
+    });
+    expect(credentials.connectionId).toBe("subscription");
+    expect(mocks.updateProviderConnection).toHaveBeenCalledWith("subscription", expect.any(Object));
   });
 
   it("still serializes two selectors for the same provider", async () => {

@@ -22,6 +22,7 @@ import {
   resolveDecisionTarget,
   decideComboModel,
   rankPool,
+  availableDecisionPool,
   decideTool as decideToolCore,
   readPreviousVerdict,
   rememberVerdict,
@@ -188,7 +189,7 @@ export async function handleChat(request, clientRawRequest = null, options = {})
  * Fails open at every step: an off mode, a missing credential or an unreachable
  * jev all return the pool untouched.
  */
-async function orderComboModels({ body, models, comboName, strategy, settings, apiKey, log, comboOwner }) {
+async function orderComboModels({ body, models, comboName, strategy, settings, apiKey, log, comboOwner, allowedConnectionIds }) {
   const unchanged = { models, deliberation: null };
   if (strategy !== "auto" || models.length < 2) return unchanged;
   const config = normalizeDecisionConfig(settings.decisionRouter);
@@ -201,14 +202,21 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
   // would give "claude-auto" a $3 that means nothing — so each tier is priced by
   // the model it would actually serve. Resolved here because only this layer can
   // read a combo's members.
-  const ranked = await rankPool(models, (name) => getComboModels(name, comboOwner));
-
   let result;
   try {
+    const ranked = await rankPool(models, (name) => getComboModels(name, comboOwner));
+    const { pool, costOf } = await availableDecisionPool(ranked, { apiKey, settings, comboOwner, allowedConnectionIds });
+    if (!pool.length) return unchanged;
+    const fallback = ranked.filter(name => !pool.includes(name));
+    if (pool.length === 1) return config.mode === "shadow" ? unchanged : {
+      models: [...pool, ...fallback], deliberation: null,
+    };
     result = await decideComboModel({
       body,
       models,
-      ranked,
+      ranked: pool,
+      costOf,
+      fallback,
       comboName,
       config,
       target,
@@ -350,17 +358,19 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
     const ordered = await orderComboModels({
       body, models: augmentedModels, comboName: modelStr, strategy: comboStrategy, settings, apiKey, log,
-      comboOwner,
+      comboOwner, allowedConnectionIds: apiKeyContext?.allowedConnectionIds,
     });
     routingContext.deliberation = ordered.deliberation;
     routingContext.decision = ordered.decision;
+    const preferSubscription = comboStrategy === "auto" && settings.decisionRouter?.mode === "enforce";
+    const comboRoutingContext = { ...routingContext, preferSubscription };
     const orderedModels = ordered.models;
     log.info("CHAT", `Combo "${modelStr}" with ${orderedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
       models: orderedModels,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext, comboModelOptions),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, comboRoutingContext, comboModelOptions),
         adapterAdded
       ),
       log,
@@ -444,16 +454,19 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       const ordered = await orderComboModels({
         body, models: augmentedModels, comboName: modelStr, strategy: comboStrategy,
         settings: chatSettings, apiKey, log, comboOwner,
+        allowedConnectionIds: routingContext.apiKeyContext?.allowedConnectionIds,
       });
       routingContext.deliberation = ordered.deliberation;
       routingContext.decision = ordered.decision;
+      const preferSubscription = comboStrategy === "auto" && chatSettings.decisionRouter?.mode === "enforce";
+      const comboRoutingContext = { ...routingContext, preferSubscription };
       const orderedModels = ordered.models;
       log.info("CHAT", `Combo "${modelStr}" with ${orderedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
       return handleComboChat({
         body,
         models: orderedModels,
         handleSingleModel: withCapacityAdapterStripping(
-          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext, nestedModelOptions),
+          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, comboRoutingContext, nestedModelOptions),
           adapterAdded
         ),
         log,
@@ -489,6 +502,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       settings: chatSettings,
       keyOwner: comboOwner === undefined ? null : comboOwner,
       allowedConnectionIds: routingContext.apiKeyContext?.allowedConnectionIds ?? null,
+      preferSubscription: routingContext.preferSubscription === true,
     });
 
     if (credentials?.noActiveCredentials) {
