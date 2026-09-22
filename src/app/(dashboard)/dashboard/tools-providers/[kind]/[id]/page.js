@@ -179,8 +179,8 @@ export default function MediaProviderDetailPage() {
         />
       )}
 
-      {/* Provider Info — config-driven, supports searchConfig, fetchConfig, ttsConfig, embeddingConfig, searchViaChat, decisionConfig */}
-      {!isCustom && (provider.searchConfig || provider.fetchConfig || provider.ttsConfig || provider.sttConfig || provider.embeddingConfig || provider.searchViaChat || provider.decisionConfig) && (
+      {/* Provider Info — config-driven, supports searchConfig, fetchConfig, ttsConfig, embeddingConfig, systemoneConfig, searchViaChat, decisionConfig */}
+      {!isCustom && (provider.searchConfig || provider.fetchConfig || provider.ttsConfig || provider.sttConfig || provider.embeddingConfig || provider.systemoneConfig || provider.searchViaChat || provider.decisionConfig) && (
         <ProviderInfoCard
           config={
             kind === "webFetch" ? provider.fetchConfig
@@ -188,6 +188,7 @@ export default function MediaProviderDetailPage() {
               : kind === "stt" ? provider.sttConfig
               : kind === "decision" ? provider.decisionConfig
               : kind === "embedding" ? provider.embeddingConfig
+              : kind === "systemone" ? provider.systemoneConfig
               : id === "searxng" && searxngUrl ? { ...provider.searchConfig, baseUrl: `${searxngUrl.replace(/\/+$/, "")}/search` }
               : provider.searchConfig || { mode: "chat-completions", defaultModel: provider.searchViaChat?.defaultModel, pricingUrl: provider.searchViaChat?.pricingUrl, freeTier: provider.searchViaChat?.freeTier }
           }

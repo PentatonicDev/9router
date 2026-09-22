@@ -4,6 +4,7 @@ import { PROVIDER_MODELS, getModelTargetFormat } from "../../open-sse/config/pro
 import { getThinkingLevels } from "../../open-sse/providers/thinkingLevels.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import { OpenCodeExecutor } from "../../open-sse/executors/opencode.js";
+import { OPENCODE_FINGERPRINT_TOOLS } from "../../open-sse/utils/opencodeFingerprint.js";
 import "../translator/registerAll.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
 
@@ -214,12 +215,38 @@ describe("OpenCode Free Muse Spark thinking", () => {
     // User message, function_call, function_call_output, and next user message survive
     const types = out.input.map((item) => item.type);
     expect(types).toEqual(["message", "function_call", "function_call_output", "message"]);
-    // Tools flattened and empty properties added
-    expect(out.tools).toEqual([
+    // Tools flattened and empty properties added; the free-tier quartet is
+    // appended after the caller's tools (see opencode-fingerprint.test.js).
+    expect(out.tools[0]).toEqual({
+      type: "function",
+      name: "shell",
+      description: "Run shell command",
+      parameters: { type: "object", properties: {} },
+    });
+    expect(out.tools.slice(1).map((tool) => tool.name)).toEqual(OPENCODE_FINGERPRINT_TOOLS);
+    expect(out.tools.slice(1)).toEqual([
       {
         type: "function",
-        name: "shell",
-        description: "Run shell command",
+        name: "bash",
+        description: "This tool is currently unavailable and must not be used.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: "glob",
+        description: "This tool is currently unavailable and must not be used.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: "grep",
+        description: "This tool is currently unavailable and must not be used.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: "read",
+        description: "This tool is currently unavailable and must not be used.",
         parameters: { type: "object", properties: {} },
       },
     ]);

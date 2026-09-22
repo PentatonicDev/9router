@@ -14,7 +14,7 @@ import { ConfirmModal } from "./Modal";
 // One flat list under one accordion: a decision model is a tool the gateway
 // offers, no different from embedding or speech, so it is one more entry here
 // rather than a category of its own.
-const VISIBLE_TOOL_KINDS = ["embedding", "image", "video", "tts", "stt", "decision"];
+const VISIBLE_TOOL_KINDS = ["embedding", "image", "video", "tts", "stt", "decision", "systemone"];
 // Combined entry: webSearch + webFetch share one page at /dashboard/tools-providers/web
 const COMBINED_WEB_ITEM = { id: "web", label: "Web Fetch & Search", icon: "travel_explore", href: "/dashboard/tools-providers/web" };
 
@@ -214,6 +214,9 @@ export default function Sidebar({ onClose }) {
             >
               <span className="material-symbols-outlined text-[18px]">perm_media</span>
               <span className="text-[13px] font-medium flex-1 text-left">Tools Providers</span>
+              {MEDIA_PROVIDER_KINDS.some((k) => VISIBLE_TOOL_KINDS.includes(k.id) && k.isNew) && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-[3px] bg-green-500/15 text-green-400">NEW</span>
+              )}
               <span className="material-symbols-outlined text-[14px] transition-transform" style={{ transform: mediaOpen ? "rotate(180deg)" : "rotate(0deg)" }}>
                 expand_more
               </span>
@@ -234,6 +237,9 @@ export default function Sidebar({ onClose }) {
                   >
                     <span className="material-symbols-outlined text-[16px]">{kind.icon}</span>
                     <span className="text-sm">{kind.label}</span>
+                    {kind.isNew && (
+                      <span className="ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-[3px] bg-green-500/15 text-green-400">NEW</span>
+                    )}
                   </Link>
                 ))}
                 <Link

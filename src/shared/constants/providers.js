@@ -5,7 +5,7 @@ import { RISK_NOTICE } from "@/shared/constants/providersDisplay";
 const MEDIA_ENTRY_KEYS = [
   "serviceKinds", "ttsConfig", "sttConfig", "embeddingConfig",
   "imageConfig", "imageToTextConfig", "videoConfig", "musicConfig",
-  "searchViaChat", "searchConfig", "fetchConfig", "decisionConfig", "credentialFallback",
+  "searchViaChat", "searchConfig", "fetchConfig", "decisionConfig", "credentialFallback", "systemoneConfig",
   "modelsFetcher", "mediaPriority", "hiddenKinds",
 ];
 
@@ -80,6 +80,7 @@ export const MEDIA_PROVIDER_KINDS = [
   { id: "video",       label: "Video",          icon: "movie",             endpoint: { method: "POST", path: "/v1/videos/generations" } },
   { id: "music",       label: "Music",          icon: "music_note",        endpoint: { method: "POST", path: "/v1/audio/music" } },
   { id: "decision",    label: "Decisions",      icon: "psychology",        endpoint: { method: "POST", path: "/v1/decisions" } },
+  { id: "systemone",   label: "System One",     icon: "psychology",        endpoint: { method: "POST", path: "/v1/systemone" }, isNew: true },
 ];
 
 export const OPENAI_COMPATIBLE_PREFIX = "openai-compatible-";
