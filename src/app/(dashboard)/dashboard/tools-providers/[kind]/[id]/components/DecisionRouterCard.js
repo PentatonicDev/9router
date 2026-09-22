@@ -92,7 +92,7 @@ export default function DecisionRouterCard({ provider }) {
   const activeMode = MODES.find((m) => m.value === config.mode) || MODES[0];
   const activePreset = presetOf(config);
 
-  const gateways = getProvidersByKind("decision");
+  const gateways = getProvidersByKind("systemone");
   const gateway = gateways.find((g) => g.id === config.provider || g.alias === config.provider) || null;
   const gatewayId = gateway?.id || config.provider;
   const conn = activeProviders.find((c) => c.provider === gatewayId);
