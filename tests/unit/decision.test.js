@@ -560,7 +560,9 @@ describe("a partially stored decisionRouter keeps its shape", () => {
     expect(merged.decisionRouter.effort).toBe(true);
     expect(merged.decisionRouter.provider).toBe("vercel-ai-gateway");
     expect(merged.decisionRouter.model).toBe("typesafe-ai/jev");
-    expect(merged.decisionRouter.models).toEqual([]);
+    // Which combos route is not a setting here: a combo opts in with its own
+    // "auto" strategy, so there is no allowlist to fall back to.
+    expect(merged.decisionRouter.minStrength).toBe(0.35);
     expect(merged.decisionRouter.mode).toBe("off");
   });
 

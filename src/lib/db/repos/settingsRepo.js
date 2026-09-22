@@ -82,10 +82,9 @@ const DEFAULT_SETTINGS = {
   // System One decision routing. `mode` is one field with three states rather
   // than an `enabled` flag plus a mode string: "off" never asks, "shadow" asks
   // and logs but applies nothing (the baseline needed to measure before
-  // trusting), "enforce" applies. `models` is the allowlist — model strings
-  // and/or combo names, empty meaning nothing routes. The model is asked how
-  // deep a step is, never which model to use, so no per-model text is configured
-  // here: the tier is derived from the pool's own prices in code.
+  // trusting), "enforce" applies. Which combos it routes is not configured here:
+  // a combo opts in with its own "auto" strategy, the only thing the runtime
+  // reads (chat.js: `strategy !== "auto"` returns the pool untouched).
   decisionRouter: {
     mode: "off",
     // The gateway that serves the decision model. It IS the provider — a decision
@@ -94,7 +93,6 @@ const DEFAULT_SETTINGS = {
     // `model` and nothing else.
     provider: "vercel-ai-gateway",
     model: "typesafe-ai/jev",
-    models: [],
     // Cap the reasoning budget per turn from the same verdict that picks the model:
     // a mechanical turn gets a low ceiling, a hard one is left alone. Separate from
     // `mode` because the two levers carry different evidence — model routing is

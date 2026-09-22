@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { Card, Button, Input, Select, SegmentedControl, Toggle } from "@/shared/components";
 import { translate } from "@/i18n/runtime";
 import { getProvidersByKind } from "@/shared/constants/providers";
-import ModelSelectModal from "@/shared/components/ModelSelectModal";
 
 // Three states in one field, not an `enabled` flag plus a mode string: "shadow"
 // is the only way to measure what the router would have done without letting it
@@ -63,14 +62,17 @@ const TOOL_MODES = [
 export default function DecisionRouterCard({ provider }) {
   const [config, setConfig] = useState(null);
   const [activeProviders, setActiveProviders] = useState([]);
-  const [showModelSelect, setShowModelSelect] = useState(false);
+  const [comboStrategies, setComboStrategies] = useState({});
   const [advanced, setAdvanced] = useState(false);
   const [probe, setProbe] = useState(null);
 
   useEffect(() => {
     fetch("/api/settings", { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (data?.decisionRouter) setConfig(data.decisionRouter); })
+      .then((data) => {
+        if (data?.decisionRouter) setConfig(data.decisionRouter);
+        setComboStrategies(data?.comboStrategies || {});
+      })
       .catch(() => {});
     fetch("/api/providers", { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
@@ -81,7 +83,12 @@ export default function DecisionRouterCard({ provider }) {
   if (!config) return null;
 
   const defaults = provider?.decisionConfig || {};
-  const models = config.models || [];
+  // The combos that opted in, read from the setting the runtime actually uses
+  // (chat.js reads strategy === "auto"). An allowlist on this card was editable,
+  // saved, and consumed by nothing.
+  const autoCombos = Object.entries(comboStrategies)
+    .filter(([, v]) => v?.fallbackStrategy === "auto")
+    .map(([name]) => name);
   const activeMode = MODES.find((m) => m.value === config.mode) || MODES[0];
   const activePreset = presetOf(config);
 
@@ -123,13 +130,6 @@ export default function DecisionRouterCard({ provider }) {
     });
   };
 
-  const valueOf = (m) => m?.value || m?.name || m;
-  const addModel = (m) => {
-    const value = valueOf(m);
-    if (!value || models.includes(value)) return;
-    patch({ ...config, models: [...models, value] });
-  };
-  const removeModel = (m) => patch({ ...config, models: models.filter((v) => v !== valueOf(m)) });
 
   const handleTest = async () => {
     setProbe({ ok: null, message: translate("Testing…") });
@@ -162,33 +162,27 @@ export default function DecisionRouterCard({ provider }) {
         </div>
 
         <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium">{translate("Models and combos")}</p>
-            <Button icon="add" variant="ghost" size="sm" onClick={() => setShowModelSelect(true)}>
-              {translate("Add")}
-            </Button>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {models.length === 0 ? (
-              <span className="text-xs text-text-muted italic">{translate("Nothing selected — routing is off.")}</span>
-            ) : models.map((value) => (
-              <span key={value} className="inline-flex items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 dark:bg-white/5">
-                <span className="material-symbols-outlined text-[12px] text-text-muted">
-                  {value.includes("/") ? "smart_toy" : "layers"}
-                </span>
-                <span className="font-mono text-xs text-text-muted">{value}</span>
-                <button
-                  type="button"
-                  onClick={() => removeModel(value)}
-                  className="leading-none text-text-muted hover:text-red-500"
-                  aria-label={`${translate("Remove")} ${value}`}
+          <p className="text-sm font-medium">{translate("Combos routed")}</p>
+          {autoCombos.length === 0 ? (
+            <span className="text-xs text-text-muted italic">
+              {translate('None — set a combo\'s strategy to "auto" to route it.')}
+            </span>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {autoCombos.map((name) => (
+                <a
+                  key={name}
+                  href="/dashboard/combos"
+                  className="inline-flex items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"
                 >
-                  <span className="material-symbols-outlined text-[12px]">close</span>
-                </button>
-              </span>
-            ))}
-          </div>
+                  <span className="material-symbols-outlined text-[12px] text-text-muted">layers</span>
+                  <span className="font-mono text-xs text-text-muted">{name}</span>
+                </a>
+              ))}
+            </div>
+          )}
         </div>
+
 
         <div className="flex flex-col gap-2">
           <p className="text-sm font-medium">{translate("How decisive")}</p>
@@ -308,18 +302,6 @@ export default function DecisionRouterCard({ provider }) {
         </div>
       </div>
 
-      {showModelSelect && (
-        <ModelSelectModal
-          isOpen={showModelSelect}
-          onClose={() => setShowModelSelect(false)}
-          onSelect={addModel}
-          onDeselect={removeModel}
-          activeProviders={activeProviders}
-          title={translate("Add Model or Combo")}
-          addedModelValues={models}
-          closeOnSelect={false}
-        />
-      )}
     </Card>
   );
 }

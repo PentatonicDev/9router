@@ -1168,5 +1168,7 @@
   "Testing…": "Testando…",
   "The decision endpoint answered.": "O endpoint de decisão respondeu.",
   "Validation failed": "Falha na validação",
-  "Add Model or Combo": "Adicionar modelo ou combo"
+  "Add Model or Combo": "Adicionar modelo ou combo",
+  "Combos routed": "Combos roteados",
+  "None — set a combo's strategy to \"auto\" to route it.": "Nenhum — defina a estratégia de um combo como \"auto\" para roteá-lo."
 }
