@@ -97,7 +97,9 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
               <Toggle
                 key={key}
                 checked={!!caps[key]}
-                disabled={EXCLUSIVE_CAPACITIES.some((k) => k !== key && prev[key])}
+                // Disabled while an exclusive capability is on, so the two cannot be
+                // combined in the first place.
+                disabled={EXCLUSIVE_CAPACITIES.some((k) => k !== key && caps[k])}
                 onChange={(v) => setCaps((prev) => {
                   // An exclusive capability describes what the model IS, so it cannot
                   // coexist with the others — turning it on turns them off, disabling

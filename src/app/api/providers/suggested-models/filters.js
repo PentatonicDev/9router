@@ -27,6 +27,14 @@ export const FILTERS = {
       .filter((m) => m.id?.startsWith("mimo") || m.name?.toLowerCase().includes("mimo"))
       .map((m) => ({ id: m.id, name: m.name || m.id })),
 
+  // A plain OpenAI-shaped /v1/models catalog: `{ data: [{ id, name?, ... }] }`.
+  // Four providers declare this type and the filter never existed, so their fetchers
+  // answered 400 "Unknown filter type" and the lists came back empty.
+  "openai": (models) =>
+    (Array.isArray(models) ? models : models?.data || [])
+      .filter((m) => typeof m?.id === "string" && m.id)
+      .map((m) => ({ id: m.id, name: m.name || m.display_name || m.id, contextLength: m.context_window || m.context_length })),
+
   "airforce-free": (models) =>
     (Array.isArray(models) ? models : [])
       .filter((m) => (m.tier === "free" || m.id?.endsWith(":free")) && m.supports_chat === true && (!m.media_type || m.media_type === "chat" || m.media_type === "text"))
