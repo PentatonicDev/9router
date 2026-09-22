@@ -50,21 +50,18 @@ function extractEmailFromAccessToken(accessToken) {
   return payload.email || payload.preferred_username || payload.sub || undefined;
 }
 
-export async function fetchKiroProfileArn(accessToken) {
+// Fail-soft wrapper over KiroService.listAvailableProfiles (POST / + x-amz-target).
+// The path-style /ListAvailableProfiles route is deprecated and 400s, which left
+// IDC accounts with an empty profileArn and "profileArn is required" on inference.
+export async function fetchKiroProfileArn(accessToken, region) {
   if (!accessToken) return null;
   try {
-    const response = await fetch("https://codewhisperer.us-east-1.amazonaws.com/ListAvailableProfiles", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ maxResults: 10 }),
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.profiles?.find((p) => p.arn?.trim())?.arn?.trim() || null;
+    const { KiroService } = await import("./services/kiro.js");
+    const arn = await new KiroService().listAvailableProfiles(
+      accessToken,
+      (typeof region === "string" && region.trim()) || "us-east-1",
+    );
+    return arn?.trim() || null;
   } catch {
     return null;
   }
