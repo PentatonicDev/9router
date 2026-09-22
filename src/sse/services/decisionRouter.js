@@ -167,9 +167,15 @@ const ask = (target, config, state, questions, log) =>
  * the list, so a wrong pick costs one attempt rather than a failure.
  */
 export async function decideComboModel({ body, models, comboName, config, target, log, previousVerdict = null, ranked = null }) {
-  if (models.length < 2) return { models, decision: null };
+  // Cheapest first, and the list both the question and the verdict are served from.
+  // The question MUST be built over this pool: for a combo-of-combos `models` holds
+  // tier names, so asking with those and validating against the expanded pool has
+  // jev answer a tier name the pool does not contain — every verdict discarded as
+  // `no_usable_pick`, measured at 243 of 243 calls.
+  const pool = ranked?.length ? ranked : rankByCost(models, priceOf);
+  if (pool.length < 2) return { models, decision: null };
 
-  const { questions } = buildModelQuestions(models, criteriaResolver(config));
+  const { questions } = buildModelQuestions(pool, criteriaResolver(config));
   const state = buildState(body, { maxStateChars: 24000 });
   const response = await ask(target, config, state, questions, log);
 
@@ -178,13 +184,8 @@ export async function decideComboModel({ body, models, comboName, config, target
     return { models, decision: null, reason: "ask_failed" };
   }
 
-  // Cheapest first, and the list the verdict is served from. For a combo-of-combos
-  // the caller expands the tiers, so the pick is a real model and the fallback that
-  // follows it walks every other model the combo can reach — not the two sibling
-  // tiers, whose own first members are already in this list.
-  const pool = ranked?.length ? ranked : rankByCost(models, priceOf);
-  // Off the pool, not off `models`: for a combo-of-combos `models` holds tier names
-  // that carry no price, so ranking it would name an expensive tier the cheapest.
+  // Off the pool: `models` holds tier names that carry no price, so ranking it
+  // would name an expensive tier the cheapest.
   const cheapest = pool[0] || null;
 
   const decision = resolveModelDecision({

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   decideSwitch,
   resolveModelDecision,
@@ -10,7 +10,7 @@ import {
 } from "../../open-sse/decision/decide.js";
 import { normalizeAnswers, decisionUrlFor, DECISION_MODEL_TYPE } from "../../open-sse/decision/jev.js";
 import { buildState, hasCacheBreakpoint } from "../../open-sse/decision/state.js";
-import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist, shortlistTools, SHORTLIST_MAX, DEPTH_LEVELS } from "../../open-sse/decision/questions.js";
+import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist, shortlistTools, SHORTLIST_MAX } from "../../open-sse/decision/questions.js";
 import { injectHint, hintText } from "../../open-sse/decision/injectHint.js";
 import { extractTools, applyToolChoice, supportsToolChoice, UNSUPPORTED_EXECUTORS } from "../../open-sse/decision/tools.js";
 import { rankPool, priceOf } from "../../src/sse/services/decisionRouter.js";
@@ -575,5 +575,73 @@ describe("rankPool — combo-of-combos", () => {
   it("keeps a member that resolves to nothing rather than dropping it", async () => {
     const pool = await rankPool(["cc/claude-opus-5", "unknown-combo"], async () => null);
     expect(pool).toContain("unknown-combo");
+  });
+});
+
+// The bug this pins, measured in production at 243 of 243 calls: the question was
+// built over the combo's own member list (tier names for a combo-of-combos) while
+// the verdict was validated against the expanded pool. jev answered a tier name the
+// pool did not contain, and every verdict was discarded as `no_usable_pick`.
+const target = { url: "https://gw.test/systemone", apiKey: "vk", provider: "vercel-ai-gateway", connectionId: "conn-1", callerApiKey: "sk-caller" };
+vi.mock("@/lib/db/index.js", () => ({ saveRequestUsage: async () => {} }));
+vi.mock("@/lib/usageDb.js", () => ({ saveRequestDetail: async () => {} }));
+
+describe("decideComboModel asks over the pool it validates against", () => {
+  it("offers the expanded models as the Choice options, not the nested combo names", async () => {
+    const { decideComboModel } = await import("../../src/sse/services/decisionRouter.js");
+    let asked = null;
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      asked = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        model: "typesafe-ai/jev",
+        answers: {
+          // jev answers with an option it was actually offered.
+          model: { type: "choice", choice: "cc/claude-opus-5", confidence: 0.95, probabilities: { "cc/claude-opus-5": 0.95, "ocg/deepseek-flash": 0.03 } },
+          needs_reasoning: { type: "noul", noul: 0.5 },
+        },
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const models = ["tier-hard", "tier-cheap"];
+    const ranked = ["ocg/deepseek-flash", "cc/claude-opus-5"];
+    await decideComboModel({
+      body: { messages: [{ role: "user", content: "oi" }] },
+      models, ranked, comboName: "c",
+      config: { model: "typesafe-ai/jev", minConfidence: 0.7, switchConfidence: 0.85, timeoutMs: 1000, briefs: {} },
+      target, log: {},
+    });
+
+    const options = Object.keys(asked.questions.model.criteria);
+    // Every option offered must be a model the verdict is validated against.
+    expect(options.sort()).toEqual(["cc/claude-opus-5", "ocg/deepseek-flash"]);
+    expect(options).not.toContain("tier-hard");
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the verdict instead of discarding it as no_usable_pick", async () => {
+    const { decideComboModel } = await import("../../src/sse/services/decisionRouter.js");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      model: "typesafe-ai/jev",
+      answers: {
+        model: { type: "choice", choice: "cc/claude-opus-5", confidence: 0.95, probabilities: { "cc/claude-opus-5": 0.95 } },
+        needs_reasoning: { type: "noul", noul: 0.5 },
+      },
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    const out = await decideComboModel({
+      body: { messages: [{ role: "user", content: "oi" }] },
+      models: ["tier-hard", "tier-cheap"],
+      ranked: ["ocg/deepseek-flash", "cc/claude-opus-5"],
+      comboName: "c",
+      config: { model: "typesafe-ai/jev", minConfidence: 0.7, switchConfidence: 0.85, timeoutMs: 1000, briefs: {} },
+      target, log: {},
+    });
+
+    expect(out.decision.apply).toBe(true);
+    expect(out.decision.reason).not.toBe("no_usable_pick");
+    expect(out.models[0]).toBe("cc/claude-opus-5");
+    vi.unstubAllGlobals();
   });
 });
