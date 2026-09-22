@@ -545,3 +545,35 @@ describe("combosRepo: maxThinking (combo-wide cap) round-trip (real SQLite, temp
     expect(fetched.maxThinking).toBe("high");
   });
 });
+
+describe("per-turn effort from the decision's deliberation", () => {
+  it("caps a mechanical turn low and leaves a hard one alone", async () => {
+    const { effortCeilingForDeliberation } = await import("../../src/sse/handlers/chat.js");
+    // Only the bottom of the range is capped: a hard turn keeps whatever the client
+    // asked for, because a ceiling can only lower a budget, never raise it.
+    expect(effortCeilingForDeliberation(0.05)).toBe("low");
+    expect(effortCeilingForDeliberation(0.29)).toBe("low");
+    expect(effortCeilingForDeliberation(0.45)).toBe("medium");
+    expect(effortCeilingForDeliberation(0.69)).toBe("medium");
+    expect(effortCeilingForDeliberation(0.7)).toBeNull();
+    expect(effortCeilingForDeliberation(0.95)).toBeNull();
+    // No verdict (solo request, decision off, or a failed call) must change nothing.
+    expect(effortCeilingForDeliberation(null)).toBeNull();
+    expect(effortCeilingForDeliberation(undefined)).toBeNull();
+    expect(effortCeilingForDeliberation("0.1")).toBeNull();
+  });
+
+  it("the tightest cap wins when the per-turn one joins the two existing caps", async () => {
+    const { resolveMaxThinkingLevel } = await import("../../src/sse/handlers/chat.js");
+    // Two-arg behaviour is unchanged.
+    expect(resolveMaxThinkingLevel("high", "low")).toBe("low");
+    expect(resolveMaxThinkingLevel(null, null)).toBeNull();
+    // Three: the per-turn cap is a ceiling like the others, so a lower static cap
+    // still wins over a higher per-turn one.
+    expect(resolveMaxThinkingLevel("high", null, "low")).toBe("low");
+    expect(resolveMaxThinkingLevel("high", "medium", "low")).toBe("low");
+    expect(resolveMaxThinkingLevel("minimal", "high", "low")).toBe("minimal");
+    // And a null per-turn cap (hard turn) never loosens the static ones.
+    expect(resolveMaxThinkingLevel("medium", null, null)).toBe("medium");
+  });
+});

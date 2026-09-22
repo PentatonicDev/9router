@@ -19,6 +19,7 @@ export const DEFAULT_DECISION = {
   model: "typesafe-ai/jev",
   models: [],
   briefs: {},
+  effort: false,
   toolMode: "hint",
   minConfidence: 0.7,
   switchConfidence: 0.85,

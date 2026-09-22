@@ -43,12 +43,36 @@ import { hasWebSearchServerTool, emulateWebSearch } from "../services/webSearchE
 // position) of the combo-wide cap and that candidate's own per-model cap;
 // either may be absent. A level absent from THINKING_ORDER is ignored, same
 // as applyThinking's own unknown-cap handling.
-export function resolveMaxThinkingLevel(comboMaxThinking, perModelMaxThinking) {
-  const comboIdx = comboMaxThinking ? THINKING_ORDER.indexOf(comboMaxThinking) : -1;
-  const perModelIdx = perModelMaxThinking ? THINKING_ORDER.indexOf(perModelMaxThinking) : -1;
-  if (comboIdx === -1) return perModelIdx === -1 ? null : perModelMaxThinking;
-  if (perModelIdx === -1) return comboMaxThinking;
-  return perModelIdx <= comboIdx ? perModelMaxThinking : comboMaxThinking;
+/**
+ * The tightest of any number of caps. Every input is a ceiling, never a floor, so
+ * adding the per-turn one can only ever lower the budget — it never overrides what
+ * the client asked for upward.
+ */
+/**
+ * A mechanical turn does not need a large reasoning budget. Measured on Bedrock
+ * Sonnet 4.6: budget 1024 produced 223 chars of thinking against 4,460 at 24576,
+ * with 28% fewer output tokens and 28% less latency. Only the bottom of the range
+ * is capped — a hard turn is left alone so the client's own request stands.
+ */
+export function effortCeilingForDeliberation(deliberation) {
+  if (typeof deliberation !== "number") return null;
+  if (deliberation < 0.3) return "low";
+  if (deliberation < 0.7) return "medium";
+  return null;
+}
+
+export function resolveMaxThinkingLevel(...levels) {
+  let tightest = null;
+  let tightestIdx = Infinity;
+  for (const level of levels) {
+    const idx = level ? THINKING_ORDER.indexOf(level) : -1;
+    if (idx === -1) continue;
+    if (idx < tightestIdx) {
+      tightestIdx = idx;
+      tightest = level;
+    }
+  }
+  return tightest;
 }
 
 /**
@@ -164,12 +188,13 @@ export async function handleChat(request, clientRawRequest = null, options = {})
  * jev all return the pool untouched.
  */
 async function orderComboModels({ body, models, comboName, strategy, settings, apiKey, log }) {
-  if (strategy !== "auto" || models.length < 2) return models;
+  const unchanged = { models, deliberation: null };
+  if (strategy !== "auto" || models.length < 2) return unchanged;
   const config = normalizeDecisionConfig(settings.decisionRouter);
-  if (config.mode === "off") return models;
+  if (config.mode === "off") return unchanged;
 
   const target = await resolveDecisionTarget(config, { apiKey, log });
-  if (!target) return models;
+  if (!target) return unchanged;
 
   let result;
   try {
@@ -184,16 +209,17 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
     });
   } catch (error) {
     log.warn("DECISION", `model decision failed, pool order unchanged: ${error.message}`);
-    return models;
+    return unchanged;
   }
   rememberVerdict(comboName, result.decision);
+  const deliberation = result.decision?.deliberation ?? null;
 
   if (config.mode === "shadow") {
     // Baseline: the call happened and was priced, the answer is only logged.
     log.info("DECISION", `shadow: "${comboName}" would use ${result.decision?.model || "(unchanged)"}`);
-    return models;
+    return unchanged;
   }
-  return result.models;
+  return { models: result.models, deliberation };
 }
 
 /**
@@ -314,9 +340,11 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
     }
 
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
-    const orderedModels = await orderComboModels({
+    const ordered = await orderComboModels({
       body, models: augmentedModels, comboName: modelStr, strategy: comboStrategy, settings, apiKey, log,
     });
+    routingContext.deliberation = ordered.deliberation;
+    const orderedModels = ordered.models;
     log.info("CHAT", `Combo "${modelStr}" with ${orderedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
@@ -403,10 +431,12 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       }
 
       const comboStickyLimit = chatSettings.comboStickyRoundRobinLimit;
-      const orderedModels = await orderComboModels({
+      const ordered = await orderComboModels({
         body, models: augmentedModels, comboName: modelStr, strategy: comboStrategy,
         settings: chatSettings, apiKey, log,
       });
+      routingContext.deliberation = ordered.deliberation;
+      const orderedModels = ordered.models;
       log.info("CHAT", `Combo "${modelStr}" with ${orderedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
       return handleComboChat({
         body,
@@ -478,9 +508,13 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     // Use shared chatCore
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
+    const perTurnEffort = chatSettings.decisionRouter?.effort
+      ? effortCeilingForDeliberation(routingContext.deliberation)
+      : null;
     const maxThinkingLevel = resolveMaxThinkingLevel(
       comboModelOptions?.maxThinking ?? null,
-      comboModelOptions?.modelOptions?.[modelStr]?.maxThinking ?? null
+      comboModelOptions?.modelOptions?.[modelStr]?.maxThinking ?? null,
+      perTurnEffort
     );
     // Detect source format by endpoint + body
     const clientFormat = request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null;

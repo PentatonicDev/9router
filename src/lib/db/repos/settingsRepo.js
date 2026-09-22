@@ -96,6 +96,12 @@ const DEFAULT_SETTINGS = {
     model: "typesafe-ai/jev",
     models: [],
     briefs: {},
+    // Cap the reasoning budget per turn from the same verdict that picks the model:
+    // a mechanical turn gets a low ceiling, a hard one is left alone. Separate from
+    // `mode` because the two levers carry different evidence — model routing is
+    // proven across three pool orders, this one is measured at 20x on Bedrock with
+    // few samples.
+    effort: false,
     toolMode: "hint",
     minConfidence: 0.7,
     switchConfidence: 0.85,
