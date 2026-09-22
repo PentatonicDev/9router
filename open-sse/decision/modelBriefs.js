@@ -32,6 +32,20 @@ export const MODEL_BRIEFS = {
   "claude-fable-5":
     "Most expensive and most capable. Reserve for long, ambiguous, high-stakes work where being wrong costs more than the tokens.",
 
+  // === DeepSeek ===
+  "deepseek-flash":
+    "Cheap and fast with native reasoning. Use for mechanical edits, formatting, lookups, and short commands. Good at code for its cost.",
+  "deepseek-chat":
+    "Mid-range reasoning. Use for straightforward code work and multi-step tasks with clear requirements.",
+  "deepseek-reasoner":
+    "Strong reasoning. Use for harder debugging and multi-file work where the cheap model is not enough.",
+
+  // === GLM (Zhipu) ===
+  "glm-5.3-flash":
+    "Cheap and fast with native reasoning and long context. Use for mechanical edits, formatting, lookups, and summarising long documents.",
+  "glm-5.2":
+    "Mid-range reasoning. Use for straightforward implementation and medium-scope refactors.",
+
   // === OpenAI ===
   "gpt-5-mini":
     "Small and cheap. Use for mechanical edits, formatting, short lookups, and summarising.",
@@ -45,6 +59,8 @@ export const MODEL_BRIEFS = {
     "Code-tuned and fast, but with a short context. Use for dense code editing and localised refactors; avoid tasks needing a lot of accumulated context.",
   "gpt-5.6-luna":
     "Cheap and general. Use for straightforward implementation and mechanical work when a Claude model is unavailable.",
+  "gpt-5.6-terra":
+    "Balanced mid-range. Use for implementing features, tests, and refactors with clear requirements — similar capability to Sonnet.",
   "gpt-5.6-sol":
     "Strong and expensive. Use for difficult reasoning, architecture, and debugging at the same tier as the top Claude models.",
   "gpt-6-astra":
@@ -62,7 +78,13 @@ export const MODEL_BRIEFS = {
 export function resolveCriteria({ provider, model, briefs = {}, maxChars = 600 }) {
   const id = String(model || "");
   const override = briefs[`${provider}/${id}`] || briefs[id];
-  const curated = MODEL_BRIEFS[id] || briefsFor(vendorSuffix(id)) || matchSuffix(MODEL_BRIEFS, id);
+  // Exact match, then vendor-prefix strip ("anthropic/..." → "..."), then Bedrock geo.vendor prefix
+  // ("global.anthropic.claude-..." → "claude-..."), then family prefix match.
+  const canonical = stripBedrockPrefix(id);
+  const curated = MODEL_BRIEFS[id]
+    || briefsFor(vendorSuffix(id))
+    || (canonical !== id ? briefsFor(canonical) : null)
+    || matchSuffix(MODEL_BRIEFS, canonical);
   return truncateText(override || curated || describeCapabilities(provider, id), maxChars);
 }
 
@@ -85,15 +107,45 @@ function vendorSuffix(id) {
 
 function briefsFor(id) {
   if (!id) return null;
-  return MODEL_BRIEFS[id] || null;
+  return MODEL_BRIEFS[id] || MODEL_BRIEFS[stripBedrockPrefix(id)] || null;
 }
 
-/** Versioned ids fall back to their family brief. */
+/** Bedrock ids carry a geo and vendor prefix: "global.anthropic.claude-opus-4-6-v1".
+ *  The brief table is keyed by the canonical name, so strip to "claude-opus-4-6-v1",
+ *  then match against family prefixes like "claude-opus-" because versions diverge.  */
+function stripBedrockPrefix(id) {
+  // "global.anthropic.claude-..." → "claude-..."
+  const parts = id.split(".");
+  for (let i = 0; i < parts.length; i++) {
+    const rest = parts.slice(i).join(".");
+    if (MODEL_BRIEFS[rest]) return rest;
+    // Try matching against any existing key prefix: "claude-opus-4-6-v1" starts with "claude-opus-"
+    const match = matchSuffix(MODEL_BRIEFS, rest);
+    if (match !== null) return rest; // Return the id, not the matched brief text
+  }
+  return id;
+}
+
+/** Versioned ids fall back to their family brief. Extract base model name by stripping
+ *  version/revision segments from the end: "claude-opus-4-6-v1" → "claude-opus",
+ *  then match against keys with the same base name. */
 function matchSuffix(table, id) {
+  const baseId = extractBaseName(id);
   for (const key of Object.keys(table)) {
-    if (key.length >= 8 && id.startsWith(key)) return table[key];
+    if (extractBaseName(key) === baseId) return table[key];
   }
   return null;
+}
+
+function extractBaseName(id) {
+  const parts = id.split("-");
+  const result = [];
+  for (const part of parts) {
+    // Stop at: pure digits, 8-digit dates, v-prefixed versions, or anything with :
+    if (/^\d+$/.test(part) || /^\d{8}$/.test(part) || /^v\d/.test(part) || part.includes(":")) break;
+    result.push(part);
+  }
+  return result.join("-") || id;
 }
 
 function truncateText(text, max) {
