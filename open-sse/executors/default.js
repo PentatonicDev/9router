@@ -205,8 +205,12 @@ export class DefaultExecutor extends BaseExecutor {
    * Registry entries carry `decisionConfig.path` for providers that also serve
    * evaluation models. A model marked with the `evaluation` capability is not a
    * language model: the chat endpoint refuses it ("is an evaluation model, not a
-   * language model"), so it goes to that path instead. The path is resolved against
-   * the provider's own chat origin, so it moves with the transport.
+   * language model"), so it goes to that path instead.
+   *
+   * The path is per provider and the shapes differ — TypeSafe's own API serves it at
+   * `/v1/systemone`, the Vercel gateway at `/typesafe/v1/systemone`, OpenRouter at
+   * `/api/alpha/decisions` — so it is read from the entry and resolved against that
+   * provider's own chat origin, never assumed.
    */
   evaluationUrl(model, credentials = null) {
     const entry = REGISTRY.find((e) => e.id === this.provider || e.alias === this.provider);
