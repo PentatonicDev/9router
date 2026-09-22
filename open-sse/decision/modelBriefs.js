@@ -1,54 +1,36 @@
-// "What this model is FOR" — the criteria jev reads when picking from a pool. This
-// text is the feature: price + capability flags decided 0/4 correctly against 5/5
-// for these briefs (measured), because "reasoning: true, 1000k context" says nothing
-// while "root-cause debugging of intermittent production bugs" says everything.
+// Model criteria for the decision model (jev). The brief tells jev what each
+// model is FOR so it can match task to model. Price never reaches this text —
+// cost is the pool's ordering, applied in code after jev judges fitness.
 //
-// No price reaches this text. Arithmetic over a rate table is a documented weakness
-// of the decision model, and a brief carrying "$5/M in" asks for exactly that. Cost
-// is the pool's own ordering, applied in code after the model has judged fitness.
-//
-// Keyed by canonical model id.
+// Resolution order: operator override → curated table → derived brief.
+// The derived brief replaced an old capability-flag fallback that measured 0/4
+// correct decisions; the tier-based derivation uses the same structured data
+// (caps + pricing) to generate task-oriented text instead of raw flags.
 
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
+import { getPricingForModel } from "../providers/pricing.js";
 
+// ── Curated briefs ──────────────────────────────────────────────────
+// Override table for models where the derived brief isn't precise enough.
+// Every entry here wins over derivation. Keep only the delta: if derivation
+// already says the right thing, remove the entry.
 export const MODEL_BRIEFS = {
-  // === Anthropic ===
-  "claude-haiku-4.5":
-    "Cheapest and fastest. Use for mechanical edits, renames, formatting, lookups, lint, single-command work, and summarising. Do NOT use for architecture, hard debugging, or multi-file refactors.",
-  "claude-haiku-4-5-20251001":
-    "Cheapest and fastest. Use for mechanical edits, renames, formatting, lookups, lint, single-command work, and summarising. Do NOT use for architecture, hard debugging, or multi-file refactors.",
-  "claude-sonnet-4.5":
-    "Balanced. Use for implementing features, writing tests, medium-scope refactors, and multi-file work with clear requirements.",
-  "claude-sonnet-4.6":
-    "Balanced. Use for implementing features, writing tests, medium-scope refactors, and multi-file work with clear requirements.",
-  "claude-sonnet-5":
-    "Balanced. Use for implementing features, writing tests, medium-scope refactors, and multi-file work with clear requirements.",
-  "claude-opus-4.5":
-    "Strong reasoning. Use for architecture, root-cause debugging of non-obvious bugs, race conditions, intermittent production faults, and design decisions with trade-offs.",
-  "claude-opus-4.6":
-    "Strong reasoning. Use for architecture, root-cause debugging of non-obvious bugs, race conditions, intermittent production faults, and design decisions with trade-offs.",
-  "claude-opus-5":
-    "Strong reasoning. Use for architecture, root-cause debugging of non-obvious bugs, race conditions, intermittent production faults, and design decisions with trade-offs.",
+  // Fable: derivation would say "frontier" but the brief needs the explicit
+  // "reserve" framing to discourage jev from picking it casually.
   "claude-fable-5":
     "Most expensive and most capable. Reserve for long, ambiguous, high-stakes work where being wrong costs more than the tokens.",
 
-  // === DeepSeek ===
+  // DeepSeek: pricing is an outlier — all three cost $0.14/M but vary widely
+  // in capability. Derivation would call them all "budget".
   "deepseek-flash":
     "Cheap and fast with native reasoning. Use for mechanical edits, formatting, lookups, and short commands. Good at code for its cost.",
   "deepseek-chat":
-    "Mid-range reasoning. Use for straightforward code work and multi-step tasks with clear requirements.",
+    "Cheap mid-range reasoning. Use for straightforward code work and multi-step tasks with clear requirements.",
   "deepseek-reasoner":
-    "Strong reasoning. Use for harder debugging and multi-file work where the cheap model is not enough.",
+    "Cheap but strong reasoning. Use for harder debugging and multi-file work where the cheap model is not enough.",
 
-  // === GLM (Zhipu) ===
-  "glm-5.3-flash":
-    "Cheap and fast with native reasoning and long context. Use for mechanical edits, formatting, lookups, and summarising long documents.",
-  "glm-5.2":
-    "Mid-range reasoning. Use for straightforward implementation and medium-scope refactors.",
-
-  // === OpenAI ===
-  "gpt-5-mini":
-    "Small and cheap. Use for mechanical edits, formatting, short lookups, and summarising.",
+  // Codex: code-tuned variants where the "tuned for code" qualifier matters
+  // more than the price tier.
   "gpt-5.1-codex-mini":
     "Small and cheap, tuned for code. Use for localised code edits and mechanical changes; keep the context short.",
   "gpt-5.1-codex-max":
@@ -57,40 +39,61 @@ export const MODEL_BRIEFS = {
     "Code-tuned and mid-priced. Use for dense code editing and localised refactors with clear requirements.",
   "gpt-5.3-codex-spark":
     "Code-tuned and fast, but with a short context. Use for dense code editing and localised refactors; avoid tasks needing a lot of accumulated context.",
-  "gpt-5.6-luna":
-    "Cheap and general. Use for straightforward implementation and mechanical work when a Claude model is unavailable.",
-  "gpt-5.6-terra":
-    "Balanced mid-range. Use for implementing features, tests, and refactors with clear requirements — similar capability to Sonnet.",
-  "gpt-5.6-sol":
-    "Strong and expensive. Use for difficult reasoning, architecture, and debugging at the same tier as the top Claude models.",
-  "gpt-6-astra":
-    "Strong generalist. Use when the task mixes code and broad reasoning without being deep debugging.",
 };
 
-/**
- * The criteria for one model: the operator's own brief, then the table above, then
- * price + capability flags.
- *
- * ponytail: the third step is measured bad (0/4; only the confidence threshold
- * stopped it routing wrong). It is a floor for unknown models, not a substitute
- * for a brief.
- */
-export function resolveCriteria({ provider, model, briefs = {}, maxChars = 600 }) {
-  const id = String(model || "");
-  const override = briefs[`${provider}/${id}`] || briefs[id];
-  // Exact match, then vendor-prefix strip ("anthropic/..." → "..."), then Bedrock geo.vendor prefix
-  // ("global.anthropic.claude-..." → "claude-..."), then family prefix match.
-  const canonical = stripBedrockPrefix(id);
-  const curated = MODEL_BRIEFS[id]
-    || briefsFor(vendorSuffix(id))
-    || (canonical !== id ? briefsFor(canonical) : null)
-    || matchSuffix(MODEL_BRIEFS, canonical);
-  return truncateText(override || curated || describeCapabilities(provider, id), maxChars);
+// ── Derived brief engine ────────────────────────────────────────────
+// Inspired by LiteLLM's quality_tier (budget/mid/frontier) approach:
+// classify models into cost tiers from their pricing, then generate
+// task-oriented text from tier + capabilities.
+
+// ponytail: tier boundaries are calibrated against Sep 2026 pricing.
+// When a new price tier appears (e.g. sub-$0.10 or $20+), add a row.
+// Upgrade: feed jev structured dimensions instead of text.
+const TIERS = [
+  { ceiling: 0.30,  label: "budget",   strength: "Cheapest and fastest",       use: "mechanical edits, formatting, lookups, renames, lint, and summarising", avoid: "Do NOT use for architecture, hard debugging, or multi-file refactors." },
+  { ceiling: 1.50,  label: "low-mid",  strength: "Cheap and capable",          use: "straightforward implementation, medium-scope tasks, and multi-step work with clear requirements", avoid: null },
+  { ceiling: 3.50,  label: "mid",      strength: "Balanced",                   use: "implementing features, writing tests, medium-scope refactors, and multi-file work with clear requirements", avoid: null },
+  { ceiling: 6.00,  label: "high",     strength: "Strong reasoning",           use: "architecture, root-cause debugging of non-obvious bugs, race conditions, and design decisions with trade-offs", avoid: null },
+  { ceiling: Infinity, label: "frontier", strength: "Most capable and expensive", use: "long, ambiguous, high-stakes work where being wrong costs more than the tokens", avoid: null },
+];
+
+function tierFor(inputPrice) {
+  for (const tier of TIERS) {
+    if (inputPrice <= tier.ceiling) return tier;
+  }
+  return TIERS[TIERS.length - 1];
 }
 
-
-function describeCapabilities(provider, model) {
+function deriveBrief(provider, model) {
   const caps = getCapabilitiesForModel(provider, model) || {};
+  const pricing = getPricingForModel(provider, model);
+  const inputPrice = pricing?.input ?? null;
+
+  if (inputPrice === null) return describeCapabilities(caps);
+
+  const tier = tierFor(inputPrice);
+  const parts = [tier.strength + "."];
+
+  // Modality qualifiers that affect task fitness
+  const extras = [];
+  if (caps.reasoning) extras.push("native reasoning");
+  if (caps.vision) extras.push("reads images");
+  if (caps.search) extras.push("web search");
+  if (caps.pdf) extras.push("reads PDFs");
+  if (caps.audioInput) extras.push("audio input");
+  if (caps.videoInput) extras.push("video input");
+  if (caps.contextWindow >= 500000) extras.push(`${Math.round(caps.contextWindow / 1000)}k context`);
+
+  if (extras.length) parts.push("Supports " + extras.join(", ") + ".");
+
+  parts.push("Use for " + tier.use + ".");
+  if (tier.avoid) parts.push(tier.avoid);
+
+  return parts.join(" ");
+}
+
+// Fallback for models with no pricing data at all
+function describeCapabilities(caps) {
   const bits = [];
   if (caps.reasoning) bits.push("supports native reasoning");
   if (caps.contextWindow) bits.push(`${Math.round(caps.contextWindow / 1000)}k context`);
@@ -98,8 +101,21 @@ function describeCapabilities(provider, model) {
   return bits.length ? bits.join(", ") + "." : "";
 }
 
-/** Passthrough ids carry a vendor prefix ("anthropic/claude-haiku-4.5"); the table
- *  is keyed by the bare id, and a miss falls silently to the bad derived criteria. */
+// ── Resolution ──────────────────────────────────────────────────────
+
+export function resolveCriteria({ provider, model, briefs = {}, maxChars = 600 }) {
+  const id = String(model || "");
+  const override = briefs[`${provider}/${id}`] || briefs[id];
+  const canonical = stripBedrockPrefix(id);
+  const curated = MODEL_BRIEFS[id]
+    || briefsFor(vendorSuffix(id))
+    || (canonical !== id ? briefsFor(canonical) : null)
+    || matchSuffix(MODEL_BRIEFS, canonical);
+  return truncateText(override || curated || deriveBrief(provider, id), maxChars);
+}
+
+// ── Id normalization helpers ────────────────────────────────────────
+
 function vendorSuffix(id) {
   const slash = id.indexOf("/");
   return slash > 0 ? id.slice(slash + 1) : null;
@@ -110,25 +126,17 @@ function briefsFor(id) {
   return MODEL_BRIEFS[id] || MODEL_BRIEFS[stripBedrockPrefix(id)] || null;
 }
 
-/** Bedrock ids carry a geo and vendor prefix: "global.anthropic.claude-opus-4-6-v1".
- *  The brief table is keyed by the canonical name, so strip to "claude-opus-4-6-v1",
- *  then match against family prefixes like "claude-opus-" because versions diverge.  */
 function stripBedrockPrefix(id) {
-  // "global.anthropic.claude-..." → "claude-..."
   const parts = id.split(".");
   for (let i = 0; i < parts.length; i++) {
     const rest = parts.slice(i).join(".");
     if (MODEL_BRIEFS[rest]) return rest;
-    // Try matching against any existing key prefix: "claude-opus-4-6-v1" starts with "claude-opus-"
     const match = matchSuffix(MODEL_BRIEFS, rest);
-    if (match !== null) return rest; // Return the id, not the matched brief text
+    if (match !== null) return rest;
   }
   return id;
 }
 
-/** Versioned ids fall back to their family brief. Extract base model name by stripping
- *  version/revision segments from the end: "claude-opus-4-6-v1" → "claude-opus",
- *  then match against keys with the same base name. */
 function matchSuffix(table, id) {
   const baseId = extractBaseName(id);
   for (const key of Object.keys(table)) {
@@ -141,7 +149,6 @@ function extractBaseName(id) {
   const parts = id.split("-");
   const result = [];
   for (const part of parts) {
-    // Stop at: pure digits, 8-digit dates, v-prefixed versions, or anything with :
     if (/^\d+$/.test(part) || /^\d{8}$/.test(part) || /^v\d/.test(part) || part.includes(":")) break;
     result.push(part);
   }
