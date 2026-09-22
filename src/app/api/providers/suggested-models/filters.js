@@ -28,12 +28,18 @@ export const FILTERS = {
       .map((m) => ({ id: m.id, name: m.name || m.id })),
 
   // A plain OpenAI-shaped /v1/models catalog: `{ data: [{ id, name?, ... }] }`.
-  // Four providers declare this type and the filter never existed, so their fetchers
-  // answered 400 "Unknown filter type" and the lists came back empty.
+  // Only language models, and only free ones with ≥200k context — the label says
+  // "Suggested free models (≥200k context)" and the previous version returned the
+  // entire catalog (380 entries including paid and non-language models).
   "openai": (models) =>
     (Array.isArray(models) ? models : models?.data || [])
-      .filter((m) => typeof m?.id === "string" && m.id)
-      .map((m) => ({ id: m.id, name: m.name || m.display_name || m.id, contextLength: m.context_window || m.context_length })),
+      .filter((m) => typeof m?.id === "string" && m.id
+        && (!m.type || m.type === "language")
+        && (m.context_window || m.context_length || 0) >= 200000
+        && String(m.pricing?.input || "1") === "0"
+        && String(m.pricing?.output || "1") === "0")
+      .map((m) => ({ id: m.id, name: m.name || m.display_name || m.id, contextLength: m.context_window || m.context_length }))
+      .sort((a, b) => (b.contextLength || 0) - (a.contextLength || 0)),
 
   "airforce-free": (models) =>
     (Array.isArray(models) ? models : [])

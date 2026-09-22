@@ -352,7 +352,7 @@ export async function buildModelsList(kindFilter, options = {}) {
     } else {
       // Clients (Hermes, OpenClaw) size their context window from these
       // fields; without them a combo is guessed at a fixed default.
-      const limits = comboContextLimits(combo, connections);
+      const limits = comboContextLimits(combo, connections, combos);
       if (limits?.contextWindow) entry.context_length = limits.contextWindow;
       if (limits?.maxOutput) entry.max_completion_tokens = limits.maxOutput;
     }

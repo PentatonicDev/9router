@@ -20,11 +20,17 @@ describe("suggested-models filters", () => {
     expect([...declared].filter((t) => !FILTERS[t])).toEqual([]);
   });
 
-  it("keeps the openai shape, with and without a data envelope", () => {
-    const rows = [{ id: "a/b", name: "AB", context_window: 200000 }, { id: "c/d" }];
-    expect(FILTERS.openai(rows)).toEqual([
-      { id: "a/b", name: "AB", contextLength: 200000 },
-      { id: "c/d", name: "c/d", contextLength: undefined },
+  it("keeps only free language models with ≥200k context", () => {
+    const free200k = { id: "a/b", name: "AB", context_window: 256000, type: "language", pricing: { input: "0", output: "0" } };
+    const paid = { id: "c/d", name: "CD", context_window: 256000, type: "language", pricing: { input: "0.003", output: "0.015" } };
+    const small = { id: "e/f", context_window: 128000, type: "language", pricing: { input: "0", output: "0" } };
+    const embedding = { id: "g/h", context_window: 256000, type: "embedding", pricing: { input: "0", output: "0" } };
+    const noType = { id: "i/j", context_window: 256000, pricing: { input: "0", output: "0" } };
+    const rows = [free200k, paid, small, embedding, noType];
+    const result = FILTERS.openai(rows);
+    expect(result).toEqual([
+      { id: "a/b", name: "AB", contextLength: 256000 },
+      { id: "i/j", name: "i/j", contextLength: 256000 },
     ]);
     expect(FILTERS.openai({ data: rows })).toHaveLength(2);
     expect(FILTERS.openai([{ no: "id" }])).toEqual([]);

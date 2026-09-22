@@ -40,4 +40,19 @@ describe("comboContextLimits", () => {
     expect(limits).toMatchObject({ providerId: "codex", modelId: "gpt-5.6-sol", contextWindow: caps.contextWindow, maxOutput: caps.maxOutput });
     expect(limits.contextWindow).toBeGreaterThan(0);
   });
+
+  it("resolves a combo-of-combos by descending into the first sub-combo", () => {
+    const opus = { name: "claude-opus-5", models: ["cc/claude-opus-5", "cx/gpt-5.6-sol(high)"] };
+    const sonnet = { name: "claude-sonnet-5", models: ["cc/claude-sonnet-5"] };
+    const auto = { name: "claude-auto", models: ["claude-opus-5", "claude-sonnet-5"] };
+    const allCombos = [opus, sonnet, auto];
+    const limits = comboContextLimits(auto, [], allCombos);
+    expect(limits).not.toBeNull();
+    expect(limits.contextWindow).toBe(getCapabilitiesForModel("claude", "claude-opus-5").contextWindow);
+  });
+
+  it("returns null for a combo of bare names when no allCombos is provided (old callers)", () => {
+    const auto = { name: "claude-auto", models: ["claude-opus-5", "claude-sonnet-5"] };
+    expect(comboContextLimits(auto, [])).toBeNull();
+  });
 });

@@ -32,12 +32,37 @@ export function comboCurrentModel(combo, connections = []) {
   return reachable || entries[0];
 }
 
-/** { contextWindow, maxOutput } of the combo's current member, or null. */
-export function comboContextLimits(combo, connections = []) {
+/**
+ * { contextWindow, maxOutput } of the combo's current member, or null.
+ *
+ * Normal combos (members have provider/model) use `comboCurrentModel` so the
+ * limits reflect the member a request would actually reach (conn-aware).
+ *
+ * Combo-of-combos (members are bare names pointing at other combos): the
+ * current-model lookup returns null because bare names have no modelId.
+ * Fall back to walking `allCombos` recursively, capped at depth 2.
+ */
+export function comboContextLimits(combo, connections = [], allCombos = [], _depth = 0) {
+  // Fast path: works for any combo whose members carry a provider slash.
   const current = comboCurrentModel(combo, connections);
-  if (!current) return null;
-  const caps = getCapabilitiesForModel(current.providerId, current.modelId);
-  const contextWindow = Number.isFinite(caps?.contextWindow) ? caps.contextWindow : null;
-  const maxOutput = Number.isFinite(caps?.maxOutput) ? caps.maxOutput : null;
-  return contextWindow || maxOutput ? { contextWindow, maxOutput, ...current } : null;
+  if (current) {
+    const caps = getCapabilitiesForModel(current.providerId, current.modelId);
+    const contextWindow = Number.isFinite(caps?.contextWindow) ? caps.contextWindow : null;
+    const maxOutput = Number.isFinite(caps?.maxOutput) ? caps.maxOutput : null;
+    if (contextWindow || maxOutput) return { contextWindow, maxOutput, ...current };
+  }
+
+  // Slow path: bare-name members — resolve them as sub-combos.
+  if (_depth >= 2) return null;
+  const members = (Array.isArray(combo?.models) ? combo.models : [])
+    .map((m) => (typeof m === "string" ? m : m?.id || m?.model || ""))
+    .filter(Boolean);
+  for (const name of members) {
+    if (name.includes("/")) continue; // already tried above via comboCurrentModel
+    const sub = allCombos.find((c) => c.name === name);
+    if (!sub) continue;
+    const limits = comboContextLimits(sub, connections, allCombos, _depth + 1);
+    if (limits) return limits;
+  }
+  return null;
 }

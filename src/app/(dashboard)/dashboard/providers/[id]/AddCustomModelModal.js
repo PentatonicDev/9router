@@ -31,6 +31,20 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
     setTestStatus("testing");
     setTestError("");
     try {
+      // Evaluation models use the decision endpoint, not /v1/chat/completions.
+      // The generic ping sends a chat body that the evaluation API rejects with
+      // "state: Invalid input". Use the provider validate route instead.
+      if (caps.evaluation) {
+        const res = await fetch("/api/providers/validate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: providerAlias }),
+        });
+        const data = await res.json();
+        setTestStatus(data.valid ? "ok" : "error");
+        setTestError(data.valid ? "" : (data.error || "Evaluation endpoint not reachable"));
+        return;
+      }
       const res = await fetch("/api/models/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
