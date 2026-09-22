@@ -125,8 +125,9 @@ export function resolveModelDecision({
 } = {}) {
   const pick = answers?.model;
   const deliberation = answers?.needs_reasoning;
+  const deliberationNoul = deliberation?.type === "noul" ? deliberation.noul : undefined;
   if (!pick || pick.type !== "choice" || !models.includes(pick.choice)) {
-    return { apply: false, reason: "no_usable_pick" };
+    return { apply: false, reason: "no_usable_pick", deliberation: deliberationNoul ?? null };
   }
   if (!deliberation || deliberation.type !== "noul") {
     return { apply: false, reason: "no_deliberation_signal" };
