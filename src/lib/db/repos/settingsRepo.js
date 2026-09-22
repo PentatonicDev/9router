@@ -102,6 +102,12 @@ const DEFAULT_SETTINGS = {
     // few samples.
     effort: false,
     toolMode: "hint",
+    // Winner strength for the model decision, confidence for the tool decision (see
+    // decide.js). jev scales its confidence by the option count, so the model gate
+    // cannot read it; a tool roster is a Choice too and this one is still measured
+    // there.
+    minStrength: 0.35,
+    switchStrength: 0.6,
     minConfidence: 0.7,
     switchConfidence: 0.85,
     // Matches STREAM_STATUS_GRACE_MS: within it the request is answered before the

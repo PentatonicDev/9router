@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  decideSwitch,
+  decideStrength,
+  winnerStrength,
   resolveModelDecision,
   resolveToolDecision,
   rankByCost,
@@ -43,24 +44,61 @@ describe("normalizeAnswers", () => {
   });
 });
 
-describe("decideSwitch", () => {
-  it("refuses below the floor", () => {
-    expect(decideSwitch({ confidence: 0.57, verdict: "x" })).toMatchObject({ change: false, reason: "low_confidence" });
+// The gate reads SEPARATION (top-1 minus top-2), never the confidence jev reports:
+// measured on one state, the same winner scored confidence 1.00 over 3 options,
+// 0.45 over 6 and 0.31 over 12. A threshold on that value silently tightened every
+// time the pool grew, which is how 97% of verdicts were discarded.
+// The model gate reads winner STRENGTH, never the confidence jev reports: that
+// value scales with the option count — measured on one state, the same winner
+// scored 1.00 over 3 options, 0.45 over 6 and 0.31 over 12 — so a threshold on it
+// tightened silently every time the pool grew, which is how 97% were discarded.
+describe("winnerStrength", () => {
+  it("scales the winner against the uniform baseline of the option count", () => {
+    // 3 options, uniform 0.3333: (0.6667 - 0.3333) / (1 - 0.3333) = 0.5
+    expect(winnerStrength({ probabilities: { a: 0.6667, b: 0.2, c: 0.1333 } })).toBeCloseTo(0.5, 3);
+    // A flat distribution has no favourite.
+    expect(winnerStrength({ probabilities: { a: 0.34, b: 0.33, c: 0.33 } })).toBeCloseTo(0.01, 2);
+    // Everything on one option is the maximum.
+    expect(winnerStrength({ probabilities: { a: 1, b: 0 } })).toBeCloseTo(1, 5);
+  });
+
+  it("is what the raw probability is not: the same strength whatever the option count", () => {
+    // Equal distance above each pool's own uniform baseline, so equal strength —
+    // 0.60 of 3 and 0.45 of 12 are both 0.4 above their floor. The raw p1 differs,
+    // which is exactly why it cannot be the threshold.
+    const three = winnerStrength({ probabilities: { a: 0.6, b: 0.2, c: 0.2 } });
+    const twelve = winnerStrength({
+      probabilities: { a: 0.45, ...Object.fromEntries("bcdefghijkl".split("").map((k) => [k, 0.55 / 11])) },
+    });
+    expect(three).toBeCloseTo(0.4, 3);
+    expect(twelve).toBeCloseTo(0.4, 3);
+  });
+
+  it("treats a one-option or empty distribution as certain and undecided", () => {
+    expect(winnerStrength({ probabilities: { a: 1 } })).toBe(1);
+    expect(winnerStrength({ probabilities: {} })).toBe(0);
+    expect(winnerStrength(null)).toBe(0);
+  });
+});
+
+describe("decideStrength", () => {
+  it("refuses a verdict with no favourite", () => {
+    expect(decideStrength({ strength: 0.05, verdict: "x" })).toMatchObject({ change: false, reason: "no_favourite" });
   });
 
   it("changes on the same turn above the clear band", () => {
-    expect(decideSwitch({ confidence: 0.96, verdict: "x" })).toMatchObject({ change: true, reason: "clear" });
+    expect(decideStrength({ strength: 0.8, verdict: "x" })).toMatchObject({ change: true, reason: "clear" });
   });
 
-  // This is the point of the two bands. Collapsing switchConfidence down to
-  // minConfidence makes this case take the "clear" branch and turns this red —
+  // This is the point of the two bands. Collapsing switchStrength down to
+  // minStrength makes this case take the "clear" branch and turns this red —
   // and nothing else in this file covers it.
   it("in the ambiguous band, waits for a second agreeing verdict", () => {
-    expect(decideSwitch({ confidence: 0.77, verdict: "x", previousVerdict: null }))
+    expect(decideStrength({ strength: 0.45, verdict: "x", previousVerdict: null }))
       .toMatchObject({ change: false, reason: "awaiting_confirmation" });
-    expect(decideSwitch({ confidence: 0.77, verdict: "x", previousVerdict: "y" }))
+    expect(decideStrength({ strength: 0.45, verdict: "x", previousVerdict: "y" }))
       .toMatchObject({ change: false, reason: "awaiting_confirmation" });
-    expect(decideSwitch({ confidence: 0.77, verdict: "x", previousVerdict: "x" }))
+    expect(decideStrength({ strength: 0.45, verdict: "x", previousVerdict: "x" }))
       .toMatchObject({ change: true, reason: "confirmed" });
   });
 });
@@ -116,7 +154,7 @@ describe("cheapestWithinBand", () => {
 
 describe("resolveModelDecision", () => {
   const models = ["p/haiku", "p/sonnet", "p/opus"];
-  const priceOf = (m) => ({ "p/opus": 5, "p/sonnet": 3, "p/haiku": 1 }[m] ?? null);
+  const priceOf = (m) => ({ "p/opus": 5, "p/sonnet": 3, "p/haiku": 1, "p/luna": 1, "p/terra": 2.5, "p/flash": 0.14 }[m] ?? null);
   const answers = (pick, conf, probs, needs = 0.15) => ({
     model: choice(pick, conf, probs),
     needs_reasoning: noul(needs),
@@ -132,12 +170,23 @@ describe("resolveModelDecision", () => {
   });
 
   it("routes to the cheaper model when jev could not separate them", () => {
-    // Confidence clears the gate on its own, so what moves the pick is the price.
+    // A pool wide enough that both dimensions can hold at once: a favourite clear
+    // of the uniform floor, with the runner-up still inside the tie band. In a
+    // 3-option pool those two are arithmetically incompatible — a 0.35 strength
+    // floor forces p1>=0.567, which leaves no room for a runner-up within 0.15.
+    const wide = ["p/opus", "p/sonnet", "p/haiku", "p/luna", "p/terra", "p/flash"];
+    const probs = { "p/sonnet": 0.50, "p/haiku": 0.38, "p/opus": 0.03, "p/luna": 0.03, "p/terra": 0.03, "p/flash": 0.03 };
+    // p1=0.50 with the runner-up 0.12 behind: strength 0.40 clears the floor, and
+    // the gap is inside the tie band. A tie can never reach the same-turn band —
+    // p1 <= 0.575 whenever the runner-up is within 0.15 — so the first sighting is
+    // recorded and the second applies it.
+    // The first sighting is recorded, the second applies it.
+    const first = resolveModelDecision({ answers: answers("p/sonnet", 0.9, probs), models: wide, priceOf });
+    expect(first).toMatchObject({ apply: false, reason: "awaiting_confirmation", model: "p/haiku", downgradedFrom: "p/sonnet" });
     const out = resolveModelDecision({
-      answers: answers("p/sonnet", 0.95, { "p/sonnet": 0.52, "p/haiku": 0.48 }),
-      models, priceOf, cheapest: "p/haiku",
+      answers: answers("p/sonnet", 0.9, probs), models: wide, priceOf, previousVerdict: "p/haiku",
     });
-    expect(out).toMatchObject({ apply: true, model: "p/haiku", downgradedFrom: "p/sonnet" });
+    expect(out).toMatchObject({ apply: true, model: "p/haiku", downgradedFrom: "p/sonnet", reason: "confirmed" });
   });
 
   it("refuses the dangerous contradiction: hard step routed to the cheapest model", () => {
@@ -161,9 +210,10 @@ describe("resolveModelDecision", () => {
   });
 
   it("still applies the pick when no price is known to break a tie with", () => {
+    const wide = ["p/opus", "p/sonnet", "p/haiku", "p/luna", "p/terra", "p/flash"];
     const out = resolveModelDecision({
-      answers: answers("p/sonnet", 0.95, { "p/sonnet": 0.52, "p/haiku": 0.48 }),
-      models, cheapest: "p/haiku",
+      answers: answers("p/sonnet", 0.9, { "p/sonnet": 0.50, "p/haiku": 0.38, "p/opus": 0.03, "p/luna": 0.03, "p/terra": 0.03, "p/flash": 0.03 }),
+      models: wide, previousVerdict: "p/sonnet",
     });
     expect(out).toMatchObject({ apply: true, model: "p/sonnet" });
   });

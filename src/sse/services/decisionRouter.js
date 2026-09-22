@@ -21,8 +21,11 @@ export const DEFAULT_DECISION = {
   model: "typesafe-ai/jev",
   effort: false,
   toolMode: "hint",
-  minConfidence: 0.7,
-  switchConfidence: 0.85,
+  // Winner strength, not confidence (see decide.js): jev scales its confidence by
+  // the option count, so the same winner reads 1.00 in a pool of 3 and 0.31 in a
+  // pool of 12. Calibrated on 383 production verdicts over the 12-model pool.
+  minStrength: 0.35,
+  switchStrength: 0.6,
   timeoutMs: 1500,
 };
 
@@ -184,17 +187,12 @@ export async function decideComboModel({ body, models, comboName, config, target
     return { models, decision: null, reason: "ask_failed" };
   }
 
-  // Off the pool: `models` holds tier names that carry no price, so ranking it
-  // would name an expensive tier the cheapest.
-  const cheapest = pool[0] || null;
-
   const decision = resolveModelDecision({
     answers: response.answers,
     models: pool,
-    cheapest,
     priceOf,
-    minConfidence: config.minConfidence,
-    switchConfidence: config.switchConfidence,
+    minStrength: config.minStrength,
+    switchStrength: config.switchStrength,
     previousVerdict,
   });
 

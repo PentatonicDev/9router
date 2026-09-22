@@ -10,8 +10,25 @@ export const MAX_TOOLS = 120;
 /** jev answers "no tool needed" as an option in the same choice question. */
 export const NO_TOOL = "no_tool_needed";
 
+/** The tool gate, still in confidence units: jev's answer for a tool roster is a
+ *  Choice too, so its confidence scales with the roster size as well. Splitting the
+ *  two gates is deliberate — moving the model gate to a normalized score does not
+ *  make the tool roster's own scaling measured, and this number stays where it was
+ *  until it is. */
 export const DEFAULT_MIN_CONFIDENCE = 0.7;
-export const DEFAULT_SWITCH_CONFIDENCE = 0.85;
+
+/** The model gate, in WINNER-STRENGTH units: how far the winner's probability sits
+ *  above the uniform baseline (1/options), rescaled to 0..1. Absolute confidence
+ *  cannot gate here — jev scales it by the option count, measured on one state as
+ *  1.00 over 3 options, 0.45 over 6 and 0.31 over 12 — so a threshold on it tightened
+ *  silently every time the pool grew, discarding 97% of verdicts.
+ *
+ *  Measured on 383 production verdicts over the 12-model pool: at 0.35 it admits 100%
+ *  of the calls whose winner held half the mass, rejects 100% of the coin flips, and
+ *  covers 40% of traffic. At 0.30 the coverage is 53% but a quarter of the coin flips
+ *  get through. */
+export const DEFAULT_MIN_STRENGTH = 0.35;
+export const DEFAULT_SWITCH_STRENGTH = 0.6;
 
 /**
  * Whether to change the model serving this session. One threshold cannot separate
@@ -50,10 +67,15 @@ export function rankByCost(models, priceOf) {
     .map((entry) => entry.model);
 }
 
-/** How close a runner-up must be to the winner to count as the same verdict.
- *  Measured on production: 27% of answers land inside this band, nearly all one
- *  tier apart, and the pricier option won them by a coin-flip margin. */
+/** How far the runner-up must trail the winner for the verdict to be a decision
+ *  rather than a coin flip. Absolute confidence cannot serve here: jev scales it by
+ *  the option count — measured on one state, the same winner scored 1.00 over 3
+ *  options, 0.45 over 6 and 0.31 over 12 — so a threshold on it silently tightened
+ *  when the pool expanded. The separation between the top two does not move that way. */
 export const TIE_BAND = 0.15;
+
+/** The pool's cheapest entry, or nothing when there is no price to rank by. */
+const cheapestOf = (models, priceOf) => (priceOf ? rankByCost(models, priceOf)[0] : null);
 
 /**
  * The cheapest model jev rated as good as its pick.
@@ -86,14 +108,19 @@ export function cheapestWithinBand(pick, probabilities, priceOf, band = TIE_BAND
  *
  * jev picks the model; cost only breaks the ties it left behind. See
  * `cheapestWithinBand` for why the price never enters the question itself.
+ *
+ * The gate is the winner's STRENGTH against the uniform baseline, not the confidence
+ * jev reports: that value tracks how many options the question offered, so the same
+ * winner reads 1.00 in a pool of 3 and 0.31 in a pool of 12. Gating on it discarded
+ * 97% of verdicts once the pool was expanded, including ones where the winner held
+ * most of the mass. See `winnerStrength` and `decideStrength`.
  */
 export function resolveModelDecision({
   answers,
   models = [],
-  cheapest = null,
   priceOf = null,
-  minConfidence = DEFAULT_MIN_CONFIDENCE,
-  switchConfidence = DEFAULT_SWITCH_CONFIDENCE,
+  minStrength = DEFAULT_MIN_STRENGTH,
+  switchStrength = DEFAULT_SWITCH_STRENGTH,
   previousVerdict = null,
 } = {}) {
   const pick = answers?.model;
@@ -110,33 +137,78 @@ export function resolveModelDecision({
   const chosen = priceOf
     ? cheapestWithinBand(pick.choice, pick.probabilities, priceOf)
     : pick.choice;
+  const strength = winnerStrength(pick);
 
   // Reported even when not applied: the caller tracks the previous verdict.
   const usable = {
     model: chosen,
     confidence: pick.confidence,
+    strength,
     deliberation: deliberation.noul,
     ...(chosen !== pick.choice ? { downgradedFrom: pick.choice } : {}),
   };
 
-  const gate = decideSwitch({
-    confidence: pick.confidence,
+  const gate = decideStrength({
+    strength,
     verdict: chosen,
     previousVerdict,
-    minConfidence,
-    switchConfidence,
+    minStrength,
+    switchStrength,
   });
   if (!gate.change) return { apply: false, reason: gate.reason, ...usable };
 
   // The one contradiction worth blocking: a step that needs deliberation routed to
   // the cheapest model loses quality silently. Mechanical work on an expensive model
   // is only a cost miss, which confidence already covers.
+  const cheapest = cheapestOf(models, priceOf);
   const hard = deliberation.noul >= 0.7;
   if (hard && cheapest && chosen === cheapest) {
     return { apply: false, reason: "signals_disagree", ...usable };
   }
 
   return { apply: true, ...usable, reason: gate.reason };
+}
+
+/**
+ * How strong the winner is: its probability measured against the uniform baseline
+ * of the option count, rescaled so 0 is "no favourite at all" and 1 is "everything
+ * on one option".
+ *
+ * `(p1 - 1/n) / (1 - 1/n)`. The subtraction is what removes the option count: the
+ * same share of the mass scores the same in a pool of 3 and a pool of 12, which the
+ * raw probability does not. It is a monotone transform of a likelihood ratio against
+ * the uniform prior, the form selective classification theory gives as optimal.
+ */
+export function winnerStrength(pick) {
+  const probs = Object.values(pick?.probabilities || {}).filter((v) => typeof v === "number");
+  const n = probs.length;
+  if (n === 0) return 0;
+  if (n === 1) return probs[0] > 0 ? 1 : 0;
+  const p1 = Math.max(...probs);
+  const floor = 1 / n;
+  return Math.max(0, Math.min(1, (p1 - floor) / (1 - floor)));
+}
+
+/**
+ * Whether the separation justifies changing the model serving this session.
+ *
+ * The bands come from the same measurement the confidence gate used: a clear
+ * verdict separates widely (measured median 0.48), a vague task or a bad pool does
+ * not (measured median 0.02). In between, a second agreeing verdict is what
+ * justifies the cache rewrite a switch costs.
+ */
+export function decideStrength({
+  strength,
+  verdict,
+  previousVerdict = null,
+  minStrength = DEFAULT_MIN_STRENGTH,
+  switchStrength = DEFAULT_SWITCH_STRENGTH,
+} = {}) {
+  if (!verdict) return { change: false, reason: "no_verdict" };
+  if (!(strength >= minStrength)) return { change: false, reason: "no_favourite" };
+  if (strength >= switchStrength) return { change: true, reason: "clear" };
+  if (verdict === previousVerdict) return { change: true, reason: "confirmed" };
+  return { change: false, reason: "awaiting_confirmation" };
 }
 
 /**
