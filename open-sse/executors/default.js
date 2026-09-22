@@ -202,23 +202,24 @@ export class DefaultExecutor extends BaseExecutor {
   }
 
   /**
-   * Registry entries carry `decisionConfig.path` for providers that also serve
+   * Registry entries carry `systemoneConfig.baseUrl` for providers that also serve
    * evaluation models. A model marked with the `evaluation` capability is not a
    * language model: the chat endpoint refuses it ("is an evaluation model, not a
-   * language model"), so it goes to that path instead.
+   * language model"), so it goes to that route instead.
    *
-   * The path is per provider and the shapes differ — TypeSafe's own API serves it at
-   * `/v1/systemone`, the Vercel gateway at `/typesafe/v1/systemone`, OpenRouter at
-   * `/api/alpha/decisions` — so it is read from the entry and resolved against that
-   * provider's own chat origin, never assumed.
+   * One field for every consumer — this executor, the decision router and the
+   * /v1/systemone endpoint all resolve the same `systemoneConfig`. The hosts differ
+   * (Vercel at `/typesafe/v1/systemone`, OpenCode Zen and OpenRouter at their own),
+   * so it is read from the entry, never assumed. A relative value resolves against
+   * that provider's own chat origin.
    */
   evaluationUrl(model, credentials = null) {
     const entry = REGISTRY.find((e) => e.id === this.provider || e.alias === this.provider);
-    const path = entry?.decisionConfig?.path;
+    const raw = entry?.systemoneConfig?.baseUrl;
     const base = credentials?.runtimeTransport?.baseUrl || entry?.transport?.baseUrl || this.config?.baseUrl;
-    if (!path || !base) return null;
+    if (!raw) return null;
     try {
-      return new URL(path, base).toString();
+      return new URL(raw, base).toString();
     } catch {
       return null;
     }
@@ -227,12 +228,12 @@ export class DefaultExecutor extends BaseExecutor {
   isEvaluationModel(model) {
     const id = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
     if (getCapabilitiesForModel(this.provider, id)?.evaluation === true) return true;
-    // The provider declares the evaluation model it ships (decisionConfig.defaultModel),
+    // The provider declares the evaluation model it ships (systemoneConfig.defaultModel),
     // which is what routes TypeSafe's jev today. A model the operator flags by hand in
     // the Add-custom-model dialog carries its capability in the custom-model table,
     // which this layer cannot read — wiring that through is the follow-up.
     const entry = REGISTRY.find((e) => e.id === this.provider || e.alias === this.provider);
-    const declared = entry?.decisionConfig?.defaultModel;
+    const declared = entry?.systemoneConfig?.defaultModel;
     return !!declared && declared === id;
   }
 

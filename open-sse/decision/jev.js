@@ -8,12 +8,22 @@ const RETRYABLE = new Set([408, 429, 500, 502, 503, 504, 529]);
 export const DECISION_MODEL_TYPE = "evaluation";
 
 /** The decision path resolved against the gateway's own transport origin. */
+/**
+ * The System One route for a gateway.
+ *
+ * Read from `systemoneConfig.baseUrl`, the same field the /v1/systemone endpoint
+ * resolves — one table for both consumers. It used to read a `decisionConfig.path`
+ * resolved against the chat transport's origin, which was a second table describing
+ * the same routes and only knew about one gateway.
+ *
+ * A relative `baseUrl` is still resolved against the transport origin, so the two
+ * shapes an entry may use both work.
+ */
 export function decisionUrlFor(providerEntry) {
-  const config = providerEntry?.decisionConfig;
-  const base = providerEntry?.transport?.baseUrl;
-  if (!config?.path || !base) return null;
+  const raw = providerEntry?.systemoneConfig?.baseUrl;
+  if (!raw) return null;
   try {
-    return new URL(config.path, base).toString();
+    return new URL(raw, providerEntry?.transport?.baseUrl).toString();
   } catch {
     return null;
   }

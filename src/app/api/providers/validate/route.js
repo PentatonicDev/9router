@@ -52,7 +52,7 @@ async function probeJev(provider, bodyApiKey) {
 
   const label = entry.display?.name || provider;
   const settings = await getSettings().catch(() => ({}));
-  const model = settings?.decisionRouter?.model || entry.decisionConfig?.defaultModel;
+  const model = settings?.decisionRouter?.model || entry.systemoneConfig?.defaultModel;
   if (!model) {
     return { ok: false, error: `${label} has no decision model configured. Set one in the Decisions panel.` };
   }
@@ -82,7 +82,7 @@ async function probeJev(provider, bodyApiKey) {
 
   let res;
   try {
-    // The in-request budget is decisionConfig.timeoutMs (800ms); this probe is a
+    // The in-request budget is systemoneConfig.timeoutMs (800ms); this probe is a
     // diagnostic and must not report a slow-but-healthy gateway as broken, so it
     // uses the same generous timeout as probeSearxng.
     res = await fetch(url, {
@@ -109,7 +109,7 @@ async function probeJev(provider, bodyApiKey) {
     return { ok: false, error: `${label} rejected its own key (${res.status}: Authentication failed). Re-check that key in the ${label} panel.` };
   }
   if (res.status === 404) {
-    return { ok: false, error: `${label} answered 404 at ${url} - the decision route moved. Update decisionConfig.path for this provider.` };
+    return { ok: false, error: `${label} answered 404 at ${url} - the decision route moved. Check systemoneConfig.baseUrl for this provider.` };
   }
   if (res.status === 400 || res.status === 422) {
     return { ok: false, error: `${label} answered ${res.status}: the decision request schema changed, not the key. Update probeJev() in this route.` };
@@ -214,7 +214,7 @@ export async function POST(request) {
     const isNoAuth = AI_PROVIDERS[provider]?.noAuth === true;
     // A decision provider (jev) has no key of its own: its routes borrow the
     // `credentialProvider` connection, so the body carries no apiKey.
-    const isDecision = AI_PROVIDERS[provider]?.decisionConfig !== undefined;
+    const isDecision = AI_PROVIDERS[provider]?.systemoneConfig !== undefined;
     // IAM mode authenticates via providerSpecificData.{accessKeyId,secretAccessKey}
     // (or the SDK's default credential chain) — same "no apiKey" carve-out
     // POST /api/providers already applies (src/app/api/providers/route.js).

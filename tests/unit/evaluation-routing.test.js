@@ -4,7 +4,7 @@ import { getExecutor } from "open-sse/executors/index.js";
 describe("an evaluation model goes to its own endpoint", () => {
   // A model marked as an evaluation model is not a language model: the chat endpoint
   // refuses it ("is an evaluation model, not a language model"), so routing it there
-  // is a guaranteed 400. The path comes from the provider's decisionConfig, resolved
+  // is a guaranteed 400. The path comes from the provider's systemoneConfig, resolved
   // against its own chat origin so it moves with the transport.
   it("routes TypeSafe's jev to the systemone path", () => {
     expect(getExecutor("vercel-ai-gateway").buildUrl("typesafe-ai/jev", false, 0, {}))

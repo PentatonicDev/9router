@@ -15,7 +15,7 @@ const FIELD_SCHEMA = {
   formats:          { label: "Formats",    format: (v) => v.join(", ") },
   maxMaxResults:    { label: "Max results", format: (v) => v },
   maxCharacters:    { label: "Max chars",  format: (v) => v.toLocaleString() },
-  // decisionConfig is the gateway's decision route: scalars only, and the model
+  // systemoneConfig is the gateway's System One route: scalars only, and the model
   // is already covered by `defaultModel` above.
   path:             { label: "Decision path", format: (v) => v, mono: true },
   modelType:        { label: "Model type", format: (v) => v, mono: true },

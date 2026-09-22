@@ -35,19 +35,19 @@ export function normalizeDecisionConfig(raw) {
   return config;
 }
 
-/** The raw registry entry, which carries `transport` and `decisionConfig`. */
+/** The raw registry entry, which carries `transport` and `systemoneConfig`. */
 function registryEntry(providerId) {
   return REGISTRY.find((entry) => entry.id === providerId || entry.alias === providerId) || null;
 }
 
 /** Gateways that can serve a decision model. */
 export function decisionProviders() {
-  return REGISTRY.filter((entry) => entry.decisionConfig && entry.transport)
+  return REGISTRY.filter((entry) => entry.systemoneConfig && entry.transport)
     .map((entry) => ({
       id: entry.id,
       name: entry.display?.name || entry.id,
-      defaultModel: entry.decisionConfig.defaultModel || null,
-      modelType: entry.decisionConfig.modelType || null,
+      defaultModel: entry.systemoneConfig.defaultModel || null,
+      modelType: entry.systemoneConfig.modelType || null,
     }));
 }
 

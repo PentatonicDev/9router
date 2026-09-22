@@ -14,7 +14,7 @@ import { ConfirmModal } from "./Modal";
 // One flat list under one accordion: a decision model is a tool the gateway
 // offers, no different from embedding or speech, so it is one more entry here
 // rather than a category of its own.
-const VISIBLE_TOOL_KINDS = ["embedding", "image", "video", "tts", "stt", "decision", "systemone"];
+const VISIBLE_TOOL_KINDS = ["embedding", "image", "video", "tts", "stt", "systemone"];
 // Combined entry: webSearch + webFetch share one page at /dashboard/tools-providers/web
 const COMBINED_WEB_ITEM = { id: "web", label: "Web Fetch & Search", icon: "travel_explore", href: "/dashboard/tools-providers/web" };
 

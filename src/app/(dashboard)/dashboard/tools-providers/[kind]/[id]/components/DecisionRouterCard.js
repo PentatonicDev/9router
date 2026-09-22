@@ -82,7 +82,7 @@ export default function DecisionRouterCard({ provider }) {
 
   if (!config) return null;
 
-  const defaults = provider?.decisionConfig || {};
+  const defaults = provider?.systemoneConfig || {};
   // The combos that opted in, read from the setting the runtime actually uses
   // (chat.js reads strategy === "auto"). An allowlist on this card was editable,
   // saved, and consumed by nothing.
@@ -121,12 +121,12 @@ export default function DecisionRouterCard({ provider }) {
   // not a value to overwrite.
   const setGateway = (id) => {
     const next = gateways.find((g) => g.id === id);
-    const untouched = !gateway?.decisionConfig?.defaultModel
-      || config.model === gateway.decisionConfig.defaultModel;
+    const untouched = !gateway?.systemoneConfig?.defaultModel
+      || config.model === gateway.systemoneConfig.defaultModel;
     patch({
       ...config,
       provider: id,
-      model: untouched ? (next?.decisionConfig?.defaultModel || config.model) : config.model,
+      model: untouched ? (next?.systemoneConfig?.defaultModel || config.model) : config.model,
     });
   };
 

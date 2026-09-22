@@ -417,14 +417,14 @@ describe("decision route resolution", () => {
   it("resolves the decision URL against the gateway transport origin", () => {
     const url = decisionUrlFor({
       transport: { baseUrl: "https://ai-gateway.vercel.sh/v1/chat/completions" },
-      decisionConfig: { path: "/typesafe/v1/systemone" },
+      systemoneConfig: { baseUrl: "/typesafe/v1/systemone" },
     });
     expect(url).toBe("https://ai-gateway.vercel.sh/typesafe/v1/systemone");
   });
 
   it("returns null rather than guessing when either half is missing", () => {
     expect(decisionUrlFor({ transport: { baseUrl: "https://x.sh/v1/chat" } })).toBeNull();
-    expect(decisionUrlFor({ decisionConfig: { path: "/p" } })).toBeNull();
+    expect(decisionUrlFor({ systemoneConfig: { baseUrl: "/p" } })).toBeNull();
     expect(decisionUrlFor(null)).toBeNull();
   });
 

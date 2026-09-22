@@ -167,11 +167,11 @@ export default function MediaProviderDetailPage() {
       {id === "searxng" && <SearxngInstanceCard onUrlChange={setSearxngUrl} />}
       {/* Gate on the capability, not on a provider id: any gateway that declares a
           decision route gets the card, so adding one needs no change here. */}
-      {provider?.decisionConfig && <DecisionRouterCard provider={provider} />}
+      {provider?.systemoneConfig && <DecisionRouterCard provider={provider} />}
 
       {/* Models - hidden for tts/webSearch/webFetch (provider IS the model) and for
           decision (jev carries no `models` on purpose); custom uses prefix as alias */}
-      {kind !== "tts" && kind !== "webSearch" && kind !== "webFetch" && kind !== "decision" && (
+      {kind !== "tts" && kind !== "webSearch" && kind !== "webFetch" && kind !== "systemone" && (
         <ModelsCard
           providerId={id}
           kindFilter={kind}
@@ -179,14 +179,14 @@ export default function MediaProviderDetailPage() {
         />
       )}
 
-      {/* Provider Info — config-driven, supports searchConfig, fetchConfig, ttsConfig, embeddingConfig, systemoneConfig, searchViaChat, decisionConfig */}
-      {!isCustom && (provider.searchConfig || provider.fetchConfig || provider.ttsConfig || provider.sttConfig || provider.embeddingConfig || provider.systemoneConfig || provider.searchViaChat || provider.decisionConfig) && (
+      {/* Provider Info — config-driven, supports searchConfig, fetchConfig, ttsConfig, embeddingConfig, systemoneConfig, searchViaChat */}
+      {!isCustom && (provider.searchConfig || provider.fetchConfig || provider.ttsConfig || provider.sttConfig || provider.embeddingConfig || provider.systemoneConfig || provider.searchViaChat ) && (
         <ProviderInfoCard
           config={
             kind === "webFetch" ? provider.fetchConfig
               : kind === "tts" ? provider.ttsConfig
               : kind === "stt" ? provider.sttConfig
-              : kind === "decision" ? provider.decisionConfig
+              : kind === "systemone" ? provider.systemoneConfig
               : kind === "embedding" ? provider.embeddingConfig
               : kind === "systemone" ? provider.systemoneConfig
               : id === "searxng" && searxngUrl ? { ...provider.searchConfig, baseUrl: `${searxngUrl.replace(/\/+$/, "")}/search` }

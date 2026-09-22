@@ -66,6 +66,9 @@ export default {
   // System One decision API (TypeSafe-compatible): https://openrouter.ai/docs/guides/community/typesafe-sdk
   systemoneConfig: {
     baseUrl: "https://openrouter.ai/api/v1/systemone",
+    // Declared so the decision router can target this lane (see opencode-zen).
+    defaultModel: "typesafe/jev-1.13",
+    modelType: "evaluation",
     headers: {"HTTP-Referer":"https://endpoint-proxy.local","X-Title":"Endpoint Proxy"},
   },
   ttsConfig: {
