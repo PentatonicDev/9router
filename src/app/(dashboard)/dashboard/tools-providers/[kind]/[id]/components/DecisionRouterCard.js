@@ -16,10 +16,14 @@ const MODES = [
 
 // Narrowest first: each value is a strict superset of the one above it, so the
 // list reads as the ceiling it is rather than as three unrelated options.
+// `none` is deliberately not offered. Measured: pinning tool_choice to "none" made
+// every coding task fail — the model writes its tool call as text the client cannot
+// run, so the work silently never happens (0/3, in 2.9s each, fixture untouched).
+// The mode still exists for the API and for a client with no tools to call; it is
+// just not a thing to pick from a dropdown.
 const TOOL_MODES = [
   { value: "off", label: "off — tool routing disabled" },
   { value: "hint", label: "hint — suggest only (default)" },
-  { value: "none", label: "none — also allow “call nothing”" },
   { value: "forced", label: "forced — also allow pinning a tool" },
 ];
 
@@ -235,7 +239,7 @@ export default function DecisionRouterCard({ provider }) {
             options={TOOL_MODES}
             value={config.toolMode}
             onChange={(e) => set("toolMode", e.target.value)}
-            hint="Ceiling on what a tool verdict may do, widest last. `hint` appends a suggestion and never touches tool_choice; `none` also allows pinning “call nothing”; `forced` also allows pinning a specific tool. A verdict above the ceiling is downgraded to a hint, not dropped. Measured warning: `none` failed every coding task it was tried on - with tool calling pinned off the model writes its tool call as text the client cannot run, so the work silently never happens. `hint` runs the same tasks cleanly; `off` is the cheapest that works."
+            hint="How far a tool verdict may go, widest last. `off` never touches the request (model routing still runs on its own); `hint` appends a suggestion and never rewrites tool_choice; `forced` also allows pinning a specific tool. A verdict above the ceiling is downgraded to a hint, not dropped. Measured: `hint` ran every coding task cleanly and `off` was the cheapest that did; pinning “call nothing” is not offered because it failed every coding task it was tried on."
           />
           <Input
             label="Min confidence"

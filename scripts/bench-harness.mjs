@@ -12,8 +12,9 @@
 // Env: NINEROUTER_URL (default http://127.0.0.1:20127)
 //
 // Each task ships with a check that FAILS before the work is done, so "passed"
-// always means the agent actually did it. Reads token usage from the router's own
-// usage rows, keyed on a watermark so concurrent traffic is not counted.
+// always means the agent actually did it. This measures whether the work got DONE;
+// token and cost comparisons come from the router's own usage view, because the
+// client cannot see what the router spent on its behalf.
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -63,19 +64,6 @@ const TASKS = [
     check: ["node", "check.js"],
   },
 ];
-
-/** Rows the router wrote after `since`, split into work and decision traffic. */
-async function usageSince(since) {
-  try {
-    const res = await fetch(`${BASE}/api/usage/recent?limit=500`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const rows = (data.logs || data.rows || []).filter((r) => (r.id ?? 0) > since);
-    return rows.length ? rows : null;
-  } catch {
-    return null;
-  }
-}
 
 function materialize(task, dir) {
   fs.rmSync(dir, { recursive: true, force: true });
