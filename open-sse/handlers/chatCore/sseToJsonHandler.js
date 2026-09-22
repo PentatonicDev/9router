@@ -135,7 +135,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel, targetFormat, to
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, toolNameMap = null, customToolNames, trackDone, appendLog, reqTag, log, errorContext, phases: entryPhases }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, toolNameMap = null, customToolNames, trackDone, appendLog, reqTag, log, errorContext, phases: entryPhases , decision = null}) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
@@ -145,7 +145,9 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
   const ctx = {
     provider, model, connectionId, apiKey,
     request: extractRequestConfig(body, stream),
-    providerRequest: finalBody || translatedBody || null
+    providerRequest: finalBody || translatedBody || null,
+    // Both detail sites below spread this object, so the decision travels with it.
+    decision,
   };
 
   // Same phases shape the streaming path records (see buildOnStreamComplete) —

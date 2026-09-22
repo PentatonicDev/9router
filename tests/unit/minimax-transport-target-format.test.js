@@ -103,6 +103,9 @@ vi.mock("../../open-sse/translator/concerns/prefetch.js", () => ({
 
 vi.mock("../../open-sse/handlers/chatCore/requestDetail.js", () => ({
   buildRequestDetail: vi.fn((detail) => detail),
+  // The core merges the two verdicts into one block for the detail; these tests do not
+  // exercise it, so the mock just has to exist.
+  buildDecisionDetail: vi.fn(() => undefined),
   extractRequestConfig: vi.fn((body, stream) => ({ body, stream })),
 }));
 

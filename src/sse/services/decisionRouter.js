@@ -89,7 +89,15 @@ export async function resolveDecisionTarget(config, { apiKey = null, log } = {})
     const key = credentials?.apiKey || credentials?.accessToken || null;
     if (!key) return null;
     log?.info?.("DECISION", `using ${entry.id} credential for the decision route`);
-    return { url, apiKey: key, provider: entry.id };
+    return {
+      url,
+      apiKey: key,
+      provider: entry.id,
+      // The account and the caller that caused the decision, so its usage row lands
+      // under them instead of reading as an unattributed local call.
+      connectionId: credentials?.connectionId || null,
+      callerApiKey: apiKey,
+    };
   } catch (error) {
     log?.warn?.("DECISION", `credential lookup failed: ${error.message}`);
     return null;
@@ -159,7 +167,6 @@ export async function decideComboModel({ body, models, comboName, config, target
     log?.info?.("DECISION", "model: verdict discarded, pool order unchanged");
     return { models, decision: null, reason: "ask_failed" };
   }
-  await recordUsage({ response, log });
 
   const decision = resolveModelDecision({
     answers: response.answers,
@@ -169,6 +176,8 @@ export async function decideComboModel({ body, models, comboName, config, target
     switchConfidence: config.switchConfidence,
     previousVerdict,
   });
+
+  await recordUsage({ response, log, target, verdict: verdictMeta(decision, { kind: "model", comboName }) });
 
   if (!decision.apply) {
     log?.info?.("DECISION", `model: no change (${decision.reason}, conf ${fmt(decision.confidence)}, ${response.latencyMs}ms)`);
@@ -199,36 +208,43 @@ export async function decideTool({ body, tools, plans = [], config, target, log 
   const state = buildState(body, { maxStateChars: 6000 });
   const response = await ask(target, config, state, questions, log);
   if (!response) return null;
-  await recordUsage({ response, log });
 
-  return {
-    ...resolveToolDecision({
-      answers: response.answers,
-      tools: kept.map((t) => t.name),
-      plans,
-      allowed: config.toolMode,
-      minConfidence: config.minConfidence,
-    }),
-    latencyMs: response.latencyMs,
-  };
+  const toolDecision = resolveToolDecision({
+    answers: response.answers,
+    tools: kept.map((t) => t.name),
+    plans,
+    allowed: config.toolMode,
+    minConfidence: config.minConfidence,
+  });
+  await recordUsage({ response, log, target, verdict: verdictMeta(toolDecision, { kind: "tool", tools: kept.length }) });
+
+  return { ...toolDecision, latencyMs: response.latencyMs };
 }
 
 /**
  * Its own usage row, under its own model: folded into the main request these tokens
  * would be priced at the serving model's rate. PROVIDER_PRICING's `typesafe` entry
  * is what lets calculateCost price them at all.
+ *
+ * The row carries the verdict in `meta`, so the table answers "why did this request
+ * reach an expensive model" and not only "how much did it spend".
  */
-async function recordUsage({ response, log }) {
+async function recordUsage({ response, log, verdict, target }) {
   try {
     const { saveRequestUsage } = await import("@/lib/db/index.js");
     await saveRequestUsage({
       provider: "typesafe",
       model: response.model || "jev-latest",
       endpoint: "decision",
+      // Without these the row reads as an unattributed "Local (No API key)" call,
+      // which is exactly the accounting the operator is trying to read.
+      connectionId: target?.connectionId || null,
+      apiKey: target?.callerApiKey || null,
       tokens: {
         prompt_tokens: response.usage.input_tokens,
         completion_tokens: response.usage.output_tokens,
       },
+      meta: verdict ? { ...verdict, route: response.route, via: target?.provider || null } : undefined,
     });
   } catch (error) {
     log?.debug?.("DECISION", `usage not recorded: ${error.message}`);
@@ -252,6 +268,25 @@ export function rememberVerdict(key, decision) {
 
 export function resetVerdicts() {
   lastVerdicts.clear();
+}
+
+/**
+ * What a decision row records about itself. Small and flat: it lands in a JSON column
+ * read per row, so it carries the answer and the reason, never the whole pool.
+ */
+function verdictMeta(decision, extra = {}) {
+  if (!decision) return undefined;
+  const round = (v) => (typeof v === "number" ? Number(v.toFixed(3)) : null);
+  return {
+    ...extra,
+    apply: decision.apply === true,
+    reason: decision.reason || null,
+    model: decision.model || null,
+    tool: decision.tool || null,
+    mode: decision.mode || null,
+    confidence: round(decision.confidence),
+    deliberation: round(decision.deliberation),
+  };
 }
 
 const fmt = (n) => (typeof n === "number" ? n.toFixed(2) : "-");

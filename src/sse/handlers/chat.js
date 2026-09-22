@@ -219,7 +219,7 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
     log.info("DECISION", `shadow: "${comboName}" would use ${result.decision?.model || "(unchanged)"}`);
     return unchanged;
   }
-  return { models: result.models, deliberation };
+  return { models: result.models, deliberation, decision: result.decision || null };
 }
 
 /**
@@ -344,6 +344,7 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
       body, models: augmentedModels, comboName: modelStr, strategy: comboStrategy, settings, apiKey, log,
     });
     routingContext.deliberation = ordered.deliberation;
+    routingContext.decision = ordered.decision;
     const orderedModels = ordered.models;
     log.info("CHAT", `Combo "${modelStr}" with ${orderedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
@@ -436,6 +437,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         settings: chatSettings, apiKey, log,
       });
       routingContext.deliberation = ordered.deliberation;
+      routingContext.decision = ordered.decision;
       const orderedModels = ordered.models;
       log.info("CHAT", `Combo "${modelStr}" with ${orderedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
       return handleComboChat({
@@ -550,6 +552,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       onPxpipeEvent: appendPxpipeEvent,
       providerThinking,
       maxThinkingLevel,
+      decision: routingContext.decision || null,
       errorContext,
       entryPhases,
       comboName: routingContext.comboName,
