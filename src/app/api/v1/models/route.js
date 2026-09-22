@@ -363,11 +363,17 @@ export async function buildModelsList(kindFilter, options = {}) {
       const comboCaps = aggregateComboCapabilities(combo.models, comboByName);
       if (comboCaps) entry.capabilities = comboCaps;
 
-      // Clients (Hermes, OpenClaw) size their context window from these
-      // fields; without them a combo is guessed at a fixed default.
+      // Align both fields to the member a request would reach right now so
+      // clients (Claude Code, Hermes) see one consistent context window.
       const limits = comboContextLimits(combo, connections, combos);
-      if (limits?.contextWindow) entry.context_length = limits.contextWindow;
-      if (limits?.maxOutput) entry.max_completion_tokens = limits.maxOutput;
+      if (limits?.contextWindow) {
+        entry.context_length = limits.contextWindow;
+        if (entry.capabilities) entry.capabilities.contextWindow = limits.contextWindow;
+      }
+      if (limits?.maxOutput) {
+        entry.max_completion_tokens = limits.maxOutput;
+        if (entry.capabilities) entry.capabilities.maxOutput = limits.maxOutput;
+      }
     }
     models.push(entry);
   }
