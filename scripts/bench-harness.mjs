@@ -76,6 +76,11 @@ function runHarness(dir, prompt) {
   // CLAUDE_CODE_SESSION_ID or ANTHROPIC_BASE_URL makes it hang before its first call.
   const env = { ...process.env, ANTHROPIC_BASE_URL: BASE, ANTHROPIC_AUTH_TOKEN: "local-only" };
   for (const key of ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ATTENDED"]) delete env[key];
+  // And it must not read or write the operator's own config. Without this the child
+  // picks up whatever model overrides that config carries — measured, it resolved a
+  // request to a provider with no credentials and every task failed — and it would
+  // write session history into the operator's real config dir.
+  env.CLAUDE_CONFIG_DIR = path.join(dir, ".claude-config");
   const started = Date.now();
   const res = spawnSync("claude", ["-p", prompt, "--model", MODEL, "--permission-mode", "acceptEdits", "--output-format", "text"],
     { cwd: dir, env, timeout: 300000, encoding: "utf8" });
