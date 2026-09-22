@@ -449,3 +449,27 @@ describe("shortlistTools", () => {
     expect(shortlistTools(roster, { messages: [null] })).toHaveLength(SHORTLIST_MAX);
   });
 });
+
+describe("a partially stored decisionRouter keeps its shape", () => {
+  // updateSettings spreads the body shallowly, so PATCHing one field replaces the
+  // whole nested object. Measured on a live gateway: the panel then showed
+  // "no connection yet" and linked to /dashboard/providers/undefined while the
+  // runtime carried on with defaults, because only the runtime normalized.
+  it("fills the sub-keys a partial write dropped", async () => {
+    const { mergeWithDefaults } = await import("../../src/lib/db/repos/settingsRepo.js");
+    const merged = mergeWithDefaults({ decisionRouter: { effort: true } });
+    expect(merged.decisionRouter.effort).toBe(true);
+    expect(merged.decisionRouter.provider).toBe("vercel-ai-gateway");
+    expect(merged.decisionRouter.model).toBe("typesafe-ai/jev");
+    expect(merged.decisionRouter.models).toEqual([]);
+    expect(merged.decisionRouter.mode).toBe("off");
+  });
+
+  it("leaves a written value alone", async () => {
+    const { mergeWithDefaults } = await import("../../src/lib/db/repos/settingsRepo.js");
+    const merged = mergeWithDefaults({ decisionRouter: { provider: "openrouter", models: ["c"] } });
+    expect(merged.decisionRouter.provider).toBe("openrouter");
+    expect(merged.decisionRouter.models).toEqual(["c"]);
+    expect(merged.decisionRouter.toolMode).toBe("hint");
+  });
+});

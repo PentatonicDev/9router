@@ -121,6 +121,15 @@ async function readRaw() {
 // Merge raw settings with defaults; backward-compat for missing keys
 export function mergeWithDefaults(raw) {
   const merged = { ...DEFAULT_SETTINGS, ...(raw || {}) };
+  // `updateSettings` spreads the incoming body shallowly, so a client that PATCHes
+  // one field of a nested object replaces the whole object. The runtime normalizes
+  // on read and silently carries on with defaults while the API and the dashboard
+  // render the partial object — measured as the decision panel showing
+  // "no connection yet" and linking to /dashboard/providers/undefined on a live
+  // gateway. Filling the missing sub-keys here keeps every reader on the same shape.
+  if (merged.decisionRouter && typeof merged.decisionRouter === "object" && !Array.isArray(merged.decisionRouter)) {
+    merged.decisionRouter = { ...DEFAULT_SETTINGS.decisionRouter, ...merged.decisionRouter };
+  }
   for (const [key, defVal] of Object.entries(DEFAULT_SETTINGS)) {
     if (merged[key] === undefined) {
       if (
