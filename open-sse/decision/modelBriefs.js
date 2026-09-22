@@ -74,7 +74,9 @@ function deriveBrief(provider, model) {
   const tier = tierFor(inputPrice);
   const parts = [tier.strength + "."];
 
-  // Modality qualifiers that affect task fitness
+  const family = modelFamily(model);
+  if (family) parts.push(family + " family.");
+
   const extras = [];
   if (caps.reasoning) extras.push("native reasoning");
   if (caps.vision) extras.push("reads images");
@@ -82,7 +84,7 @@ function deriveBrief(provider, model) {
   if (caps.pdf) extras.push("reads PDFs");
   if (caps.audioInput) extras.push("audio input");
   if (caps.videoInput) extras.push("video input");
-  if (caps.contextWindow >= 500000) extras.push(`${Math.round(caps.contextWindow / 1000)}k context`);
+  if (caps.contextWindow) extras.push(`${Math.round(caps.contextWindow / 1000)}k context`);
 
   if (extras.length) parts.push("Supports " + extras.join(", ") + ".");
 
@@ -115,6 +117,38 @@ export function resolveCriteria({ provider, model, briefs = {}, maxChars = 600 }
 }
 
 // ── Id normalization helpers ────────────────────────────────────────
+
+// ponytail: static map, covers the models we route today. When a new vendor
+// appears, add a row. Upgrade: derive from the provider registry.
+const FAMILIES = [
+  [/^claude-opus/,    "Anthropic Opus"],
+  [/^claude-sonnet/,  "Anthropic Sonnet"],
+  [/^claude-haiku/,   "Anthropic Haiku"],
+  [/^claude-fable/,   "Anthropic Fable"],
+  [/^gpt-5\.6-sol/,   "OpenAI Sol (frontier)"],
+  [/^gpt-5\.6-terra/, "OpenAI Terra"],
+  [/^gpt-5\.6-luna/,  "OpenAI Luna"],
+  [/^gpt-5\./,        "OpenAI GPT"],
+  [/^gpt-/,           "OpenAI GPT"],
+  [/^o\d/,            "OpenAI o-series"],
+  [/^deepseek-/,      "DeepSeek"],
+  [/^glm-/,           "Zhipu GLM"],
+  [/^gemini-/,        "Google Gemini"],
+  [/^grok-/,          "xAI Grok"],
+  [/^qwen/,           "Alibaba Qwen"],
+  [/^kimi-/,          "Moonshot Kimi"],
+];
+
+function modelFamily(id) {
+  const ids = [id];
+  if (id.includes(".")) ids.push(id.split(".").pop());
+  for (const candidate of ids) {
+    for (const [re, name] of FAMILIES) {
+      if (re.test(candidate)) return name;
+    }
+  }
+  return null;
+}
 
 function vendorSuffix(id) {
   const slash = id.indexOf("/");
