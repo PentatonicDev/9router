@@ -13,11 +13,9 @@ vi.mock("@/lib/auth/resourceScope", () => ({ getScopeFilter: async () => ({}), s
 
 const { decideComboModel, decideTool } = await import("../../src/sse/services/decisionRouter.js");
 
-/** A jev that answers a model question: a deep step, with little deliberation.
- *  The depth score is what selects the tier; the pool is ranked cheapest first, so
- *  3 of a 0..3 scale reaches the last entry. */
+/** A jev that answers a model question: the top model of the pool, clearly. */
 const answers = () => ({
-  depth: { type: "score", score: 3, confidence: 0.99, probabilities: { 0: 0, 1: 0, 2: 0, 3: 0.99 } },
+  model: { type: "choice", choice: "p/sonnet", confidence: 0.99, probabilities: { "p/sonnet": 0.99, "p/haiku": 0.01 } },
   needs_reasoning: { type: "noul", noul: 0.2 },
 });
 
@@ -52,9 +50,9 @@ describe("a decision accounts for itself", () => {
     expect(row.apiKey).toBe("sk-caller");
     // And the verdict is what makes the row explain itself.
     expect(row.meta).toMatchObject({ kind: "model", apply: true, reason: "clear", model: "p/sonnet", confidence: 0.99 });
-    // The depth that produced the pick is recorded alongside it, so a tier that
-    // looks wrong can be traced to the score that chose it.
-    expect(row.meta.depth).toBe(3);
+    // Recorded when the cost tie-break moved the pick, so a cheaper route can be
+    // traced to the verdict it came from.
+    expect(row.meta.downgradedFrom).toBeNull();
   });
 
   it("writes a detail row of its own, so it reaches the request-details list", async () => {

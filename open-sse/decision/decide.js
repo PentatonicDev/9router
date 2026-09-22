@@ -34,9 +34,9 @@ export function decideSwitch({
 }
 
 /**
- * The pool ordered cheapest first, which is the order a depth level walks. Ties keep
- * the pool's own order, so a caller that already ranked its models keeps that rank.
- * A model with no known price sorts last: it cannot be shown to be the cheap choice.
+ * The pool ordered cheapest first. Ties keep the pool's own order, so a caller that
+ * already ranked its models keeps that rank. A model with no known price sorts last:
+ * it cannot be shown to be the cheap choice.
  */
 export function rankByCost(models, priceOf) {
   return models
@@ -50,48 +50,78 @@ export function rankByCost(models, priceOf) {
     .map((entry) => entry.model);
 }
 
+/** How close a runner-up must be to the winner to count as the same verdict.
+ *  Measured on production: 27% of answers land inside this band, nearly all one
+ *  tier apart, and the pricier option won them by a coin-flip margin. */
+export const TIE_BAND = 0.15;
+
 /**
- * Auto-combo: pick the model for this turn.
+ * The cheapest model jev rated as good as its pick.
  *
- * The model answers how deep the step is; code maps that to a tier. The depth is a
- * `score` over ordered levels (0 mechanical … 3 hard), normalised by the level count
- * so the mapping holds whatever scale the criteria list uses.
+ * jev answers which model FITS — it is never asked which is cheaper, because
+ * comparing a rate table is arithmetic and the prices are ours to read exactly.
+ * So the saving is taken here: among the options within `band` of the winning
+ * probability — the ones it did not meaningfully separate — the cheapest wins.
+ * A clear verdict has no one else in the band and is left untouched.
+ */
+export function cheapestWithinBand(pick, probabilities, priceOf, band = TIE_BAND) {
+  const top = probabilities?.[pick];
+  if (typeof top !== "number") return pick;
+  let best = pick;
+  let bestPrice = priceOf(pick);
+  if (bestPrice === null) return pick;
+  for (const [model, p] of Object.entries(probabilities)) {
+    if (typeof p !== "number" || top - p > band) continue;
+    const price = priceOf(model);
+    // An unpriced model never wins a tie-break: unknown is not cheap.
+    if (price === null || price >= bestPrice) continue;
+    best = model;
+    bestPrice = price;
+  }
+  return best;
+}
+
+/**
+ * Auto-combo: the model for this turn.
+ *
+ * jev picks the model; cost only breaks the ties it left behind. See
+ * `cheapestWithinBand` for why the price never enters the question itself.
  */
 export function resolveModelDecision({
   answers,
   models = [],
-  ranked = null,
+  cheapest = null,
+  priceOf = null,
   minConfidence = DEFAULT_MIN_CONFIDENCE,
   switchConfidence = DEFAULT_SWITCH_CONFIDENCE,
   previousVerdict = null,
-  depthLevels = 4,
 } = {}) {
-  const depth = answers?.depth;
+  const pick = answers?.model;
   const deliberation = answers?.needs_reasoning;
-  if (!depth || depth.type !== "score" || !models.length) {
+  if (!pick || pick.type !== "choice" || !models.includes(pick.choice)) {
     return { apply: false, reason: "no_usable_pick" };
   }
   if (!deliberation || deliberation.type !== "noul") {
     return { apply: false, reason: "no_deliberation_signal" };
   }
 
-  const levels = Math.max(1, depthLevels);
-  const value = Number(depth.score);
-  if (!Number.isFinite(value)) return { apply: false, reason: "no_usable_pick" };
-
-  // Which slice of the cost-ranked pool this depth reaches. Mechanical work never
-  // leaves the cheapest tier; hard work may use the whole pool.
-  const order = Array.isArray(ranked) && ranked.length ? ranked : models;
-  const ratio = Math.min(1, Math.max(0, value / (levels - 1 || 1)));
-  const reach = 1 + Math.round(ratio * (order.length - 1));
-  const pick = order[reach - 1];
+  // Among the models jev did not meaningfully separate, take the cheapest. This
+  // only moves sideways inside its own verdict — never past a model it rated lower.
+  const chosen = priceOf
+    ? cheapestWithinBand(pick.choice, pick.probabilities, priceOf)
+    : pick.choice;
 
   // Reported even when not applied: the caller tracks the previous verdict.
-  const usable = { model: pick, confidence: depth.confidence, deliberation: deliberation.noul, depth: value };
+  const usable = {
+    model: chosen,
+    confidence: pick.confidence,
+    deliberation: deliberation.noul,
+    ...(chosen !== pick.choice ? { downgradedFrom: pick.choice } : {}),
+  };
 
   const gate = decideSwitch({
-    confidence: depth.confidence,
-    verdict: pick,
+    confidence: pick.confidence,
+    verdict: chosen,
     previousVerdict,
     minConfidence,
     switchConfidence,
@@ -102,18 +132,11 @@ export function resolveModelDecision({
   // the cheapest model loses quality silently. Mechanical work on an expensive model
   // is only a cost miss, which confidence already covers.
   const hard = deliberation.noul >= 0.7;
-  if (hard && pick === order[0]) {
+  if (hard && cheapest && chosen === cheapest) {
     return { apply: false, reason: "signals_disagree", ...usable };
   }
 
-  return {
-    apply: true,
-    model: pick,
-    confidence: depth.confidence,
-    deliberation: deliberation.noul,
-    depth: value,
-    reason: gate.reason,
-  };
+  return { apply: true, ...usable, reason: gate.reason };
 }
 
 /**

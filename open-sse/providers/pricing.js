@@ -6,6 +6,7 @@
 //   3. PATTERN_PRICING                    — glob pattern match (e.g. "codex-*")
 import { stripBedrockGeoPrefix, bedrockCanonicalModelName } from "./bedrockGeoPrefix.js";
 import { BEDROCK_PRICING } from "./bedrockPricing.js";
+import { resolveProviderAlias } from "../services/model.js";
 
 /**
  * Canonical model pricing — provider-agnostic.
@@ -389,6 +390,13 @@ export function matchPattern(pattern, model) {
  */
 export function getPricingForModel(provider, model) {
   if (!model) return null;
+
+  // Callers hold whatever the model string carried, and a model string carries the
+  // provider ALIAS ("br/…", "cc/…"). Every table below is keyed by provider id, so
+  // an alias used to miss silently and return null — which reads as "free", not as
+  // "unknown". Resolved here rather than at each call site: the tables are the
+  // thing that is keyed by id, so the translation belongs with them.
+  provider = resolveProviderAlias(provider);
 
   // Bedrock prices depend on the geo prefix (a "us." profile lists ~10% above
   // the bare id, "global." does not), so the exact id is tried first and the

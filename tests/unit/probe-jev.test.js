@@ -107,12 +107,13 @@ describe("probeJev through the validate route (gateway provider)", () => {
 // working rather than silently resolving to nothing.
 describe("decision router config", () => {
   it("fills the gateway and model for settings saved in the old shape", async () => {
-    const { normalizeDecisionConfig, isDecisionAllowed } = await import("../../src/sse/services/decisionRouter.js");
+    const { normalizeDecisionConfig } = await import("../../src/sse/services/decisionRouter.js");
+    // `models` was an allowlist nothing ever read — the combo's own "auto" strategy
+    // is what turns routing on. A config still carrying it must not break.
     const migrated = normalizeDecisionConfig({ mode: "enforce", route: "vercel", models: ["my-combo"] });
     expect(migrated.provider).toBe("vercel-ai-gateway");
     expect(migrated.model).toBe("typesafe-ai/jev");
     expect(migrated.mode).toBe("enforce");
-    expect(isDecisionAllowed(migrated, { comboName: "my-combo" })).toBe(true);
   });
 
   it("lets the provider and the model be replaced without touching anything else", async () => {

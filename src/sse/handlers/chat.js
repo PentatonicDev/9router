@@ -21,6 +21,7 @@ import {
   normalizeDecisionConfig,
   resolveDecisionTarget,
   decideComboModel,
+  rankPool,
   decideTool as decideToolCore,
   readPreviousVerdict,
   rememberVerdict,
@@ -187,7 +188,7 @@ export async function handleChat(request, clientRawRequest = null, options = {})
  * Fails open at every step: an off mode, a missing credential or an unreachable
  * jev all return the pool untouched.
  */
-async function orderComboModels({ body, models, comboName, strategy, settings, apiKey, log }) {
+async function orderComboModels({ body, models, comboName, strategy, settings, apiKey, log, comboOwner }) {
   const unchanged = { models, deliberation: null };
   if (strategy !== "auto" || models.length < 2) return unchanged;
   const config = normalizeDecisionConfig(settings.decisionRouter);
@@ -196,11 +197,18 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
   const target = await resolveDecisionTarget(config, { apiKey, log });
   if (!target) return unchanged;
 
+  // A combo-of-combos lists tiers. Their names carry no price — PATTERN_PRICING
+  // would give "claude-auto" a $3 that means nothing — so each tier is priced by
+  // the model it would actually serve. Resolved here because only this layer can
+  // read a combo's members.
+  const ranked = await rankPool(models, (name) => getComboModels(name, comboOwner));
+
   let result;
   try {
     result = await decideComboModel({
       body,
       models,
+      ranked,
       comboName,
       config,
       target,
@@ -342,6 +350,7 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
     const ordered = await orderComboModels({
       body, models: augmentedModels, comboName: modelStr, strategy: comboStrategy, settings, apiKey, log,
+      comboOwner,
     });
     routingContext.deliberation = ordered.deliberation;
     routingContext.decision = ordered.decision;
@@ -434,7 +443,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       const comboStickyLimit = chatSettings.comboStickyRoundRobinLimit;
       const ordered = await orderComboModels({
         body, models: augmentedModels, comboName: modelStr, strategy: comboStrategy,
-        settings: chatSettings, apiKey, log,
+        settings: chatSettings, apiKey, log, comboOwner,
       });
       routingContext.deliberation = ordered.deliberation;
       routingContext.decision = ordered.decision;

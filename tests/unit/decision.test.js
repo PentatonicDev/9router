@@ -4,6 +4,7 @@ import {
   resolveModelDecision,
   resolveToolDecision,
   rankByCost,
+  cheapestWithinBand,
   MAX_TOOLS,
   NO_TOOL,
 } from "../../open-sse/decision/decide.js";
@@ -12,6 +13,7 @@ import { buildState, hasCacheBreakpoint } from "../../open-sse/decision/state.js
 import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist, shortlistTools, SHORTLIST_MAX, DEPTH_LEVELS } from "../../open-sse/decision/questions.js";
 import { injectHint, hintText } from "../../open-sse/decision/injectHint.js";
 import { extractTools, applyToolChoice, supportsToolChoice, UNSUPPORTED_EXECUTORS } from "../../open-sse/decision/tools.js";
+import { rankPool, priceOf } from "../../src/sse/services/decisionRouter.js";
 
 const choice = (pick, confidence, probabilities) => ({
   type: "choice",
@@ -20,13 +22,6 @@ const choice = (pick, confidence, probabilities) => ({
   probabilities: probabilities || { [pick]: confidence },
 });
 const noul = (p) => ({ type: "noul", noul: p });
-/** A depth answer: a score over DEPTH_LEVELS (0 mechanical … 3 hard). */
-const depth = (score, confidence) => ({
-  type: "score",
-  score,
-  confidence,
-  probabilities: { 0: 0, 1: 0, 2: 0, 3: 0, [score]: confidence },
-});
 
 describe("normalizeAnswers", () => {
   it("fills a missing choice confidence from the highest probability", () => {
@@ -87,85 +82,90 @@ describe("rankByCost", () => {
 // tier is chosen by code. Asking the model to compare prices itself measured 0.62
 // on a state where this scores 0.82 — the arithmetic, not the judgment, is what it
 // could not do. Mutating the tier arithmetic below must be the only failure.
+describe("cheapestWithinBand", () => {
+  const priceOf = (m) => ({ "p/opus": 5, "p/sonnet": 3, "p/haiku": 1 }[m] ?? null);
+
+  it("takes the cheapest model jev rated as good as its pick", () => {
+    // The case this exists for: it could not separate the two, and one costs less.
+    // Measured as 27% of production answers, nearly all one tier apart.
+    expect(cheapestWithinBand("p/sonnet", { "p/sonnet": 0.50, "p/haiku": 0.48, "p/opus": 0.02 }, priceOf))
+      .toBe("p/haiku");
+  });
+
+  it("leaves a clear verdict alone", () => {
+    // Nothing else is close, so there is no tie to break and no saving to take.
+    expect(cheapestWithinBand("p/opus", { "p/opus": 0.95, "p/sonnet": 0.04, "p/haiku": 0.01 }, priceOf))
+      .toBe("p/opus");
+  });
+
+  it("never reaches past a model jev rated lower, however cheap", () => {
+    // The cheapest model in the pool is far below the winner: taking it would be
+    // using cost to overrule a judgment, which is the thing that broke before.
+    expect(cheapestWithinBand("p/opus", { "p/opus": 0.9, "p/sonnet": 0.05, "p/haiku": 0.05 }, priceOf))
+      .toBe("p/opus");
+  });
+
+  it("keeps the pick when it is already the cheapest of the band, or unpriced", () => {
+    expect(cheapestWithinBand("p/haiku", { "p/haiku": 0.5, "p/sonnet": 0.45 }, priceOf)).toBe("p/haiku");
+    // Unknown is not cheap: an unpriced model never wins a tie-break.
+    const unknown = (m) => (m === "p/haiku" ? null : priceOf(m));
+    expect(cheapestWithinBand("p/sonnet", { "p/sonnet": 0.5, "p/haiku": 0.48 }, unknown)).toBe("p/sonnet");
+    expect(cheapestWithinBand("p/haiku", { "p/haiku": 0.5, "p/sonnet": 0.48 }, unknown)).toBe("p/haiku");
+  });
+});
+
 describe("resolveModelDecision", () => {
   const models = ["p/haiku", "p/sonnet", "p/opus"];
-  const ranked = models;
+  const priceOf = (m) => ({ "p/opus": 5, "p/sonnet": 3, "p/haiku": 1 }[m] ?? null);
+  const answers = (pick, conf, probs, needs = 0.15) => ({
+    model: choice(pick, conf, probs),
+    needs_reasoning: noul(needs),
+  });
 
-  it("maps a mechanical step to the cheapest tier", () => {
+  it("applies the model jev picked when it is clearly the best fit", () => {
     const out = resolveModelDecision({
-      answers: { depth: depth(0, 0.95), needs_reasoning: noul(0.15) },
-      models, ranked, depthLevels: 4,
+      answers: answers("p/opus", 0.97, { "p/opus": 0.97, "p/sonnet": 0.02, "p/haiku": 0.01 }),
+      models, priceOf, cheapest: "p/haiku",
     });
-    expect(out).toMatchObject({ apply: true, model: "p/haiku", depth: 0 });
+    expect(out).toMatchObject({ apply: true, model: "p/opus" });
+    expect(out.downgradedFrom).toBeUndefined();
   });
 
-  it("maps a hard step to the top tier", () => {
+  it("routes to the cheaper model when jev could not separate them", () => {
+    // Confidence clears the gate on its own, so what moves the pick is the price.
     const out = resolveModelDecision({
-      answers: { depth: depth(3, 0.95), needs_reasoning: noul(0.85) },
-      models, ranked, depthLevels: 4,
+      answers: answers("p/sonnet", 0.95, { "p/sonnet": 0.52, "p/haiku": 0.48 }),
+      models, priceOf, cheapest: "p/haiku",
     });
-    expect(out).toMatchObject({ apply: true, model: "p/opus", depth: 3 });
-  });
-
-  it("never moves down a tier as the depth rises", () => {
-    const pick = (score) => {
-      const order = ["p/haiku", "p/sonnet", "p/opus"];
-      return order.indexOf(resolveModelDecision({
-        answers: { depth: depth(score, 0.95), needs_reasoning: noul(0.2) },
-        models, ranked, depthLevels: 4,
-      }).model);
-    };
-    // Monotone: a deeper step never lands on a cheaper tier. The exact middle of a
-    // 3-model pool is an arithmetic detail, not the contract.
-    expect(pick(0)).toBe(0);
-    expect(pick(3)).toBe(2);
-    for (let i = 1; i < 4; i++) expect(pick(i)).toBeGreaterThanOrEqual(pick(i - 1));
-  });
-
-  it("clamps a score outside the level range instead of indexing off the pool", () => {
-    // jev can return a score above the level count or below zero; an unclamped
-    // index would be undefined and the decision would read as "no pick".
-    for (const score of [-2, 99]) {
-      expect(resolveModelDecision({
-        answers: { depth: depth(score, 0.95), needs_reasoning: noul(0.2) },
-        models, ranked, depthLevels: 4,
-      }).model).toBeTruthy();
-    }
+    expect(out).toMatchObject({ apply: true, model: "p/haiku", downgradedFrom: "p/sonnet" });
   });
 
   it("refuses the dangerous contradiction: hard step routed to the cheapest model", () => {
-    // The failure the operator cannot see — quality lost silently. Depth says
-    // mechanical (so the tier lands on the cheapest) while deliberation says hard.
+    // The failure the operator cannot see — quality lost silently.
     const out = resolveModelDecision({
-      answers: { depth: depth(0, 0.99), needs_reasoning: noul(0.9) },
-      models, ranked, depthLevels: 4,
+      answers: answers("p/haiku", 0.99, { "p/haiku": 0.99 }, 0.9),
+      models, priceOf, cheapest: "p/haiku",
     });
     expect(out).toMatchObject({ apply: false, reason: "signals_disagree" });
   });
 
-  it("refuses a missing depth answer and a missing deliberation signal", () => {
+  it("refuses a pick outside the pool and a missing deliberation signal", () => {
     expect(resolveModelDecision({
-      answers: { needs_reasoning: noul(0.9) },
-      models, ranked, depthLevels: 4,
+      answers: answers("p/gpt", 0.99, { "p/gpt": 0.99 }, 0.9),
+      models, priceOf,
     }).reason).toBe("no_usable_pick");
     expect(resolveModelDecision({
-      answers: { depth: depth(2, 0.99) },
-      models, ranked, depthLevels: 4,
+      answers: { model: choice("p/opus", 0.99) },
+      models, priceOf,
     }).reason).toBe("no_deliberation_signal");
-    // A non-finite score is not a depth: the tier arithmetic would produce NaN and
-    // index the pool with it.
-    expect(resolveModelDecision({
-      answers: { depth: { type: "score", score: "deep", confidence: 1 }, needs_reasoning: noul(0.9) },
-      models, ranked, depthLevels: 4,
-    }).reason).toBe("no_usable_pick");
   });
 
-  it("never picks a model outside the ranked pool", () => {
+  it("still applies the pick when no price is known to break a tie with", () => {
     const out = resolveModelDecision({
-      answers: { depth: depth(3, 0.95), needs_reasoning: noul(0.1) },
-      models: ["p/haiku"], ranked: ["p/haiku"], depthLevels: 4,
+      answers: answers("p/sonnet", 0.95, { "p/sonnet": 0.52, "p/haiku": 0.48 }),
+      models, cheapest: "p/haiku",
     });
-    expect(out).toMatchObject({ apply: true, model: "p/haiku" });
+    expect(out).toMatchObject({ apply: true, model: "p/sonnet" });
   });
 });
 
@@ -288,16 +288,16 @@ describe("questions", () => {
     }
   });
 
-  it("asks for reasoning depth, not a model, so price stays out of the question", () => {
+  it("asks which model fits, and never how much one costs", () => {
     // A non-model option in a model question absorbed 39-45% of the probability
-    // mass and wrecked the decision. Now the choice is gone entirely: the question
-    // is a score over ordered levels and the tier is mapped in code.
+    // mass and wrecked the decision, so only the pool's own models are options.
     const { questions } = buildModelQuestions(["p/haiku", "p/opus"], (m) => `brief for ${m}`);
-    expect(questions.depth.type).toBe("score");
-    expect(questions.depth.criteria).toEqual(DEPTH_LEVELS);
-    // No model name and no price reaches the question — that arithmetic is ours.
-    const asked = JSON.stringify(questions);
-    expect(asked).not.toMatch(/p\/haiku|p\/opus|\$\d/);
+    expect(questions.model.type).toBe("choice");
+    expect(Object.keys(questions.model.criteria).sort()).toEqual(["p/haiku", "p/opus"]);
+    expect(questions.model.criteria).not.toHaveProperty(NO_TOOL);
+    // Price is the one thing that must not reach the question: comparing a rate
+    // table is arithmetic, and the answer it produced measured 0.45 against 0.62.
+    expect(JSON.stringify(questions)).not.toMatch(/\$\d|\/M\b/);
   });
 
   it("offers the no-tool escape only in the tool choice", () => {
@@ -520,5 +520,60 @@ describe("a partially stored decisionRouter keeps its shape", () => {
     expect(merged.decisionRouter.provider).toBe("openrouter");
     expect(merged.decisionRouter.models).toEqual(["c"]);
     expect(merged.decisionRouter.toolMode).toBe("hint");
+  });
+});
+
+// The pool a combo-of-combos routes over. Two separate failures live here, and
+// both were silent: a nested combo priced by its NAME (PATTERN_PRICING's
+// `claude-*` catch-all gives a combo called "claude-auto" a $3 that means
+// nothing), and a provider ALIAS never resolved to its id, which returned null
+// for every Bedrock model and sorted a $5 Opus to the bottom as if it were free.
+describe("rankPool — combo-of-combos", () => {
+  const TIERS = {
+    "tier-hard": ["cc/claude-opus-5", "br/global.anthropic.claude-opus-4-6-v1"],
+    "tier-cheap": ["cc/claude-haiku-4-5-20251001", "ocg/deepseek-flash"],
+  };
+  const resolveMember = async (name) => TIERS[name] || null;
+
+  it("expands nested combos to the models they can reach, cheapest first", async () => {
+    const pool = await rankPool(["tier-hard", "tier-cheap"], resolveMember);
+    // No tier name survives: the depth score picks among real models.
+    expect(pool.some((m) => !m.includes("/"))).toBe(false);
+    expect(pool).toContain("cc/claude-opus-5");
+    expect(pool).toContain("ocg/deepseek-flash");
+    // Cheapest first, so the cheapest model of any tier leads and an Opus ends up last.
+    expect(pool[0]).toBe("ocg/deepseek-flash");
+    expect(pool[pool.length - 1]).toMatch(/opus/);
+  });
+
+  it("prices a Bedrock model through its alias instead of dropping it to the end", async () => {
+    // "br" is the alias, "bedrock" the id the pricing tables are keyed by. Unresolved,
+    // this Opus reads as unpriced and a hard step routes to the cheapest model.
+    expect(priceOf("br/global.anthropic.claude-opus-4-6-v1")).toBe(priceOf("cc/claude-opus-5"));
+    // Priced, so it sorts with the other Opus rather than after every cheap model.
+    const pool = await rankPool(["tier-hard", "tier-cheap"], resolveMember);
+    expect(pool.indexOf("br/global.anthropic.claude-opus-4-6-v1"))
+      .toBeGreaterThan(pool.indexOf("ocg/deepseek-flash"));
+  });
+
+  it("never prices a bare combo name, however much it looks like a model", async () => {
+    // The catch-all pattern matches these; a combo is not the model it is named after.
+    expect(priceOf("claude-auto")).toBeNull();
+    expect(priceOf("claude-opus-5")).toBeNull();
+  });
+
+  it("keeps a shared fallback once, at its first position", async () => {
+    const shared = {
+      a: ["cc/claude-opus-5", "ocg/deepseek-flash"],
+      b: ["cc/claude-sonnet-5", "ocg/deepseek-flash"],
+    };
+    const pool = await rankPool(["a", "b"], async (n) => shared[n]);
+    expect(pool.filter((m) => m === "ocg/deepseek-flash")).toHaveLength(1);
+    expect(pool).toHaveLength(3);
+  });
+
+  it("keeps a member that resolves to nothing rather than dropping it", async () => {
+    const pool = await rankPool(["cc/claude-opus-5", "unknown-combo"], async () => null);
+    expect(pool).toContain("unknown-combo");
   });
 });

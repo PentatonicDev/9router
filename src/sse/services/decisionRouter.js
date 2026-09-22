@@ -12,14 +12,13 @@ import { buildState } from "open-sse/decision/state.js";
 import { buildModelQuestions, buildToolQuestions, shortlistTools } from "open-sse/decision/questions.js";
 import { resolveModelDecision, resolveToolDecision } from "open-sse/decision/decide.js";
 import { getPricingForModel } from "open-sse/providers/pricing.js";
-import { DEPTH_LEVELS } from "open-sse/decision/questions.js";
+import { resolveCriteria } from "open-sse/decision/modelBriefs.js";
 import { rankByCost } from "open-sse/decision/decide.js";
 
 export const DEFAULT_DECISION = {
   mode: "off",
   provider: "vercel-ai-gateway",
   model: "typesafe-ai/jev",
-  models: [],
   effort: false,
   toolMode: "hint",
   minConfidence: 0.7,
@@ -29,7 +28,6 @@ export const DEFAULT_DECISION = {
 
 export function normalizeDecisionConfig(raw) {
   const config = { ...DEFAULT_DECISION, ...(raw || {}) };
-  if (!Array.isArray(config.models)) config.models = [];
   if (!Number.isFinite(config.timeoutMs)) config.timeoutMs = DEFAULT_DECISION.timeoutMs;
   return config;
 }
@@ -48,22 +46,6 @@ export function decisionProviders() {
       defaultModel: entry.decisionConfig.defaultModel || null,
       modelType: entry.decisionConfig.modelType || null,
     }));
-}
-
-/**
- * Is this request allowed to route through the decision model?
- *
- * The allowlist holds both shapes the model picker emits: `provider/model` for a
- * model, and a bare combo name for a combo. A bare name is unambiguous — the
- * runtime already separates the two by the presence of a slash
- * (getComboModelsFromData), so the same rule applies here.
- */
-export function isDecisionAllowed(config, { provider, model, comboName } = {}) {
-  if (!config || config.mode === "off") return false;
-  if (config.models.length === 0) return false;
-  if (comboName && config.models.includes(comboName)) return true;
-  if (provider && model && config.models.includes(`${provider}/${model}`)) return true;
-  return false;
 }
 
 /**
@@ -104,14 +86,53 @@ export async function resolveDecisionTarget(config, { apiKey = null, log } = {})
   }
 }
 
-/** Input price per million tokens, read from the pricing table rather than parsed
- *  back out of the criteria text. Null when the model has no known price. */
-function priceOf(model) {
+/** What each model is FOR, without its price: the decision model is asked to judge
+ *  fitness only. Costs are compared later, and only among the models it rated alike. */
+function criteriaResolver(config) {
+  return (model) => {
+    const slash = model.indexOf("/");
+    const provider = slash > 0 ? model.slice(0, slash) : "";
+    const id = slash > 0 ? model.slice(slash + 1) : model;
+    return resolveCriteria({ provider, model: id, briefs: config.briefs });
+  };
+}
+
+/** Input price per million tokens. The pool carries provider ALIASES ("br/…"),
+ *  and the pricing tables are keyed by provider id ("bedrock/…") — passing the
+ *  alias silently returns null, which would sort a $5 Opus to the bottom of the
+ *  pool as if it were unpriced. Null only when the model is genuinely unlisted. */
+export function priceOf(model) {
   const slash = model.indexOf("/");
-  const provider = slash > 0 ? model.slice(0, slash) : "";
-  const id = slash > 0 ? model.slice(slash + 1) : model;
-  const price = getPricingForModel(provider, id);
+  if (slash <= 0) return null;
+  const price = getPricingForModel(model.slice(0, slash), model.slice(slash + 1));
   return typeof price?.input === "number" ? price.input : null;
+}
+
+/**
+ * The decision pool: every model the combo can really reach, cheapest first.
+ *
+ * A combo-of-combos lists tier names, not models, and a name carries no price —
+ * PATTERN_PRICING's `claude-*` catch-all would give a combo called "claude-auto"
+ * a $3 that means nothing. So each nested combo is expanded to its own members and
+ * the pick is made among the models themselves, which is the whole point: within
+ * those members there is a best one for this task.
+ *
+ * Order of first appearance is kept and duplicates dropped — the same cheap
+ * fallback sits in several tiers, and listing it three times would weight the
+ * ranking toward it.
+ *
+ * ponytail: one level of nesting, which is the depth the combo editor can build.
+ * A deeper tree keeps the inner combo as one entry rather than recursing.
+ */
+export async function rankPool(models, resolveMember) {
+  const expanded = [];
+  for (const model of models) {
+    if (model.includes("/")) { expanded.push(model); continue; }
+    const members = (await resolveMember(model)) || [];
+    expanded.push(...(members.length ? members : [model]));
+  }
+  const unique = [...new Set(expanded)];
+  return rankByCost(unique, priceOf);
 }
 
 /** Whether the request carries an Anthropic `thinking` block. Anthropic refuses a
@@ -145,10 +166,10 @@ const ask = (target, config, state, questions, log) =>
  * unapplied decision is not an error: the caller's fallback loop walks the rest of
  * the list, so a wrong pick costs one attempt rather than a failure.
  */
-export async function decideComboModel({ body, models, comboName, config, target, log, previousVerdict = null }) {
+export async function decideComboModel({ body, models, comboName, config, target, log, previousVerdict = null, ranked = null }) {
   if (models.length < 2) return { models, decision: null };
 
-  const { questions } = buildModelQuestions(models);
+  const { questions } = buildModelQuestions(models, criteriaResolver(config));
   const state = buildState(body, { maxStateChars: 24000 });
   const response = await ask(target, config, state, questions, log);
 
@@ -157,13 +178,20 @@ export async function decideComboModel({ body, models, comboName, config, target
     return { models, decision: null, reason: "ask_failed" };
   }
 
+  // Cheapest first, and the list the verdict is served from. For a combo-of-combos
+  // the caller expands the tiers, so the pick is a real model and the fallback that
+  // follows it walks every other model the combo can reach — not the two sibling
+  // tiers, whose own first members are already in this list.
+  const pool = ranked?.length ? ranked : rankByCost(models, priceOf);
+  // Off the pool, not off `models`: for a combo-of-combos `models` holds tier names
+  // that carry no price, so ranking it would name an expensive tier the cheapest.
+  const cheapest = pool[0] || null;
+
   const decision = resolveModelDecision({
     answers: response.answers,
-    models,
-    // Cheapest first: the depth level walks this order, so the tier a level reaches
-    // is the cheapest one that still covers the work.
-    ranked: rankByCost(models, priceOf),
-    depthLevels: DEPTH_LEVELS.length,
+    models: pool,
+    cheapest,
+    priceOf,
     minConfidence: config.minConfidence,
     switchConfidence: config.switchConfidence,
     previousVerdict,
@@ -180,7 +208,7 @@ export async function decideComboModel({ body, models, comboName, config, target
     "DECISION",
     `model: ${decision.model} for "${comboName}" (conf ${fmt(decision.confidence)}, deliberar ${fmt(decision.deliberation)}, ${response.latencyMs}ms)`
   );
-  return { models: [decision.model, ...models.filter((m) => m !== decision.model)], decision };
+  return { models: [decision.model, ...pool.filter((m) => m !== decision.model)], decision };
 }
 
 /**
@@ -312,9 +340,9 @@ function verdictMeta(decision, extra = {}) {
     apply: decision.apply === true,
     reason: decision.reason || null,
     model: decision.model || null,
-    // The depth score the tier was derived from. Without it a bad tier cannot be
-    // told apart from a bad score.
-    depth: round(decision.depth),
+    // Set when the cost tie-break moved the pick off jev's own answer, so a
+    // cheaper route can still be traced to the verdict it came from.
+    downgradedFrom: decision.downgradedFrom || null,
     tool: decision.tool || null,
     mode: decision.mode || null,
     confidence: round(decision.confidence),

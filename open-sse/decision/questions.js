@@ -103,31 +103,29 @@ export function readShortlist(answers, shards) {
  * state that scores 0.82 here — the model judged the task fine and the price
  * comparison is what it could not do.
  */
-export const DEPTH_KEY = "depth";
-export const DEPTH_LEVELS = [
-  "Mechanical: rename, format, lookup, run one command, summarise.",
-  "Local edit: one file, clear requirements, a few lines.",
-  "Multi-file: implement a feature, write tests, refactor with known scope.",
-  "Hard: root-cause debugging of non-obvious faults, architecture, race conditions.",
-];
-
 /**
  * Which model should serve this step, and how much deliberation it needs.
  *
- * The question carries only the depth levels, never the models or their prices: the
- * pool is ranked in code, so a model absent from the pool cannot be picked and the
- * price comparison never reaches the model. `models` is accepted only to reject an
- * empty pool early.
+ * `criteriaFor` must return what the model is FOR: capability flags alone decided
+ * 0/4 correctly against 5/5 for a curated brief (measured). No price is in that
+ * text — comparing a rate table is arithmetic, a documented weakness of the
+ * decision model, and measured here as the difference between a 0.62 verdict and
+ * a 0.82 one. Cost decides only among the models it already judged fit, in code.
  */
-export function buildModelQuestions(models) {
+export function buildModelQuestions(models, criteriaFor) {
+  const criteria = {};
+  for (const model of models) {
+    const text = criteriaFor(model);
+    if (text) criteria[model] = text;
+  }
   return {
     questions: {
-      [DEPTH_KEY]: {
-        type: "score",
+      [MODEL_KEY]: {
+        type: "choice",
         instructions:
-          "How much reasoning depth does the NEXT step need? Judge the step itself, " +
-          "not the conversation so far.",
-        criteria: DEPTH_LEVELS,
+          "Which model should handle the next step? Judge only fitness for the task: " +
+          "pick the one whose description matches what the step actually needs.",
+        criteria,
       },
       [DELIBERATION_KEY]: {
         type: "noul",
