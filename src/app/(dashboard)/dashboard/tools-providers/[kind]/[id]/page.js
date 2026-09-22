@@ -14,7 +14,6 @@ import { TtsExampleCard } from "./components/TtsExampleCard";
 import { GenericExampleCard } from "./components/GenericExampleCard";
 import { SttExampleCard } from "./components/SttExampleCard";
 import SearxngInstanceCard from "./components/SearxngInstanceCard";
-import DecisionRouterCard from "./components/DecisionRouterCard";
 
 // MediaProviderDetailPage
 export default function MediaProviderDetailPage() {
@@ -165,9 +164,6 @@ export default function MediaProviderDetailPage() {
         <ConnectionsCard providerId={id} isOAuth={false} />
       )}
       {id === "searxng" && <SearxngInstanceCard onUrlChange={setSearxngUrl} />}
-      {/* Gate on the capability, not on a provider id: any gateway that declares a
-          decision route gets the card, so adding one needs no change here. */}
-      {provider?.systemoneConfig && <DecisionRouterCard provider={provider} />}
 
       {/* Models - hidden for tts/webSearch/webFetch (provider IS the model) and for
           decision (jev carries no `models` on purpose); custom uses prefix as alias */}

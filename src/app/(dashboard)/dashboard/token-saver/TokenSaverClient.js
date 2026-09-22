@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Card, Button, Input, Modal, Toggle, ConfirmModal } from "@/shared/components";
+import { Card, Button, Input, Modal, Toggle, ConfirmModal, Select, SegmentedControl } from "@/shared/components";
+import { getProvidersByKind } from "@/shared/constants/providers";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { getCurrentLocale, onLocaleChange } from "@/i18n/runtime";
 import {
@@ -95,6 +96,13 @@ export default function TokenSaverClient() {
   const [pxpipeActionLoading, setPxpipeActionLoading] = useState(false);
   const [pxpipeActionError, setPxpipeActionError] = useState("");
   const [locale, setLocale] = useState("en");
+
+  // Decision Router state
+  const [drConfig, setDrConfig] = useState(null);
+  const [drExpanded, setDrExpanded] = useState(false);
+  const [drConnections, setDrConnections] = useState([]);
+  const [drComboStrategies, setDrComboStrategies] = useState({});
+  const [drProbe, setDrProbe] = useState(null);
 
   const { copied, copy } = useCopyToClipboard();
 
@@ -487,6 +495,10 @@ export default function TokenSaverClient() {
           setPonytailLevel(data.ponytailLevel || "full");
           setPxpipeEnabled(!!data.pxpipeEnabled);
           if (typeof data.pxpipeMinChars === "number") setPxpipeMinChars(data.pxpipeMinChars);
+          if (data.decisionRouter) {
+            setDrConfig(data.decisionRouter);
+            setDrComboStrategies(data.comboStrategies || {});
+          }
           refreshHeadroomStatus();
           // PRD: run the PXPIPE health check automatically when the page opens
           refreshPxpipeStatus().then(runPxpipeHealth);
@@ -494,6 +506,10 @@ export default function TokenSaverClient() {
       } catch {}
     };
     loadSettings();
+    fetch("/api/providers", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setDrConnections(data?.connections || []))
+      .catch(() => {});
   }, [refreshHeadroomStatus, refreshPxpipeStatus, runPxpipeHealth]);
 
   const headroomRunning = !!headroomStatus.running;
@@ -531,6 +547,80 @@ export default function TokenSaverClient() {
     pxpipeHealthy || pxpipeStatus.running
       ? "bg-success/15 text-success"
       : "bg-warning/15 text-warning";
+
+  // ── Decision Router derived state ──────────────────────────────────────────
+  const DR_MODES = [
+    { value: "off", label: "Off" },
+    { value: "shadow", label: "Shadow" },
+    { value: "enforce", label: "Enforce" },
+  ];
+  const DR_PRESETS = [
+    { value: "cautious", label: "Cautious", minConfidence: 0.8, switchConfidence: 0.9 },
+    { value: "balanced", label: "Balanced", minConfidence: 0.7, switchConfidence: 0.85 },
+    { value: "eager", label: "Eager", minConfidence: 0.6, switchConfidence: 0.75 },
+  ];
+  const DR_TOOL_MODES = [
+    { value: "off", label: "Off — models only" },
+    { value: "hint", label: "Hint — suggest, never pin" },
+    { value: "forced", label: "Forced — allow pinning" },
+  ];
+
+  const drGateways = getProvidersByKind("systemone");
+  const drGateway = drConfig && drGateways.find((g) => g.id === drConfig.provider || g.alias === drConfig.provider);
+  const drGatewayId = drGateway?.id || drConfig?.provider;
+  // Only show gateways the user actually has a connection to
+  const drConnectedGateways = drGateways.filter((g) =>
+    drConnections.some((c) => c.provider === g.id),
+  );
+  const drConn = drConnections.find((c) => c.provider === drGatewayId);
+  const drConnBroken = drConn?.testStatus === "unavailable";
+  const drAutoCombos = Object.entries(drComboStrategies)
+    .filter(([, v]) => v?.fallbackStrategy === "auto")
+    .map(([name]) => name);
+  const drActivePreset = drConfig && DR_PRESETS.find(
+    (p) => p.minConfidence === drConfig.minConfidence && p.switchConfidence === drConfig.switchConfidence,
+  )?.value || "custom";
+
+  const drPatch = (next) => {
+    setDrConfig(next);
+    fetch("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decisionRouter: next }),
+    }).catch(() => {});
+  };
+  const drSet = (key, value) => drConfig && drPatch({ ...drConfig, [key]: value });
+  const drSetPreset = (value) => {
+    const p = DR_PRESETS.find((x) => x.value === value);
+    if (p && drConfig) drPatch({ ...drConfig, minConfidence: p.minConfidence, switchConfidence: p.switchConfidence });
+  };
+  const drSetGateway = (id) => {
+    if (!drConfig) return;
+    const next = drGateways.find((g) => g.id === id);
+    const untouched = !drGateway?.systemoneConfig?.defaultModel
+      || drConfig.model === drGateway.systemoneConfig.defaultModel;
+    drPatch({
+      ...drConfig,
+      provider: id,
+      model: untouched ? (next?.systemoneConfig?.defaultModel || drConfig.model) : drConfig.model,
+    });
+  };
+  const drHandleTest = async () => {
+    setDrProbe({ ok: null, message: "Testing…" });
+    try {
+      const res = await fetch("/api/providers/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: drGatewayId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setDrProbe(res.ok && data?.valid
+        ? { ok: true, message: "Decision endpoint answered." }
+        : { ok: false, message: data?.error || "Validation failed" });
+    } catch (e) {
+      setDrProbe({ ok: false, message: e.message });
+    }
+  };
 
   return (
     <div className="space-y-6 p-6">
@@ -868,6 +958,180 @@ export default function TokenSaverClient() {
         </div>
         )}
       </Card>
+
+      {drConfig && isAdmin && (
+      <Card id="decision-router">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary">route</span>
+            Decision Router
+          </h2>
+        </div>
+        <div className="flex items-center justify-between pt-2 pb-4 border-b border-border gap-4">
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">Route combos automatically</p>
+            <p className="text-sm text-text-muted">
+              Picks which model of a combo serves each turn. Shadow mode logs
+              verdicts without applying them — the baseline you measure against.
+            </p>
+          </div>
+          <SegmentedControl
+            options={DR_MODES}
+            value={drConfig.mode}
+            onChange={(v) => drSet("mode", v)}
+            size="sm"
+          />
+        </div>
+
+        {drConfig.mode !== "off" && (
+          <>
+            {drAutoCombos.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap pt-4 pb-2">
+                <span className="text-xs text-text-muted">Routed combos:</span>
+                {drAutoCombos.map((name) => (
+                  <a
+                    key={name}
+                    href="/dashboard/combos"
+                    className="inline-flex items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"
+                  >
+                    <span className="material-symbols-outlined text-[12px] text-text-muted">layers</span>
+                    <span className="font-mono text-xs text-text-muted">{name}</span>
+                  </a>
+                ))}
+              </div>
+            )}
+            {drAutoCombos.length === 0 && (
+              <p className="text-xs text-text-muted italic pt-4 pb-2">
+                No combos opted in — set a combo&apos;s strategy to &quot;auto&quot; to route it.
+              </p>
+            )}
+
+            <div className="flex items-center justify-between pt-4 border-t border-border gap-4">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium">How decisive</p>
+                <p className="text-sm text-text-muted">
+                  {drActivePreset === "custom"
+                    ? "Custom thresholds — adjust below."
+                    : DR_PRESETS.find((p) => p.value === drActivePreset)?.label + " — " +
+                      (drActivePreset === "cautious" ? "acts only on near-certain verdicts."
+                        : drActivePreset === "eager" ? "also acts on weaker verdicts."
+                        : "acts on clear verdicts.")}
+                </p>
+              </div>
+              <SegmentedControl
+                options={DR_PRESETS.map((p) => ({ value: p.value, label: p.label }))}
+                value={drActivePreset === "custom" ? null : drActivePreset}
+                onChange={drSetPreset}
+                size="sm"
+              />
+            </div>
+
+            <div className="pt-4 border-t border-border">
+              <button
+                type="button"
+                onClick={() => setDrExpanded(!drExpanded)}
+                className="inline-flex w-fit items-center gap-1 text-xs text-text-muted hover:text-primary"
+              >
+                <span className="material-symbols-outlined text-[16px]">
+                  {drExpanded ? "expand_less" : "expand_more"}
+                </span>
+                Advanced
+              </button>
+
+              {drExpanded && (
+                <div className="flex flex-col gap-4 mt-3 rounded-lg border border-black/5 p-3 dark:border-white/5">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Select
+                      label="Gateway"
+                      options={drConnectedGateways.length > 0
+                        ? drConnectedGateways.map((g) => ({ value: g.id, label: g.name }))
+                        : drGateways.map((g) => ({ value: g.id, label: g.name }))}
+                      value={drGatewayId}
+                      onChange={(e) => drSetGateway(e.target.value)}
+                      hint={drConnectedGateways.length > 0
+                        ? "Only gateways with an active connection."
+                        : "No connections — add one in Tools & Providers."}
+                    />
+                    <Input
+                      label="Model"
+                      value={drConfig.model ?? ""}
+                      onChange={(e) => drSet("model", e.target.value)}
+                      placeholder={drGateway?.systemoneConfig?.defaultModel || ""}
+                      hint="The decision model. Swap it by editing this field."
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Select
+                      label="Tool routing"
+                      options={DR_TOOL_MODES.map((m) => ({ value: m.value, label: m.label }))}
+                      value={drConfig.toolMode}
+                      onChange={(e) => drSet("toolMode", e.target.value)}
+                      hint="How far a tool verdict may go."
+                    />
+                    <div className="flex flex-col gap-3">
+                      <Input
+                        label="Min confidence"
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="1"
+                        value={drConfig.minConfidence}
+                        onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) drSet("minConfidence", n); }}
+                        hint="Below this the verdict is discarded."
+                      />
+                      <Input
+                        label="Switch confidence"
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="1"
+                        value={drConfig.switchConfidence}
+                        onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) drSet("switchConfidence", n); }}
+                        hint="At or above this it switches; below, needs two agreeing verdicts."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">Cap reasoning on mechanical turns</p>
+                      <p className="text-xs text-text-muted">
+                        The verdict that picks the model also caps the reasoning budget.
+                      </p>
+                    </div>
+                    <Toggle size="sm" checked={drConfig.effort === true} onChange={() => drSet("effort", drConfig.effort !== true)} />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="rounded bg-black/5 px-1.5 py-0.5 dark:bg-white/5">{drGateway?.name || drGatewayId}</span>
+                    {drConn ? (
+                      <span className={drConnBroken ? "text-amber-600 dark:text-amber-500" : "text-text-muted"}>
+                        {drConn.name || "connection"}
+                        {drConnBroken ? " (marked unavailable)" : ""}
+                      </span>
+                    ) : (
+                      <span className="text-amber-600 dark:text-amber-500">
+                        no connection — add one in Tools &amp; Providers
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Button size="sm" variant="secondary" onClick={drHandleTest}>Test</Button>
+                    {drProbe && (
+                      <span className={`text-xs ${drProbe.ok === false ? "text-error" : drProbe.ok ? "text-success" : "text-text-muted"}`}>
+                        {drProbe.message}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </Card>
+      )}
 
       <Modal
         isOpen={showHeadroomInstallModal}
