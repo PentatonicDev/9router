@@ -57,4 +57,11 @@ export const CAPACITY_META = {
   vision: { icon: "visibility", label: "Vision", desc: "Supports image input", color: "text-blue-500" },
   // search: temporarily hidden (feature not wired yet)
   reasoning: { icon: "neurology", label: "Reasoning", desc: "Supports reasoning / thinking", color: "text-amber-500" },
+  // Evaluation models answer typed questions, not chat: the gateway must send them to
+  // the provider's evaluation endpoint. Exclusive by nature — an evaluation model is
+  // not a language model, so the dialog turns the others off when this goes on.
+  evaluation: { icon: "rule", label: "Evaluation", desc: "Answers typed questions, not chat (own endpoint)", color: "text-violet-500" },
 };
+
+/** Setting one of these clears the rest. */
+export const EXCLUSIVE_CAPACITIES = ["evaluation"];

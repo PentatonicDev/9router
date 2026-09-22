@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import { Button, Modal, Toggle } from "@/shared/components";
-import { CAPACITY_META } from "@/shared/constants/models";
+import { CAPACITY_META, EXCLUSIVE_CAPACITIES } from "@/shared/constants/models";
 
 const defaultCaps = () => Object.fromEntries(Object.keys(CAPACITY_META).map((key) => [key, false]));
 
@@ -97,7 +97,16 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
               <Toggle
                 key={key}
                 checked={!!caps[key]}
-                onChange={(v) => setCaps((prev) => ({ ...prev, [key]: v }))}
+                disabled={EXCLUSIVE_CAPACITIES.some((k) => k !== key && prev[key])}
+                onChange={(v) => setCaps((prev) => {
+                  // An exclusive capability describes what the model IS, so it cannot
+                  // coexist with the others — turning it on turns them off, disabling
+                  // their toggles until it goes off again.
+                  if (v && EXCLUSIVE_CAPACITIES.includes(key)) {
+                    return { ...defaultCaps(), [key]: true };
+                  }
+                  return { ...prev, [key]: v };
+                })}
                 label={meta.label}
                 description={meta.desc}
                 size="sm"
