@@ -11,7 +11,7 @@ vi.mock("@/lib/localDb", () => ({
 }));
 vi.mock("@/lib/auth/resourceScope", () => ({ getScopeFilter: async () => ({}), scopeVisible: (r) => r }));
 
-const { decideComboModel } = await import("../../src/sse/services/decisionRouter.js");
+const { decideComboModel, decideTool } = await import("../../src/sse/services/decisionRouter.js");
 
 /** A jev that answers a model question: pick the second model, with deliberation. */
 const answers = (pick) => ({
@@ -71,5 +71,52 @@ describe("a decision accounts for itself", () => {
     await decideComboModel({ body: { messages: [{ role: "user", content: "oi" }] }, models, comboName: "c", config, target, log: {} });
     expect(sinks.usage).toHaveLength(0);
     expect(sinks.detail).toHaveLength(0);
+  });
+});
+
+// Anthropic 400s with "Thinking mode does not support this tool_choice" when a tool
+// is pinned while thinking is on. decideTool must read that off the real body and
+// degrade the verdict to a hint, which writes no tool_choice at all.
+describe("a thinking request never gets a pinned tool", () => {
+  const toolAnswers = {
+    tool: { type: "choice", choice: "Bash", confidence: 0.95, probabilities: { Bash: 0.95 } },
+    needs_tool: { type: "noul", noul: 0.9 },
+  };
+  const toolBody = (extra = {}) => ({
+    model: "claude-opus-5",
+    messages: [{ role: "user", content: "run the tests" }],
+    tools: [{ type: "function", function: { name: "Bash", description: "Run a command." } }],
+    ...extra,
+  });
+  const config = { model: "typesafe-ai/jev", toolMode: "forced", minConfidence: 0.7, timeoutMs: 1000 };
+
+  it("downgrades to a hint when the body carries an enabled thinking block", async () => {
+    withJev({ model: "typesafe-ai/jev", answers: toolAnswers, usage: { input_tokens: 10, output_tokens: 5 } });
+    const verdict = await decideTool({
+      body: toolBody({ thinking: { type: "enabled", budget_tokens: 10000 } }),
+      tools: [{ name: "Bash", description: "Run a command.", kind: "function" }],
+      config, target, log: {},
+    });
+    expect(verdict).toMatchObject({ mode: "hint", tool: "Bash", reason: "thinking_blocks_tool_choice" });
+  });
+
+  it("still forces when thinking is explicitly disabled", async () => {
+    withJev({ model: "typesafe-ai/jev", answers: toolAnswers, usage: { input_tokens: 10, output_tokens: 5 } });
+    const verdict = await decideTool({
+      body: toolBody({ thinking: { type: "disabled" } }),
+      tools: [{ name: "Bash", description: "Run a command.", kind: "function" }],
+      config, target, log: {},
+    });
+    expect(verdict).toMatchObject({ mode: "forced", tool: "Bash" });
+  });
+
+  it("still forces when thinking travels as reasoning_effort (no such restriction)", async () => {
+    withJev({ model: "typesafe-ai/jev", answers: toolAnswers, usage: { input_tokens: 10, output_tokens: 5 } });
+    const verdict = await decideTool({
+      body: toolBody({ reasoning_effort: "high" }),
+      tools: [{ name: "Bash", description: "Run a command.", kind: "function" }],
+      config, target, log: {},
+    });
+    expect(verdict).toMatchObject({ mode: "forced", tool: "Bash" });
   });
 });

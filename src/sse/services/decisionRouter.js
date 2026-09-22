@@ -134,6 +134,15 @@ function cheapestOf(models) {
   return cheapest;
 }
 
+/** Whether the request carries an Anthropic `thinking` block. Anthropic refuses a
+ *  pinned tool_choice in that mode ("Thinking mode does not support this
+ *  tool_choice"). The test is the field itself, not the intent: an OpenAI target
+ *  gets `reasoning_effort`, which places no such restriction on tool_choice. */
+function hasAnthropicThinking(body) {
+  const type = body?.thinking?.type;
+  return typeof type === "string" && type !== "disabled";
+}
+
 const ask = (target, config, state, questions, log) =>
   askJev({
     url: target.url,
@@ -143,7 +152,7 @@ const ask = (target, config, state, questions, log) =>
     questions,
     timeoutMs: config.timeoutMs,
     onFailure: (reason) => log?.info?.("DECISION", `decision model returned nothing (${reason})`),
-  });
+  }).then((response) => (response ? { ...response, state, questions } : response));
 
 /**
  * Auto-combo: which model of the pool should serve this turn.
@@ -177,7 +186,7 @@ export async function decideComboModel({ body, models, comboName, config, target
     previousVerdict,
   });
 
-  await recordUsage({ response, log, target, verdict: verdictMeta(decision, { kind: "model", comboName }), questions });
+  await recordUsage({ response, log, target, verdict: verdictMeta(decision, { kind: "model", comboName }) });
 
   if (!decision.apply) {
     log?.info?.("DECISION", `model: no change (${decision.reason}, conf ${fmt(decision.confidence)}, ${response.latencyMs}ms)`);
@@ -215,8 +224,11 @@ export async function decideTool({ body, tools, plans = [], config, target, log 
     plans,
     allowed: config.toolMode,
     minConfidence: config.minConfidence,
+    // A pinned tool_choice is rejected upstream while thinking is on, so the
+    // verdict is capped to a hint there rather than turning into a 400.
+    extendedThinking: hasAnthropicThinking(body),
   });
-  await recordUsage({ response, log, target, verdict: verdictMeta(toolDecision, { kind: "tool", tools: kept.length }), questions });
+  await recordUsage({ response, log, target, verdict: verdictMeta(toolDecision, { kind: "tool", tools: kept.length }) });
 
   return { ...toolDecision, latencyMs: response.latencyMs };
 }
@@ -229,7 +241,7 @@ export async function decideTool({ body, tools, plans = [], config, target, log 
  * The row carries the verdict in `meta`, so the table answers "why did this request
  * reach an expensive model" and not only "how much did it spend".
  */
-async function recordUsage({ response, log, verdict, target, questions }) {
+async function recordUsage({ response, log, verdict, target }) {
   try {
     const { saveRequestUsage } = await import("@/lib/db/index.js");
     await saveRequestUsage({
@@ -244,13 +256,14 @@ async function recordUsage({ response, log, verdict, target, questions }) {
       },
       meta: verdict ? { ...verdict, route: response.route, via: target?.provider || null } : undefined,
     });
-    await saveDecisionDetail({ response, verdict, target, questions });
+    await saveDecisionDetail({ response, verdict, target });
   } catch (error) {
     log?.debug?.("DECISION", `usage not recorded: ${error.message}`);
   }
 }
 
-async function saveDecisionDetail({ response, verdict, target, questions }) {
+async function saveDecisionDetail({ response, verdict, target }) {
+  const questions = response.questions;
   try {
     const { saveRequestDetail } = await import("@/lib/usageDb.js");
     const { buildRequestDetail, buildDecisionDetail } = await import("open-sse/handlers/chatCore/requestDetail.js");
@@ -270,6 +283,8 @@ async function saveDecisionDetail({ response, verdict, target, questions }) {
         completion_tokens: response.usage.output_tokens,
       },
       request: { kind: verdict?.kind || null, questions: questions || null },
+      decisionState: response.state || null,
+      endpoint: "decision",
       providerRequest: { model: response.model, route: response.route?.canonicalSlug || null },
       providerResponse: { answers, probabilities },
       response: { verdict: verdict || null },

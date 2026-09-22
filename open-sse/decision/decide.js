@@ -86,6 +86,11 @@ export function resolveModelDecision({
  * Tool routing: the mode to apply, and the tool when there is one. `tool_choice` is
  * a top-level parameter, so changing it does not touch the cached prefix — measured,
  * same 3,584 tokens read from cache with and without the change.
+ *
+ * `extendedThinking` caps the mode at `hint`. Anthropic rejects a pinned
+ * tool_choice while thinking is enabled ("Thinking mode does not support this
+ * tool_choice"), and the same restriction applies to the extended-thinking beta on
+ * compatible endpoints.
  */
 export function resolveToolDecision({
   answers,
@@ -95,10 +100,13 @@ export function resolveToolDecision({
    *  Each is a strict superset of the previous. */
   allowed = "forced",
   minConfidence = DEFAULT_MIN_CONFIDENCE,
+  extendedThinking = false,
 } = {}) {
   const rank = { off: -1, hint: 0, none: 1, forced: 2 };
-  // Unrecognised falls to the narrowest: a typo must not grant more authority.
-  const ceiling = rank[allowed] ?? rank.off;
+  // A pin cannot survive extended thinking, so the ceiling drops to `hint` — the
+  // one mode that still reaches the model without writing tool_choice.
+  const requested = rank[allowed] ?? rank.off;
+  const ceiling = extendedThinking ? Math.min(requested, rank.hint) : requested;
   const allows = (mode) => rank[mode] <= ceiling;
 
   if (tools.length === 0) return { mode: "passthrough", reason: "no_tools" };
@@ -139,10 +147,17 @@ export function resolveToolDecision({
   }
 
   if (!allows("forced")) {
-    // Downgrade rather than abstain: a hint still helps.
-    return allows("hint")
-      ? { mode: "hint", tool: pick.choice, confidence: pick.confidence }
-      : { mode: "passthrough", reason: "mode_not_allowed", confidence: pick.confidence };
+    // Downgrade rather than abstain: a hint still helps. Recorded separately so the
+    // thinking downgrade is distinguishable from a config ceiling in the detail row.
+    if (allows("hint")) {
+      return {
+        mode: "hint",
+        tool: pick.choice,
+        confidence: pick.confidence,
+        reason: extendedThinking ? "thinking_blocks_tool_choice" : undefined,
+      };
+    }
+    return { mode: "passthrough", reason: "mode_not_allowed", confidence: pick.confidence };
   }
 
   // Force only tools the target can actually be forced into. A provider-run or

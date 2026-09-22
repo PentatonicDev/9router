@@ -121,6 +121,12 @@ export function buildRequestDetail(base, overrides = {}) {
     // prices the call on its own row; this is what ties the two together, so a
     // request that reached an expensive model can be explained after the fact.
     decision: base.decision || undefined,
+    // The state the decision model was shown. Only the decision rows carry one;
+    // it is what lets a low confidence be traced to the input instead of guessed at.
+    decisionState: base.decisionState || undefined,
+    // Marks this row as a decision call. The observability repo sizes the request
+    // field by it: decision questions are bounded, chat bodies are not.
+    endpoint: base.endpoint || undefined,
     status: base.status || "success",
     ...overrides
   };

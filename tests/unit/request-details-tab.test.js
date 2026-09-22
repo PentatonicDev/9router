@@ -203,15 +203,15 @@ describe("token helpers — render-time crash safety", () => {
   });
 });
 
-describe("API route contract — validation boundary", () => {
-  let GET;
-  beforeAll(async () => {
-    ({ GET } = await import("@/app/api/usage/request-details/route.js"));
-  });
+let GET;
+function makeReq(query) {
+  return new Request(`http://localhost/api/usage/request-details?${query}`);
+}
+beforeAll(async () => {
+  ({ GET } = await import("@/app/api/usage/request-details/route.js"));
+});
 
-  function makeReq(query) {
-    return new Request(`http://localhost/api/usage/request-details?${query}`);
-  }
+describe("API route contract — validation boundary", () => {
 
   it("page=0 → 400 (guard now reachable after NaN-check fix)", async () => {
     const res = await GET(makeReq("page=0"));
@@ -248,5 +248,64 @@ describe("API route contract — validation boundary", () => {
     const body = await res.json();
     expect(Array.isArray(body.details)).toBe(true);
     expect(body.pagination).toMatchObject({ page: 1, pageSize: 20 });
+  });
+});
+
+// The decision block, the questions sent and the state shown are what make a
+// verdict auditable after the fact. buildRequestDetail produced all three, but the
+// observability repo rebuilt `record` field by field and dropped `decision`, so every
+// decision row read "Decision: null" and the apply rate was unmeasurable.
+describe("decision rows persist their diagnostic fields", () => {
+  it("keeps decision, decisionState and the questions past the 5KB request cap", async () => {
+    const bigQuestions = {
+      tool: {
+        type: "choice",
+        instructions: "Pick the tool.",
+        // Larger than observabilityMaxJsonSize (5KB) so the cap would otherwise bite.
+        criteria: Object.fromEntries(
+          Array.from({ length: 80 }, (_, i) => [`tool_${i}`, "a description ".repeat(15)]),
+        ),
+      },
+    };
+    expect(JSON.stringify({ kind: "tool", questions: bigQuestions }).length).toBeGreaterThan(5 * 1024);
+
+    await saveDetail({
+      provider: "vercel-ai-gateway",
+      model: "typesafe-ai/jev",
+      endpoint: "decision",
+      request: { kind: "tool", questions: bigQuestions },
+      decisionState: { conversation: [{ role: "user", text: "oi" }] },
+      providerResponse: { answers: { tool: { type: "choice", choice: "Bash", confidence: 0.91 } } },
+      decision: { tool: { mode: "hint", tool: "Bash", reason: "clear", confidence: 0.91 } },
+    });
+
+    const res = await GET(makeReq("page=1&pageSize=100&provider=vercel-ai-gateway"));
+    const { details } = await res.json();
+    const row = details.find((d) => d.decisionState);
+    expect(row).toBeTruthy();
+    expect(row.decision.tool).toMatchObject({ tool: "Bash", mode: "hint", confidence: 0.91 });
+    expect(row.decisionState.conversation[0].text).toBe("oi");
+    // The questions survive intact: a decision's request is bounded by design, so
+    // it skips the cap. Read back through the repo (payload fields are redacted on
+    // this route for a non-admin session) to assert what was actually stored.
+    const stored = await db.getRequestDetailById(row.id);
+    expect(stored.request._truncated).toBeUndefined();
+    expect(stored.request.questions.tool.criteria.tool_0).toBeDefined();
+  });
+
+  it("still caps a chat body, which has no fixed ceiling", async () => {
+    await saveDetail({
+      provider: "claude",
+      model: "claude-opus-5",
+      request: { messages: [{ role: "user", content: "x".repeat(60 * 1024) }] },
+    });
+
+    const res = await GET(makeReq("page=1&pageSize=100&provider=claude"));
+    const { details } = await res.json();
+    const row = details.find((d) => d.model === "claude-opus-5");
+    expect(row).toBeTruthy();
+    const stored = await db.getRequestDetailById(row.id);
+    expect(stored.request._truncated).toBe(true);
+    expect(stored.request._originalSize).toBeGreaterThan(5 * 1024);
   });
 });

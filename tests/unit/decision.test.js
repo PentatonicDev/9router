@@ -131,6 +131,19 @@ describe("resolveToolDecision", () => {
       .toMatchObject({ mode: "passthrough", reason: "mode_not_allowed" });
   });
 
+  // Anthropic rejects a pinned tool_choice while thinking is enabled:
+  // "Thinking mode does not support this tool_choice". The verdict must degrade to a
+  // hint, which writes no tool_choice at all. Exercised here rather than through the
+  // config ceiling: `allowed: "forced"` stays the default, so only this flag can
+  // turn the answer into a hint.
+  it("never pins a tool when extended thinking is on", () => {
+    expect(resolveToolDecision({ answers: answers("Bash", 0.9, 0.8), tools, plans, extendedThinking: true }))
+      .toMatchObject({ mode: "hint", tool: "Bash", reason: "thinking_blocks_tool_choice" });
+    // The same answers without thinking still force, so the flag is what moved it.
+    expect(resolveToolDecision({ answers: answers("Bash", 0.9, 0.8), tools, plans }))
+      .toMatchObject({ mode: "forced" });
+  });
+
   it("needs the two questions to agree", () => {
     // Picked a tool but says no tool is needed: measured shape on a 77-tool roster.
     expect(resolveToolDecision({ answers: answers("Bash", 0.95, 0.1), tools, plans }))
