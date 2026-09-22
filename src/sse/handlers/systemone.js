@@ -3,12 +3,12 @@ import {
   markAccountUnavailable,
   clearAccountError,
   extractApiKey,
-  isValidApiKey,
 } from "../services/auth.js";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, getApiKeyRoutingContext } from "@/lib/localDb";
+import { adminKeyRefusal } from "../utils/adminKeyGuard.js";
 import { getModelInfo } from "../services/model.js";
 import { handleSystemoneCore } from "open-sse/handlers/systemoneCore.js";
-import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
+import { errorResponse, unavailableResponse, responseFromRoutingCandidate } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import * as log from "../utils/logger.js";
 import { checkAndRefreshToken } from "../services/tokenRefresh.js";
@@ -43,14 +43,15 @@ export async function handleSystemone(request) {
   }
 
   // Enforce API key if enabled in settings
-  const settings = await getSettings();
+  const [settings, apiKeyContext] = await Promise.all([getSettings(), getApiKeyRoutingContext(apiKey)]);
+  const adminRefusal = adminKeyRefusal(apiKeyContext.kind);
+  if (adminRefusal) return adminRefusal;
   if (settings.requireApiKey) {
     if (!apiKey) {
       log.warn("AUTH", "Missing API key (requireApiKey=true)");
       return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
     }
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) {
+    if (!apiKeyContext.valid) {
       log.warn("AUTH", "Invalid API key (requireApiKey=true)");
       return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
     }
@@ -67,7 +68,8 @@ export async function handleSystemone(request) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: questions");
   }
 
-  const modelInfo = await getModelInfo(modelStr);
+  const comboOwner = settings.scopeResourcesByUser === true ? apiKeyContext.owner : undefined;
+  const modelInfo = await getModelInfo(modelStr, comboOwner);
   if (!modelInfo.provider) {
     log.warn("SYSTEMONE", "Invalid model format", { model: modelStr });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
@@ -83,11 +85,20 @@ export async function handleSystemone(request) {
 
   // Credential + fallback loop (mirrors handleEmbeddings)
   const excludeConnectionIds = new Set();
+  const preferredConnectionId = request.headers.get("x-connection-id") || null;
   let lastError = null;
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, {
+      apiKey, settings, keyOwner: comboOwner === undefined ? null : comboOwner,
+      allowedConnectionIds: apiKeyContext.allowedConnectionIds,
+      preferredConnectionId,
+    });
+
+    if (credentials?.noActiveCredentials || credentials?.spendCapExceeded) {
+      return responseFromRoutingCandidate(credentials.candidate);
+    }
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {
