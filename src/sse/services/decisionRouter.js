@@ -11,14 +11,15 @@ import { askJev, decisionUrlFor } from "open-sse/decision/jev.js";
 import { buildState } from "open-sse/decision/state.js";
 import { buildModelQuestions, buildToolQuestions, shortlistTools } from "open-sse/decision/questions.js";
 import { resolveModelDecision, resolveToolDecision } from "open-sse/decision/decide.js";
-import { resolveCriteria } from "open-sse/decision/modelBriefs.js";
+import { getPricingForModel } from "open-sse/providers/pricing.js";
+import { DEPTH_LEVELS } from "open-sse/decision/questions.js";
+import { rankByCost } from "open-sse/decision/decide.js";
 
 export const DEFAULT_DECISION = {
   mode: "off",
   provider: "vercel-ai-gateway",
   model: "typesafe-ai/jev",
   models: [],
-  briefs: {},
   effort: false,
   toolMode: "hint",
   minConfidence: 0.7,
@@ -29,7 +30,6 @@ export const DEFAULT_DECISION = {
 export function normalizeDecisionConfig(raw) {
   const config = { ...DEFAULT_DECISION, ...(raw || {}) };
   if (!Array.isArray(config.models)) config.models = [];
-  if (!config.briefs || typeof config.briefs !== "object") config.briefs = {};
   if (!Number.isFinite(config.timeoutMs)) config.timeoutMs = DEFAULT_DECISION.timeoutMs;
   return config;
 }
@@ -104,34 +104,14 @@ export async function resolveDecisionTarget(config, { apiKey = null, log } = {})
   }
 }
 
-function criteriaResolver(config) {
-  return (model) => {
-    const slash = model.indexOf("/");
-    const provider = slash > 0 ? model.slice(0, slash) : "";
-    const id = slash > 0 ? model.slice(slash + 1) : model;
-    return resolveCriteria({ provider, model: id, briefs: config.briefs });
-  };
-}
-
+/** Input price per million tokens, read from the pricing table rather than parsed
+ *  back out of the criteria text. Null when the model has no known price. */
 function priceOf(model) {
   const slash = model.indexOf("/");
   const provider = slash > 0 ? model.slice(0, slash) : "";
   const id = slash > 0 ? model.slice(slash + 1) : model;
-  const match = resolveCriteria({ provider, model: id }).match(/\$([\d.]+)\/M in/);
-  return match ? Number(match[1]) : null;
-}
-
-function cheapestOf(models) {
-  let cheapest = null;
-  let lowest = Infinity;
-  for (const model of models) {
-    const price = priceOf(model);
-    if (price !== null && price < lowest) {
-      lowest = price;
-      cheapest = model;
-    }
-  }
-  return cheapest;
+  const price = getPricingForModel(provider, id);
+  return typeof price?.input === "number" ? price.input : null;
 }
 
 /** Whether the request carries an Anthropic `thinking` block. Anthropic refuses a
@@ -168,7 +148,7 @@ const ask = (target, config, state, questions, log) =>
 export async function decideComboModel({ body, models, comboName, config, target, log, previousVerdict = null }) {
   if (models.length < 2) return { models, decision: null };
 
-  const { questions } = buildModelQuestions(models, criteriaResolver(config));
+  const { questions } = buildModelQuestions(models);
   const state = buildState(body, { maxStateChars: 24000 });
   const response = await ask(target, config, state, questions, log);
 
@@ -180,7 +160,10 @@ export async function decideComboModel({ body, models, comboName, config, target
   const decision = resolveModelDecision({
     answers: response.answers,
     models,
-    cheapest: cheapestOf(models),
+    // Cheapest first: the depth level walks this order, so the tier a level reaches
+    // is the cheapest one that still covers the work.
+    ranked: rankByCost(models, priceOf),
+    depthLevels: DEPTH_LEVELS.length,
     minConfidence: config.minConfidence,
     switchConfidence: config.switchConfidence,
     previousVerdict,
@@ -329,6 +312,9 @@ function verdictMeta(decision, extra = {}) {
     apply: decision.apply === true,
     reason: decision.reason || null,
     model: decision.model || null,
+    // The depth score the tier was derived from. Without it a bad tier cannot be
+    // told apart from a bad score.
+    depth: round(decision.depth),
     tool: decision.tool || null,
     mode: decision.mode || null,
     confidence: round(decision.confidence),

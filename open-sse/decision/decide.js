@@ -34,31 +34,64 @@ export function decideSwitch({
 }
 
 /**
- * Auto-combo: pick the model for this turn. `cheapest` is the pool's cheapest entry.
+ * The pool ordered cheapest first, which is the order a depth level walks. Ties keep
+ * the pool's own order, so a caller that already ranked its models keeps that rank.
+ * A model with no known price sorts last: it cannot be shown to be the cheap choice.
+ */
+export function rankByCost(models, priceOf) {
+  return models
+    .map((model, index) => ({ model, index, price: priceOf(model) }))
+    .sort((a, b) => {
+      if (a.price === null && b.price === null) return a.index - b.index;
+      if (a.price === null) return 1;
+      if (b.price === null) return -1;
+      return a.price - b.price || a.index - b.index;
+    })
+    .map((entry) => entry.model);
+}
+
+/**
+ * Auto-combo: pick the model for this turn.
+ *
+ * The model answers how deep the step is; code maps that to a tier. The depth is a
+ * `score` over ordered levels (0 mechanical … 3 hard), normalised by the level count
+ * so the mapping holds whatever scale the criteria list uses.
  */
 export function resolveModelDecision({
   answers,
   models = [],
-  cheapest = null,
+  ranked = null,
   minConfidence = DEFAULT_MIN_CONFIDENCE,
   switchConfidence = DEFAULT_SWITCH_CONFIDENCE,
   previousVerdict = null,
+  depthLevels = 4,
 } = {}) {
-  const pick = answers?.model;
+  const depth = answers?.depth;
   const deliberation = answers?.needs_reasoning;
-  if (!pick || pick.type !== "choice" || !models.includes(pick.choice)) {
+  if (!depth || depth.type !== "score" || !models.length) {
     return { apply: false, reason: "no_usable_pick" };
   }
   if (!deliberation || deliberation.type !== "noul") {
     return { apply: false, reason: "no_deliberation_signal" };
   }
 
+  const levels = Math.max(1, depthLevels);
+  const value = Number(depth.score);
+  if (!Number.isFinite(value)) return { apply: false, reason: "no_usable_pick" };
+
+  // Which slice of the cost-ranked pool this depth reaches. Mechanical work never
+  // leaves the cheapest tier; hard work may use the whole pool.
+  const order = Array.isArray(ranked) && ranked.length ? ranked : models;
+  const ratio = Math.min(1, Math.max(0, value / (levels - 1 || 1)));
+  const reach = 1 + Math.round(ratio * (order.length - 1));
+  const pick = order[reach - 1];
+
   // Reported even when not applied: the caller tracks the previous verdict.
-  const usable = { model: pick.choice, confidence: pick.confidence, deliberation: deliberation.noul };
+  const usable = { model: pick, confidence: depth.confidence, deliberation: deliberation.noul, depth: value };
 
   const gate = decideSwitch({
-    confidence: pick.confidence,
-    verdict: pick.choice,
+    confidence: depth.confidence,
+    verdict: pick,
     previousVerdict,
     minConfidence,
     switchConfidence,
@@ -69,15 +102,16 @@ export function resolveModelDecision({
   // the cheapest model loses quality silently. Mechanical work on an expensive model
   // is only a cost miss, which confidence already covers.
   const hard = deliberation.noul >= 0.7;
-  if (hard && cheapest && pick.choice === cheapest) {
+  if (hard && pick === order[0]) {
     return { apply: false, reason: "signals_disagree", ...usable };
   }
 
   return {
     apply: true,
-    model: pick.choice,
-    confidence: pick.confidence,
+    model: pick,
+    confidence: depth.confidence,
     deliberation: deliberation.noul,
+    depth: value,
     reason: gate.reason,
   };
 }

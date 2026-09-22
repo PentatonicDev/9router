@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Card, Button, Input, Select, SegmentedControl, Toggle } from "@/shared/components";
+import { translate } from "@/i18n/runtime";
 import { getProvidersByKind } from "@/shared/constants/providers";
 import ModelSelectModal from "@/shared/components/ModelSelectModal";
 
@@ -14,24 +15,56 @@ const MODES = [
   { value: "enforce", label: "Enforce", desc: "Asks and applies the verdict." },
 ];
 
+// How much evidence a verdict needs before it acts. The bands come from measured
+// confidence: bad criteria and vague tasks land at 0.43–0.57, clear ones at
+// 0.96–1.00. A preset picks where the two thresholds sit; nobody has to reason in
+// probabilities to choose one.
+const PRESETS = [
+  {
+    value: "cautious",
+    label: "Cautious",
+    desc: "Acts only on near-certain verdicts. Fewest switches, lowest risk of a wrong route.",
+    minConfidence: 0.8,
+    switchConfidence: 0.9,
+  },
+  {
+    value: "balanced",
+    label: "Balanced",
+    desc: "Acts on clear verdicts. The measured default.",
+    minConfidence: 0.7,
+    switchConfidence: 0.85,
+  },
+  {
+    value: "eager",
+    label: "Eager",
+    desc: "Also acts on weaker verdicts, in the ambiguous band. More switches, more chances to route wrong.",
+    minConfidence: 0.6,
+    switchConfidence: 0.75,
+  },
+];
+
+function presetOf(config) {
+  return PRESETS.find(
+    (p) => p.minConfidence === config.minConfidence && p.switchConfidence === config.switchConfidence,
+  )?.value || "custom";
+}
+
 // Narrowest first: each value is a strict superset of the one above it, so the
 // list reads as the ceiling it is rather than as three unrelated options.
 // `none` is deliberately not offered. Measured: pinning tool_choice to "none" made
 // every coding task fail — the model writes its tool call as text the client cannot
 // run, so the work silently never happens (0/3, in 2.9s each, fixture untouched).
-// The mode still exists for the API and for a client with no tools to call; it is
-// just not a thing to pick from a dropdown.
 const TOOL_MODES = [
-  { value: "off", label: "off — tool routing disabled" },
-  { value: "hint", label: "hint — suggest only (default)" },
-  { value: "forced", label: "forced — also allow pinning a tool" },
+  { value: "off", label: "Off — models only, no tool routing" },
+  { value: "hint", label: "Hint — suggest the tool, never pin it" },
+  { value: "forced", label: "Forced — also allow pinning a tool" },
 ];
 
 export default function DecisionRouterCard({ provider }) {
   const [config, setConfig] = useState(null);
   const [activeProviders, setActiveProviders] = useState([]);
   const [showModelSelect, setShowModelSelect] = useState(false);
-  const [expanded, setExpanded] = useState(null);
+  const [advanced, setAdvanced] = useState(false);
   const [probe, setProbe] = useState(null);
 
   useEffect(() => {
@@ -49,12 +82,9 @@ export default function DecisionRouterCard({ provider }) {
 
   const defaults = provider?.decisionConfig || {};
   const models = config.models || [];
-  const briefs = config.briefs || {};
   const activeMode = MODES.find((m) => m.value === config.mode) || MODES[0];
+  const activePreset = presetOf(config);
 
-  // The gateways that can serve a decision model, read from the same registry
-  // the rest of the dashboard reads, so a gateway added there needs no second
-  // list kept in sync.
   const gateways = getProvidersByKind("decision");
   const gateway = gateways.find((g) => g.id === config.provider || g.alias === config.provider) || null;
   const gatewayId = gateway?.id || config.provider;
@@ -72,6 +102,12 @@ export default function DecisionRouterCard({ provider }) {
     }).catch(() => {});
   };
   const set = (key, value) => patch({ ...config, [key]: value });
+
+  const setPreset = (value) => {
+    const preset = PRESETS.find((p) => p.value === value);
+    if (!preset) return;
+    patch({ ...config, minConfidence: preset.minConfidence, switchConfidence: preset.switchConfidence });
+  };
 
   // The new gateway's default model comes along only while the current model is
   // still the old gateway's default. A model the operator typed is their pick,
@@ -94,10 +130,9 @@ export default function DecisionRouterCard({ provider }) {
     patch({ ...config, models: [...models, value] });
   };
   const removeModel = (m) => patch({ ...config, models: models.filter((v) => v !== valueOf(m)) });
-  const setBrief = (value, text) => patch({ ...config, briefs: { ...briefs, [value]: text } });
 
   const handleTest = async () => {
-    setProbe({ ok: null, message: "Testing…" });
+    setProbe({ ok: null, message: translate("Testing…") });
     try {
       const res = await fetch("/api/providers/validate", {
         method: "POST",
@@ -106,8 +141,8 @@ export default function DecisionRouterCard({ provider }) {
       });
       const data = await res.json().catch(() => ({}));
       setProbe(res.ok && data?.valid
-        ? { ok: true, message: "The decision endpoint answered." }
-        : { ok: false, message: data?.error || `Validation failed (HTTP ${res.status})` });
+        ? { ok: true, message: translate("The decision endpoint answered.") }
+        : { ok: false, message: data?.error || translate("Validation failed") });
     } catch (e) {
       setProbe({ ok: false, message: e.message });
     }
@@ -115,176 +150,160 @@ export default function DecisionRouterCard({ provider }) {
 
   return (
     <Card padding="sm">
-      <h2 className="text-base font-semibold mb-1">Decision router</h2>
+      <h2 className="text-base font-semibold mb-1">{translate("Decision router")}</h2>
       <p className="text-xs text-text-muted mb-4">
-        The decision model picks which model of a combo serves a turn, and which tool the
-        model should call. It only ever routes to the models listed below.
+        {translate("Picks which model of a combo serves each turn. Only routes to the models listed below.")}
       </p>
-      <div className="flex flex-col gap-5">
-        {/* The gateway has no decision credential of its own — the decision route
-            borrows the connection its chat traffic already uses. So an empty
-            Connections card above is expected, and this is where the credential
-            actually in use has to be visible, or the panel reads as unconfigured. */}
-        <div className="flex flex-col gap-2">
-          <p className="text-sm font-medium">Credential</p>
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="rounded bg-black/5 px-1.5 py-0.5 dark:bg-white/5">
-              {gateway?.name || gatewayId}
-            </span>
-            <span className="text-text-muted">borrows its own chat connection</span>
-            <a
-              href={`/dashboard/providers/${gatewayId}`}
-              className="underline decoration-dotted underline-offset-2 hover:text-primary"
-            >
-              {gatewayId}
-            </a>
-            {conn ? (
-              <span className={connBroken ? "text-amber-600 dark:text-amber-500" : "text-text-muted"}>
-                — {conn.name || "connection"}
-                {connBroken ? " (marked unavailable by the last health check; decisions still resolve its key)" : ""}
-              </span>
-            ) : (
-              <span className="text-amber-600 dark:text-amber-500">
-                — no connection yet, so the decision model cannot be asked
-              </span>
-            )}
-          </div>
-        </div>
 
+      <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-2">
           <SegmentedControl options={MODES} value={config.mode} onChange={(v) => set("mode", v)} size="sm" />
-          <p className="text-xs text-text-muted">{activeMode.desc}</p>
-        </div>
-
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Select
-            label="Gateway"
-            options={gateways.map((g) => ({ value: g.id, label: g.name }))}
-            value={gatewayId}
-            onChange={(e) => setGateway(e.target.value)}
-            hint="The gateway that serves the decision model, and where the credential for it comes from."
-          />
-          <Input
-            label="Model"
-            value={config.model ?? ""}
-            onChange={(e) => set("model", e.target.value)}
-            placeholder={defaults.defaultModel || ""}
-            hint={`Swapping to a better System-1 model is editing this one field. Decision models sit in the gateway catalog with type "${defaults.modelType || "evaluation"}" and max_tokens: 0, which is how you check there which one to use.`}
-          />
+          <p className="text-xs text-text-muted">{translate(activeMode.desc)}</p>
         </div>
 
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium">Models and combos</p>
+            <p className="text-sm font-medium">{translate("Models and combos")}</p>
             <Button icon="add" variant="ghost" size="sm" onClick={() => setShowModelSelect(true)}>
-              Add
+              {translate("Add")}
             </Button>
           </div>
-          <p className="text-xs text-text-muted">
-            Each model needs its brief below — the text that says what it is FOR. Measured on the
-            same pool: criteria built from price and capability flags decided 0/4 correctly, curated
-            briefs decided 5/5. A model without a brief falls back to the repo table.
-          </p>
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap gap-2">
             {models.length === 0 ? (
-              <span className="text-xs text-text-muted italic">No models — nothing routes.</span>
-            ) : models.map((value) => {
-              const isCombo = !value.includes("/");
-              const open = expanded === value;
-              const brief = briefs[value] || "";
-              return (
-                <div key={value} className="flex flex-col gap-1.5">
-                  <div className="inline-flex w-fit items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 dark:bg-white/5">
-                    <button
-                      type="button"
-                      onClick={() => !isCombo && setExpanded(open ? null : value)}
-                      className="inline-flex items-center gap-1 font-mono text-xs text-text-muted hover:text-primary"
-                      title={isCombo ? "Combo (rerouted by the decision router)" : "Model"}
-                    >
-                      <span className="material-symbols-outlined text-[12px]">{isCombo ? "layers" : "smart_toy"}</span>
-                      <span>{value}</span>
-                      {!isCombo && (
-                        <span className={`material-symbols-outlined text-[12px] ${brief ? "text-primary" : ""}`}>
-                          {open ? "expand_less" : "expand_more"}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeModel(value)}
-                      className="leading-none text-text-muted hover:text-red-500"
-                      aria-label={`Remove ${value}`}
-                    >
-                      <span className="material-symbols-outlined text-[12px]">close</span>
-                    </button>
-                  </div>
-                  {open && !isCombo && (
-                    <textarea
-                      value={brief}
-                      onChange={(e) => setBrief(value, e.target.value)}
-                      rows={3}
-                      placeholder="Using the default brief from the repo. Write one here to override it — e.g. “architectural decisions, root-cause debugging of intermittent production bugs”."
-                      className="w-full rounded-[10px] border border-transparent bg-surface-2 px-3 py-2 text-xs text-text-main placeholder-text-muted/70 focus:border-brand-500/40 focus:outline-none focus:ring-2 focus:ring-brand-500/30"
-                    />
+              <span className="text-xs text-text-muted italic">{translate("Nothing selected — routing is off.")}</span>
+            ) : models.map((value) => (
+              <span key={value} className="inline-flex items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 dark:bg-white/5">
+                <span className="material-symbols-outlined text-[12px] text-text-muted">
+                  {value.includes("/") ? "smart_toy" : "layers"}
+                </span>
+                <span className="font-mono text-xs text-text-muted">{value}</span>
+                <button
+                  type="button"
+                  onClick={() => removeModel(value)}
+                  className="leading-none text-text-muted hover:text-red-500"
+                  aria-label={`${translate("Remove")} ${value}`}
+                >
+                  <span className="material-symbols-outlined text-[12px]">close</span>
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <p className="text-sm font-medium">{translate("How decisive")}</p>
+          <SegmentedControl
+            options={PRESETS.map((p) => ({ value: p.value, label: translate(p.label) }))}
+            value={activePreset === "custom" ? null : activePreset}
+            onChange={setPreset}
+            size="sm"
+          />
+          <p className="text-xs text-text-muted">
+            {activePreset === "custom"
+              ? translate("Custom thresholds — calibrated in Advanced.")
+              : translate(PRESETS.find((p) => p.value === activePreset).desc)}
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <button
+            type="button"
+            onClick={() => setAdvanced(!advanced)}
+            className="inline-flex w-fit items-center gap-1 text-xs text-text-muted hover:text-primary"
+          >
+            <span className="material-symbols-outlined text-[16px]">
+              {advanced ? "expand_less" : "expand_more"}
+            </span>
+            {translate("Advanced")}
+          </button>
+
+          {advanced && (
+            <div className="flex flex-col gap-4 rounded-lg border border-black/5 p-3 dark:border-white/5">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Select
+                  label={translate("Gateway")}
+                  options={gateways.map((g) => ({ value: g.id, label: g.name }))}
+                  value={gatewayId}
+                  onChange={(e) => setGateway(e.target.value)}
+                  hint={translate("Serves the decision model, and lends it its credential.")}
+                />
+                <Input
+                  label={translate("Model")}
+                  value={config.model ?? ""}
+                  onChange={(e) => set("model", e.target.value)}
+                  placeholder={defaults.defaultModel || ""}
+                  hint={translate("Any System-1 model works; swap it by editing this field.")}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Select
+                  label={translate("Tool routing")}
+                  options={TOOL_MODES.map((m) => ({ value: m.value, label: translate(m.label) }))}
+                  value={config.toolMode}
+                  onChange={(e) => set("toolMode", e.target.value)}
+                  hint={translate("How far a tool verdict may go. A verdict above the ceiling becomes a hint, never a dropped one.")}
+                />
+                <div className="flex flex-col gap-3">
+                  <Input
+                    label={translate("Min confidence")}
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value={config.minConfidence}
+                    onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) set("minConfidence", n); }}
+                    hint={translate("Below this the verdict is discarded.")}
+                  />
+                  <Input
+                    label={translate("Switch confidence")}
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value={config.switchConfidence}
+                    onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) set("switchConfidence", n); }}
+                    hint={translate("At or above this it switches this turn; below, it needs two agreeing verdicts.")}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium">{translate("Cap reasoning on mechanical turns")}</p>
+                  <Toggle size="sm" checked={config.effort === true} onChange={() => set("effort", config.effort !== true)} />
+                </div>
+                <p className="text-xs text-text-muted">
+                  {translate("The same verdict that picks the model also caps the reasoning budget; a hard turn is left as the client asked.")}
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded bg-black/5 px-1.5 py-0.5 dark:bg-white/5">{gateway?.name || gatewayId}</span>
+                  <span className="text-text-muted">{translate("borrows its own chat connection")}</span>
+                  {conn ? (
+                    <span className={connBroken ? "text-amber-600 dark:text-amber-500" : "text-text-muted"}>
+                      — {conn.name || translate("connection")}
+                      {connBroken ? translate(" (marked unavailable by the last health check)") : ""}
+                    </span>
+                  ) : (
+                    <span className="text-amber-600 dark:text-amber-500">
+                      — {translate("no connection yet, so the decision model cannot be asked")}
+                    </span>
                   )}
                 </div>
-              );
-            })}
-          </div>
-        </div>
+              </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Select
-            label="Tool mode"
-            options={TOOL_MODES}
-            value={config.toolMode}
-            onChange={(e) => set("toolMode", e.target.value)}
-            hint="How far a tool verdict may go, widest last. `off` never touches the request (model routing still runs on its own); `hint` appends a suggestion and never rewrites tool_choice; `forced` also allows pinning a specific tool. A verdict above the ceiling is downgraded to a hint, not dropped. Measured: `hint` ran every coding task cleanly and `off` was the cheapest that did; pinning “call nothing” is not offered because it failed every coding task it was tried on."
-          />
-          <Input
-            label="Min confidence"
-            type="number"
-            step="0.05"
-            min="0"
-            max="1"
-            value={config.minConfidence}
-            onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) set("minConfidence", n); }}
-            hint={`Below this the verdict is discarded. Default ${defaults.minConfidence ?? 0.7}.`}
-          />
-          <Input
-            label="Switch confidence"
-            type="number"
-            step="0.05"
-            min="0"
-            max="1"
-            value={config.switchConfidence}
-            onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) set("switchConfidence", n); }}
-            hint={`At or above this the model switches on the same turn. Between the two bounds it needs two agreeing verdicts. Default ${defaults.switchConfidence ?? 0.85}.`}
-          />
-        </div>
-
-        {/* The cap only ever lowers a budget, never raises one, so it can never spend
-            more than the client asked for. Off by default: the model routing is proven
-            across three pool orders, this one had fewer samples. */}
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium">Cap reasoning on mechanical turns</p>
-            <Toggle size="sm" checked={config.effort === true} onChange={() => set("effort", config.effort !== true)} />
-          </div>
-          <p className="text-xs text-text-muted">
-            The same verdict that picks the model also caps the reasoning budget: a mechanical turn gets
-            a low ceiling, a hard one is left exactly as the client asked. Measured on Bedrock Sonnet 4.6 —
-            budget 1024 produced 223 chars of thinking against 4,460 at 24576, with 28% fewer output tokens
-            and 28% less latency, and the same coding tasks passed with it on and off.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3 flex-wrap">
-          <Button size="sm" variant="secondary" onClick={handleTest}>Test</Button>
-          {probe && (
-            <span className={`text-xs ${probe.ok === false ? "text-error" : probe.ok ? "text-success" : "text-text-muted"}`}>
-              {probe.message}
-            </span>
+              <div className="flex items-center gap-3 flex-wrap">
+                <Button size="sm" variant="secondary" onClick={handleTest}>{translate("Test")}</Button>
+                {probe && (
+                  <span className={`text-xs ${probe.ok === false ? "text-error" : probe.ok ? "text-success" : "text-text-muted"}`}>
+                    {probe.message}
+                  </span>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -296,7 +315,7 @@ export default function DecisionRouterCard({ provider }) {
           onSelect={addModel}
           onDeselect={removeModel}
           activeProviders={activeProviders}
-          title="Add Model or Combo"
+          title={translate("Add Model or Combo")}
           addedModelValues={models}
           closeOnSelect={false}
         />

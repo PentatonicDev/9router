@@ -96,24 +96,38 @@ export function readShortlist(answers, shards) {
 }
 
 /**
- * Which model should serve this step, and how much deliberation it needs.
- * `criteriaFor` must return what the model is FOR: price and capability flags alone
- * decided 0/4 correctly against 5/5 for a curated brief (measured).
+ * The reasoning depth the next step needs, as ordered levels. The tier each level
+ * maps to is decided in code, not by the model: a rate table is arithmetic, and
+ * arithmetic is a documented jaggedness weakness of the decision model. Asking a
+ * Choice over models with prices in the criteria measured 0.62 against the same
+ * state that scores 0.82 here — the model judged the task fine and the price
+ * comparison is what it could not do.
  */
-export function buildModelQuestions(models, criteriaFor) {
-  const criteria = {};
-  for (const model of models) {
-    const text = criteriaFor(model);
-    if (text) criteria[model] = text;
-  }
+export const DEPTH_KEY = "depth";
+export const DEPTH_LEVELS = [
+  "Mechanical: rename, format, lookup, run one command, summarise.",
+  "Local edit: one file, clear requirements, a few lines.",
+  "Multi-file: implement a feature, write tests, refactor with known scope.",
+  "Hard: root-cause debugging of non-obvious faults, architecture, race conditions.",
+];
+
+/**
+ * Which model should serve this step, and how much deliberation it needs.
+ *
+ * The question carries only the depth levels, never the models or their prices: the
+ * pool is ranked in code, so a model absent from the pool cannot be picked and the
+ * price comparison never reaches the model. `models` is accepted only to reject an
+ * empty pool early.
+ */
+export function buildModelQuestions(models) {
   return {
     questions: {
-      [MODEL_KEY]: {
-        type: "choice",
+      [DEPTH_KEY]: {
+        type: "score",
         instructions:
-          "Which model should handle the next step? Pick the cheapest one that still " +
-          "handles this task well — weigh the task's real difficulty against the cost.",
-        criteria,
+          "How much reasoning depth does the NEXT step need? Judge the step itself, " +
+          "not the conversation so far.",
+        criteria: DEPTH_LEVELS,
       },
       [DELIBERATION_KEY]: {
         type: "noul",

@@ -13,9 +13,11 @@ vi.mock("@/lib/auth/resourceScope", () => ({ getScopeFilter: async () => ({}), s
 
 const { decideComboModel, decideTool } = await import("../../src/sse/services/decisionRouter.js");
 
-/** A jev that answers a model question: pick the second model, with deliberation. */
-const answers = (pick) => ({
-  model: { type: "choice", choice: pick, confidence: 0.99, probabilities: { [pick]: 0.99 } },
+/** A jev that answers a model question: a deep step, with little deliberation.
+ *  The depth score is what selects the tier; the pool is ranked cheapest first, so
+ *  3 of a 0..3 scale reaches the last entry. */
+const answers = () => ({
+  depth: { type: "score", score: 3, confidence: 0.99, probabilities: { 0: 0, 1: 0, 2: 0, 3: 0.99 } },
   needs_reasoning: { type: "noul", noul: 0.2 },
 });
 
@@ -37,7 +39,7 @@ beforeEach(() => {
 
 describe("a decision accounts for itself", () => {
   it("writes a usage row carrying the verdict, the connection and the caller's key", async () => {
-    withJev({ model: "typesafe-ai/jev", answers: answers("p/sonnet"), usage: { input_tokens: 812, output_tokens: 12 } });
+    withJev({ model: "typesafe-ai/jev", answers: answers(), usage: { input_tokens: 812, output_tokens: 12 } });
 
     await decideComboModel({ body: { messages: [{ role: "user", content: "oi" }] }, models, comboName: "c", config, target, log: {} });
 
@@ -50,10 +52,13 @@ describe("a decision accounts for itself", () => {
     expect(row.apiKey).toBe("sk-caller");
     // And the verdict is what makes the row explain itself.
     expect(row.meta).toMatchObject({ kind: "model", apply: true, reason: "clear", model: "p/sonnet", confidence: 0.99 });
+    // The depth that produced the pick is recorded alongside it, so a tier that
+    // looks wrong can be traced to the score that chose it.
+    expect(row.meta.depth).toBe(3);
   });
 
   it("writes a detail row of its own, so it reaches the request-details list", async () => {
-    withJev({ model: "typesafe-ai/jev", answers: answers("p/sonnet"), usage: { input_tokens: 812, output_tokens: 12 } });
+    withJev({ model: "typesafe-ai/jev", answers: answers(), usage: { input_tokens: 812, output_tokens: 12 } });
 
     await decideComboModel({ body: { messages: [{ role: "user", content: "oi" }] }, models, comboName: "c", config, target, log: {} });
 

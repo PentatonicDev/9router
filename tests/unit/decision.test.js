@@ -3,14 +3,14 @@ import {
   decideSwitch,
   resolveModelDecision,
   resolveToolDecision,
+  rankByCost,
   MAX_TOOLS,
   NO_TOOL,
 } from "../../open-sse/decision/decide.js";
 import { normalizeAnswers, decisionUrlFor, DECISION_MODEL_TYPE } from "../../open-sse/decision/jev.js";
 import { buildState, hasCacheBreakpoint } from "../../open-sse/decision/state.js";
-import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist, shortlistTools, SHORTLIST_MAX } from "../../open-sse/decision/questions.js";
+import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist, shortlistTools, SHORTLIST_MAX, DEPTH_LEVELS } from "../../open-sse/decision/questions.js";
 import { injectHint, hintText } from "../../open-sse/decision/injectHint.js";
-import { resolveCriteria } from "../../open-sse/decision/modelBriefs.js";
 import { extractTools, applyToolChoice, supportsToolChoice, UNSUPPORTED_EXECUTORS } from "../../open-sse/decision/tools.js";
 
 const choice = (pick, confidence, probabilities) => ({
@@ -20,6 +20,13 @@ const choice = (pick, confidence, probabilities) => ({
   probabilities: probabilities || { [pick]: confidence },
 });
 const noul = (p) => ({ type: "noul", noul: p });
+/** A depth answer: a score over DEPTH_LEVELS (0 mechanical … 3 hard). */
+const depth = (score, confidence) => ({
+  type: "score",
+  score,
+  confidence,
+  probabilities: { 0: 0, 1: 0, 2: 0, 3: 0, [score]: confidence },
+});
 
 describe("normalizeAnswers", () => {
   it("fills a missing choice confidence from the highest probability", () => {
@@ -63,46 +70,102 @@ describe("decideSwitch", () => {
   });
 });
 
+describe("rankByCost", () => {
+  it("orders cheapest first and keeps pool order between equal prices", () => {
+    const prices = { a: 5, b: 1, c: 5, d: null };
+    expect(rankByCost(["a", "b", "c", "d"], (m) => prices[m])).toEqual(["b", "a", "c", "d"]);
+  });
+
+  it("sorts an unpriced model last: it cannot be shown to be the cheap choice", () => {
+    expect(rankByCost(["x", "y"], (m) => (m === "x" ? null : 3))).toEqual(["y", "x"]);
+    // All unpriced keeps the caller's order rather than reshuffling.
+    expect(rankByCost(["x", "y"], () => null)).toEqual(["x", "y"]);
+  });
+});
+
+// The pool is ranked cheapest first and the depth score walks that order, so the
+// tier is chosen by code. Asking the model to compare prices itself measured 0.62
+// on a state where this scores 0.82 — the arithmetic, not the judgment, is what it
+// could not do. Mutating the tier arithmetic below must be the only failure.
 describe("resolveModelDecision", () => {
   const models = ["p/haiku", "p/sonnet", "p/opus"];
+  const ranked = models;
 
-  it("applies a clear pick whose deliberation signal agrees", () => {
+  it("maps a mechanical step to the cheapest tier", () => {
     const out = resolveModelDecision({
-      answers: { model: choice("p/haiku", 1, { "p/haiku": 1 }), needs_reasoning: noul(0.15) },
-      models,
-      cheapest: "p/haiku",
+      answers: { depth: depth(0, 0.95), needs_reasoning: noul(0.15) },
+      models, ranked, depthLevels: 4,
     });
-    expect(out).toMatchObject({ apply: true, model: "p/haiku" });
+    expect(out).toMatchObject({ apply: true, model: "p/haiku", depth: 0 });
+  });
+
+  it("maps a hard step to the top tier", () => {
+    const out = resolveModelDecision({
+      answers: { depth: depth(3, 0.95), needs_reasoning: noul(0.85) },
+      models, ranked, depthLevels: 4,
+    });
+    expect(out).toMatchObject({ apply: true, model: "p/opus", depth: 3 });
+  });
+
+  it("never moves down a tier as the depth rises", () => {
+    const pick = (score) => {
+      const order = ["p/haiku", "p/sonnet", "p/opus"];
+      return order.indexOf(resolveModelDecision({
+        answers: { depth: depth(score, 0.95), needs_reasoning: noul(0.2) },
+        models, ranked, depthLevels: 4,
+      }).model);
+    };
+    // Monotone: a deeper step never lands on a cheaper tier. The exact middle of a
+    // 3-model pool is an arithmetic detail, not the contract.
+    expect(pick(0)).toBe(0);
+    expect(pick(3)).toBe(2);
+    for (let i = 1; i < 4; i++) expect(pick(i)).toBeGreaterThanOrEqual(pick(i - 1));
+  });
+
+  it("clamps a score outside the level range instead of indexing off the pool", () => {
+    // jev can return a score above the level count or below zero; an unclamped
+    // index would be undefined and the decision would read as "no pick".
+    for (const score of [-2, 99]) {
+      expect(resolveModelDecision({
+        answers: { depth: depth(score, 0.95), needs_reasoning: noul(0.2) },
+        models, ranked, depthLevels: 4,
+      }).model).toBeTruthy();
+    }
   });
 
   it("refuses the dangerous contradiction: hard step routed to the cheapest model", () => {
-    // The failure the operator cannot see — quality lost silently.
+    // The failure the operator cannot see — quality lost silently. Depth says
+    // mechanical (so the tier lands on the cheapest) while deliberation says hard.
     const out = resolveModelDecision({
-      answers: { model: choice("p/haiku", 0.99), needs_reasoning: noul(0.9) },
-      models,
-      cheapest: "p/haiku",
+      answers: { depth: depth(0, 0.99), needs_reasoning: noul(0.9) },
+      models, ranked, depthLevels: 4,
     });
     expect(out).toMatchObject({ apply: false, reason: "signals_disagree" });
   });
 
-  it("allows a mechanical step on an expensive model (a cost miss, not a quality one)", () => {
-    const out = resolveModelDecision({
-      answers: { model: choice("p/opus", 0.99), needs_reasoning: noul(0.1) },
-      models,
-      cheapest: "p/haiku",
-    });
-    expect(out).toMatchObject({ apply: true, model: "p/opus" });
-  });
-
-  it("refuses a pick outside the pool and a missing deliberation signal", () => {
+  it("refuses a missing depth answer and a missing deliberation signal", () => {
     expect(resolveModelDecision({
-      answers: { model: choice("p/gpt", 0.99), needs_reasoning: noul(0.9) },
-      models,
+      answers: { needs_reasoning: noul(0.9) },
+      models, ranked, depthLevels: 4,
     }).reason).toBe("no_usable_pick");
     expect(resolveModelDecision({
-      answers: { model: choice("p/opus", 0.99) },
-      models,
+      answers: { depth: depth(2, 0.99) },
+      models, ranked, depthLevels: 4,
     }).reason).toBe("no_deliberation_signal");
+    // A non-finite score is not a depth: the tier arithmetic would produce NaN and
+    // index the pool with it.
+    expect(resolveModelDecision({
+      answers: { depth: { type: "score", score: "deep", confidence: 1 }, needs_reasoning: noul(0.9) },
+      models, ranked, depthLevels: 4,
+    }).reason).toBe("no_usable_pick");
+  });
+
+  it("never picks a model outside the ranked pool", () => {
+    const out = resolveModelDecision({
+      answers: { depth: depth(3, 0.95), needs_reasoning: noul(0.1) },
+      models: ["p/haiku"], ranked: ["p/haiku"], depthLevels: 4,
+    });
+    expect(out).toMatchObject({ apply: true, model: "p/haiku" });
   });
 });
 
@@ -225,12 +288,16 @@ describe("questions", () => {
     }
   });
 
-  it("keeps non-tool options out of a model choice", () => {
+  it("asks for reasoning depth, not a model, so price stays out of the question", () => {
     // A non-model option in a model question absorbed 39-45% of the probability
-    // mass and wrecked the decision.
-    const { questions: { model } } = buildModelQuestions(["p/haiku", "p/opus"], (m) => `brief for ${m}`);
-    expect(Object.keys(model.criteria).sort()).toEqual(["p/haiku", "p/opus"]);
-    expect(model.criteria).not.toHaveProperty(NO_TOOL);
+    // mass and wrecked the decision. Now the choice is gone entirely: the question
+    // is a score over ordered levels and the tier is mapped in code.
+    const { questions } = buildModelQuestions(["p/haiku", "p/opus"], (m) => `brief for ${m}`);
+    expect(questions.depth.type).toBe("score");
+    expect(questions.depth.criteria).toEqual(DEPTH_LEVELS);
+    // No model name and no price reaches the question — that arithmetic is ours.
+    const asked = JSON.stringify(questions);
+    expect(asked).not.toMatch(/p\/haiku|p\/opus|\$\d/);
   });
 
   it("offers the no-tool escape only in the tool choice", () => {
@@ -292,21 +359,6 @@ describe("injectHint", () => {
   });
 });
 
-describe("resolveCriteria", () => {
-  it("prefers the operator's brief, then the curated table, then capabilities", () => {
-    expect(resolveCriteria({ provider: "anthropic", model: "claude-opus-5", briefs: { "anthropic/claude-opus-5": "MY BRIEF" } }))
-      .toContain("MY BRIEF");
-    // Curated: says what the model is FOR.
-    expect(resolveCriteria({ provider: "anthropic", model: "claude-opus-5" })).toMatch(/root-cause debugging/i);
-    // Unknown model still gets something, and is priced.
-    const derived = resolveCriteria({ provider: "openai", model: "gpt-5.6-luna" });
-    expect(derived.length).toBeGreaterThan(0);
-  });
-
-  it("appends live price so the brief never goes stale", () => {
-    expect(resolveCriteria({ provider: "anthropic", model: "claude-opus-5" })).toMatch(/\$\d/);
-  });
-});
 
 describe("decision route resolution", () => {
   // The decision route is derived from the gateway's own transport, so adding a
@@ -389,22 +441,6 @@ describe("tool extraction and application", () => {
   });
 });
 
-describe("resolveCriteria with a vendor-prefixed model id", () => {
-  // Passthrough providers bake the vendor into the id. Missing the table lookup
-  // here is silent: the model falls to the derived criteria, measured to decide
-  // 0/4 correctly instead of 5/5.
-  it("finds the brief behind a passthrough prefix", () => {
-    const bare = resolveCriteria({ provider: "anthropic", model: "claude-opus-5" });
-    const prefixed = resolveCriteria({ provider: "vercel", model: "anthropic/claude-opus-5" });
-    expect(prefixed).toBe(bare);
-    expect(prefixed).toMatch(/root-cause debugging/i);
-  });
-
-  it("still lets the operator's own brief win, keyed either way", () => {
-    expect(resolveCriteria({ provider: "vercel", model: "anthropic/claude-opus-5", briefs: { "vercel/anthropic/claude-opus-5": "MINE" } }))
-      .toContain("MINE");
-  });
-});
 
 describe("toolMode as a ceiling", () => {
   const tools = ["Bash", "Read"];
