@@ -43,7 +43,7 @@ describe("a decision accounts for itself", () => {
 
     expect(sinks.usage).toHaveLength(1);
     const row = sinks.usage[0];
-    expect(row.provider).toBe("typesafe");
+    expect(row.provider).toBe("vercel-ai-gateway");
     expect(row.endpoint).toBe("decision");
     // Without these the row reads as an unattributed "Local (No API key)" call.
     expect(row.connectionId).toBe("conn-1");
@@ -59,7 +59,7 @@ describe("a decision accounts for itself", () => {
 
     expect(sinks.detail).toHaveLength(1);
     const detail = sinks.detail[0];
-    expect(detail.provider).toBe("typesafe");
+    expect(detail.provider).toBe("vercel-ai-gateway");
     expect(detail.connectionId).toBe("conn-1");
     // ttft null, not 0: there is no stream to time, and 0 would read as measured.
     expect(detail.latency.ttft).toBeNull();
