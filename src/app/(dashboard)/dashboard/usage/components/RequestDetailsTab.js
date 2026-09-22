@@ -29,6 +29,12 @@ function fmtMs(v) {
   return v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${Math.round(v)}ms`;
 }
 
+function safeText(v) {
+  if (v == null) return null;
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+
 /**
  * The per-option probabilities jev returned, sorted so the winner is readable at a
  * glance. This is the only place the runner-up is visible: `confidence` alone hides
@@ -755,16 +761,16 @@ export default function RequestDetailsTab() {
                       Thinking Process
                     </h4>
                     <pre className="max-h-[200px] max-w-full overflow-auto rounded-lg border border-amber-200 bg-amber-50 p-3 font-mono text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 sm:p-4">
-                      {selectedDetail.response.thinking}
+                      {safeText(selectedDetail.response.thinking)}
                     </pre>
                   </div>
                 )}
-                
+
                 <h4 className="font-semibold text-text-main mb-2 text-xs uppercase tracking-wide opacity-70">
                   Content
                 </h4>
                 <pre className="max-h-[300px] max-w-full overflow-auto rounded-lg border border-black/5 bg-black/5 p-3 font-mono text-xs text-text-main dark:border-white/5 dark:bg-white/5 sm:p-4">
-                  {selectedDetail.response?.content || "[No content]"}
+                  {safeText(selectedDetail.response?.content) || "[No content]"}
                 </pre>
               </CollapsibleSection>
             </div>
