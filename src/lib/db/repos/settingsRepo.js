@@ -83,9 +83,9 @@ const DEFAULT_SETTINGS = {
   // than an `enabled` flag plus a mode string: "off" never asks, "shadow" asks
   // and logs but applies nothing (the baseline needed to measure before
   // trusting), "enforce" applies. `models` is the allowlist — model strings
-  // and/or combo names, empty meaning nothing routes — and `briefs` holds the
-  // operator's own "what this model is FOR" text per model, which is what makes
-  // the decision accurate; the repo table is only the default.
+  // and/or combo names, empty meaning nothing routes. The model is asked how
+  // deep a step is, never which model to use, so no per-model text is configured
+  // here: the tier is derived from the pool's own prices in code.
   decisionRouter: {
     mode: "off",
     // The gateway that serves the decision model. It IS the provider — a decision
@@ -95,7 +95,6 @@ const DEFAULT_SETTINGS = {
     provider: "vercel-ai-gateway",
     model: "typesafe-ai/jev",
     models: [],
-    briefs: {},
     // Cap the reasoning budget per turn from the same verdict that picks the model:
     // a mechanical turn gets a low ceiling, a hard one is left alone. Separate from
     // `mode` because the two levers carry different evidence — model routing is
