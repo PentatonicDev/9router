@@ -24,6 +24,8 @@ export default {
     validateUrl: "https://api.kilo.ai/api/gateway/models",
   },
   models: [
+    { id: "openai/gpt-6-sol", name: "GPT-6 Sol" },
+    { id: "openai/gpt-6-luna", name: "GPT-6 Luna" },
     { id: "kilo-auto/free", name: "Kilo Auto Free", contextLength: 256000 },
     { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B (Free)", contextLength: 262144 },
     { id: "nvidia/nemotron-3-ultra-550b-a55b:free", name: "Nemotron 3 Ultra 550B (Free)", contextLength: 1000000 },

@@ -13,20 +13,15 @@ export const CATALOG_FILE = path.join(DATA_DIR, "model-catalog.json");
 // Trimmed upstream catalog, read by the add-models skill (not by the router).
 export const CATALOG_RAW_FILE = path.join(DATA_DIR, "model-catalog-raw.json");
 
-// Schema of the file this module reads. The writer stamps it; a file carrying an
-// older value predates provider-scoped modality keys, and its flat keys are not
-// looked up here, so the sync rebuilds it instead of asking upstream for a 304.
-export const CATALOG_VERSION = 2;
+// Rebuild older files: their keys or fields cannot be trusted by this reader.
+export const CATALOG_VERSION = 4;
 
-const EMPTY = { models: {}, providers: {} };
+const EMPTY = { models: {}, providers: {}, pricing: {} };
 let cache = EMPTY;
 let cachedMtime = -1;
 
-// "zai-org/GLM-4.6V:free" -> "glm-4.6v"
-function baseId(model) {
-  if (!model) return "";
-  const withoutVendor = model.includes("/") ? model.split("/").pop() : model;
-  return withoutVendor.toLowerCase().split(":")[0];
+function modelId(model) {
+  return String(model || "").toLowerCase();
 }
 
 function load() {
@@ -43,7 +38,9 @@ function load() {
   cachedMtime = mtime;
   try {
     const parsed = JSON.parse(fs.readFileSync(CATALOG_FILE, "utf8"));
-    cache = { models: parsed?.models || {}, providers: parsed?.providers || {} };
+    cache = parsed?.v === CATALOG_VERSION
+      ? { models: parsed.models || {}, providers: parsed.providers || {}, pricing: parsed.pricing || {} }
+      : EMPTY;
   } catch {
     cache = EMPTY;
   }
@@ -58,7 +55,8 @@ function load() {
 // request to the router mode inherited a stranger's vision.
 export function getCatalogModalities(provider, model) {
   if (!provider) return null;
-  return load().models[`${provider}:${baseId(model)}`] || null;
+  const models = load().models;
+  return models[`${provider}:${modelId(model)}`] || null;
 }
 
 // Context and output limits are a property of the gateway too: each one
@@ -66,7 +64,13 @@ export function getCatalogModalities(provider, model) {
 export function getCatalogLimits(provider, model) {
   const byProvider = provider && load().providers[provider];
   if (!byProvider) return null;
-  return byProvider[model] || byProvider[baseId(model)] || null;
+  return byProvider[modelId(model)] || null;
+}
+
+export function getCatalogPricing(provider, model) {
+  if (!provider) return null;
+  const pricing = load().pricing;
+  return pricing[`${provider}:${modelId(model)}`] || null;
 }
 
 // Force a re-read on the next lookup (called right after a sync writes the file).
@@ -79,4 +83,6 @@ export function invalidateCatalog() {
 export async function installCatalogSource() {
   const { setCatalogSource } = await import("./capabilities.js");
   setCatalogSource({ getModalities: getCatalogModalities, getLimits: getCatalogLimits });
+  const { setPricingCatalogSource } = await import("./pricing.js");
+  setPricingCatalogSource(getCatalogPricing);
 }

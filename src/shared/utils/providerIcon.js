@@ -8,6 +8,21 @@ const ICON_ALIASES = {
   "ollama-search": "ollama",
 };
 
+const CATALOG_ICON_ALIASES = {
+  claude: "anthropic",
+  gemini: "google",
+  glm: "zai",
+  "glm-cn": "zhipuai",
+  kimi: "moonshotai",
+  "kimi-cn": "moonshotai-cn",
+  qwen: "alibaba",
+  "qwen-cn": "alibaba-cn",
+  zhipu: "zhipuai",
+  hunyuan: "tencent",
+  doubao: "volcengine",
+  "cloudflare-ai": "cloudflare-workers-ai",
+};
+
 // Runtime only — first 404 remembers id for the whole session
 const failedIds = new Set();
 
@@ -30,6 +45,11 @@ export function resolveProviderIconId(providerId) {
 export function getProviderIconSrc(providerId) {
   const id = resolveProviderIconId(providerId);
   return id ? `/providers/${id}.png` : null;
+}
+
+export function getProviderIconSvgSrc(providerId) {
+  const id = resolveProviderIconId(providerId);
+  return id ? `https://models.dev/logos/${CATALOG_ICON_ALIASES[id] || id}.svg` : null;
 }
 
 /** Call from img onError so later mounts skip the request. */

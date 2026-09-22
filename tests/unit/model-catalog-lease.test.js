@@ -20,6 +20,16 @@ let getCatalogModalities;
 let invalidateCatalog;
 
 const upstream = { zai: { models: { "glm-4.6v": { modalities: { input: ["text", "image"] } } } } };
+const visionCaps = {
+  vision: true,
+  pdf: false,
+  audioInput: false,
+  videoInput: false,
+  imageOutput: false,
+  audioOutput: false,
+  reasoning: false,
+  tools: true,
+};
 const realFetch = globalThis.fetch;
 
 function mockFetch(impl) {
@@ -90,7 +100,7 @@ describe("model catalog — cross-instance lease", () => {
     expect(result.status).toBe("updated");
     const written = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
     expect(written.etag).toBe('W/"v1"');
-    expect(getCatalogModalities("zai", "glm-4.6v")).toEqual({ vision: true });
+    expect(getCatalogModalities("zai", "glm-4.6v")).toEqual(visionCaps);
 
     const shared = await catalogKv.get("catalog");
     expect(shared.etag).toBe('W/"v1"');
@@ -99,7 +109,7 @@ describe("model catalog — cross-instance lease", () => {
 
   it("adopts a winner's catalog from kv when it loses the lease, without calling models.dev", async () => {
     // Simulate another instance's already-completed winning sync.
-    const winnerPayload = { v: 2, etag: 'W/"from-winner"', syncedAt: Date.now(), models: { "zai:glm-4.6v": { vision: true } }, providers: {} };
+    const winnerPayload = { v: 4, etag: 'W/"from-winner"', syncedAt: Date.now(), models: { "zai:glm-4.6v": visionCaps }, providers: {}, pricing: {} };
     await catalogKv.set("catalog", winnerPayload);
 
     const foreignHolder = await claimLease(CATALOG_LEASE_ID, 60_000, { holder: "other-instance:2" });
@@ -115,7 +125,7 @@ describe("model catalog — cross-instance lease", () => {
 
       const written = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
       expect(written).toEqual(winnerPayload);
-      expect(getCatalogModalities("zai", "glm-4.6v")).toEqual({ vision: true });
+      expect(getCatalogModalities("zai", "glm-4.6v")).toEqual(visionCaps);
     } finally {
       await releaseLease(CATALOG_LEASE_ID, "other-instance:2");
     }

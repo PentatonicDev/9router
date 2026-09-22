@@ -1,20 +1,17 @@
 // Model capabilities — what each model can read/do beyond plain text.
 //
-// Fallback order (first match wins), result merged over DEFAULT_CAPABILITIES:
-//   1. PROVIDER_CAPABILITIES[provider][model]  — provider-specific override
-//   2. MODEL_CAPABILITIES[model]               — canonical exact id (handles exceptions)
-//   3. PATTERN_CAPABILITIES                     — glob match, ordered specific -> generic
-//   4. DEFAULT_CAPABILITIES                     — safe floor (always returned)
+// Provider-specific entries win. Other tables supply defaults for missing models
+// and manual-only fields; catalog values override their shared fields.
 //
-// Two extra layers then refine the result, and neither can override the hand
-// written tables above (steps 1-2 short-circuit before they are consulted):
-//   • the synced catalog — modalities keyed by model, limits keyed by provider
-//     + model, refreshed from models.dev in the background. It reads a file, so
-//     the server installs it via setCatalogSource(); this module stays free of
-//     node:fs because the dashboard bundles it into the browser too.
+// Two extra layers refine the table result:
+//   • the synced catalog — capabilities + limits keyed by provider + model,
+//     refreshed from models.dev every 3h. Authoritative for modalities,
+//     reasoning, and tools (can turn ON or OFF). Manual-only fields
+//     (thinkingFormat, search, etc) are never touched. Installed via
+//     setCatalogSource(); this module stays free of node:fs because the
+//     dashboard bundles it into the browser too.
 //   • visionPatterns.js — name-based vision detection, last resort so a model
 //     nobody has catalogued yet still accepts images.
-// Both only ever turn a capability ON.
 //
 // ── HOW TO ADD / UPDATE A MODEL ──────────────────────────────────────
 // Authoritative data source: https://models.dev/api.json (145 providers, 4000+
@@ -519,7 +516,7 @@ export function aggregateComboCapabilities(comboModels, comboLookup = null, _dep
  * @param {string} model
  * @returns {object} full capabilities object
  */
-const MODALITY_KEYS = ["vision", "pdf", "audioInput", "videoInput"];
+const CATALOG_AUTHORITATIVE_KEYS = ["vision", "pdf", "audioInput", "videoInput", "imageOutput", "audioOutput", "reasoning", "tools"];
 
 // Catalog lookups, installed by the server at startup. Left as no-ops in the
 // browser bundle, where there is no file to read.
@@ -547,17 +544,17 @@ function getCatalogSource() {
 }
 
 // Apply the synced catalog + name heuristic on top of a table-resolved result.
-// Strictly additive: a capability already true stays true, and a false one only
-// flips when an outside source positively declares support.
+// Catalog is authoritative for CATALOG_AUTHORITATIVE_KEYS: it can turn caps ON
+// or OFF. Manual-only fields (thinkingFormat, search, etc) are never touched.
 function refine(base, provider, model) {
   const result = { ...DEFAULT_CAPABILITIES, ...base };
 
   const source = getCatalogSource();
+  const modalities = source?.getModalities(provider, model);
   if (source) {
-    const modalities = source.getModalities(provider, model);
     if (modalities) {
-      for (const key of MODALITY_KEYS) {
-        if (modalities[key] === true) result[key] = true;
+      for (const key of CATALOG_AUTHORITATIVE_KEYS) {
+        if (key in modalities) result[key] = modalities[key];
       }
     }
 
@@ -568,7 +565,7 @@ function refine(base, provider, model) {
     }
   }
 
-  if (!result.vision && looksLikeVisionModel(model)) result.vision = true;
+  if (!result.vision && !modalities && looksLikeVisionModel(model)) result.vision = true;
 
   return result;
 }
@@ -648,8 +645,8 @@ export function getCapabilitiesForModel(provider, model) {
   }
 
   // 2. Canonical exact
-  if (MODEL_CAPABILITIES[baseModel]) return { ...DEFAULT_CAPABILITIES, ...MODEL_CAPABILITIES[baseModel] };
-  if (MODEL_CAPABILITIES[model]) return { ...DEFAULT_CAPABILITIES, ...MODEL_CAPABILITIES[model] };
+  if (MODEL_CAPABILITIES[baseModel]) return refine(MODEL_CAPABILITIES[baseModel], provider, model);
+  if (MODEL_CAPABILITIES[model]) return refine(MODEL_CAPABILITIES[model], provider, model);
 
   // 3. Pattern match (first match wins), refined by catalog + name heuristic
   for (const { pattern, caps } of PATTERN_CAPABILITIES) {

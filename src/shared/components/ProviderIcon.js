@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import PropTypes from "prop-types";
-import { getProviderIconSrc, markProviderIconMissing } from "@/shared/utils/providerIcon";
+import { getProviderIconSrc, getProviderIconSvgSrc, markProviderIconMissing } from "@/shared/utils/providerIcon";
 
 function resolveSrc(src, providerId) {
   if (providerId) return getProviderIconSrc(providerId);
@@ -22,9 +22,11 @@ export default function ProviderIcon({
   fallbackColor,
 }) {
   const effectiveSrc = resolveSrc(src, providerId);
-  const [errored, setErrored] = useState(false);
+  const [failed, setFailed] = useState({ primary: null, svg: null });
+  const svgSrc = getProviderIconSvgSrc(providerId || effectiveSrc?.match(/^\/providers\/([^/]+)\.png$/i)?.[1]);
+  const currentSrc = failed.primary === effectiveSrc ? svgSrc : effectiveSrc;
 
-  if (!effectiveSrc || errored) {
+  if (!currentSrc || (failed.svg === svgSrc && failed.primary === effectiveSrc && failed.svg !== null)) {
     return (
       <span
         className={`inline-flex items-center justify-center font-bold rounded-lg ${className}`.trim()}
@@ -42,7 +44,7 @@ export default function ProviderIcon({
 
   return (
     <img
-      src={effectiveSrc}
+      src={currentSrc}
       alt={alt}
       width={size}
       height={size}
@@ -50,10 +52,14 @@ export default function ProviderIcon({
       loading="lazy"
       decoding="async"
       onError={() => {
-        const m = effectiveSrc.match(/^\/providers\/([^/]+)\.png$/i);
+        if (currentSrc === effectiveSrc && svgSrc) {
+          setFailed({ primary: effectiveSrc, svg: null });
+          return;
+        }
+        const m = effectiveSrc?.match(/^\/providers\/([^/]+)\.\w+$/i);
         if (m) markProviderIconMissing(m[1]);
         if (providerId) markProviderIconMissing(providerId);
-        setErrored(true);
+        setFailed({ primary: effectiveSrc, svg: svgSrc });
       }}
     />
   );
