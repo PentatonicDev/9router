@@ -113,5 +113,7 @@ export async function askJev({
     },
     model: payload?.model || model,
     latencyMs: Date.now() - startedAt,
+    route: payload?.provider_metadata?.gateway?.routing || null,
+    rawPayload: payload,
   };
 }

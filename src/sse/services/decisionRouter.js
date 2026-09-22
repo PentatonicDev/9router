@@ -177,7 +177,7 @@ export async function decideComboModel({ body, models, comboName, config, target
     previousVerdict,
   });
 
-  await recordUsage({ response, log, target, verdict: verdictMeta(decision, { kind: "model", comboName }) });
+  await recordUsage({ response, log, target, verdict: verdictMeta(decision, { kind: "model", comboName }), questions });
 
   if (!decision.apply) {
     log?.info?.("DECISION", `model: no change (${decision.reason}, conf ${fmt(decision.confidence)}, ${response.latencyMs}ms)`);
@@ -216,7 +216,7 @@ export async function decideTool({ body, tools, plans = [], config, target, log 
     allowed: config.toolMode,
     minConfidence: config.minConfidence,
   });
-  await recordUsage({ response, log, target, verdict: verdictMeta(toolDecision, { kind: "tool", tools: kept.length }) });
+  await recordUsage({ response, log, target, verdict: verdictMeta(toolDecision, { kind: "tool", tools: kept.length }), questions });
 
   return { ...toolDecision, latencyMs: response.latencyMs };
 }
@@ -229,7 +229,7 @@ export async function decideTool({ body, tools, plans = [], config, target, log 
  * The row carries the verdict in `meta`, so the table answers "why did this request
  * reach an expensive model" and not only "how much did it spend".
  */
-async function recordUsage({ response, log, verdict, target }) {
+async function recordUsage({ response, log, verdict, target, questions }) {
   try {
     const { saveRequestUsage } = await import("@/lib/db/index.js");
     await saveRequestUsage({
@@ -244,16 +244,21 @@ async function recordUsage({ response, log, verdict, target }) {
       },
       meta: verdict ? { ...verdict, route: response.route, via: target?.provider || null } : undefined,
     });
-    await saveDecisionDetail({ response, verdict, target });
+    await saveDecisionDetail({ response, verdict, target, questions });
   } catch (error) {
     log?.debug?.("DECISION", `usage not recorded: ${error.message}`);
   }
 }
 
-async function saveDecisionDetail({ response, verdict, target }) {
+async function saveDecisionDetail({ response, verdict, target, questions }) {
   try {
     const { saveRequestDetail } = await import("@/lib/usageDb.js");
     const { buildRequestDetail, buildDecisionDetail } = await import("open-sse/handlers/chatCore/requestDetail.js");
+    const answers = response.answers || {};
+    const probabilities = {};
+    for (const [k, v] of Object.entries(answers)) {
+      if (v?.probabilities) probabilities[k] = v.probabilities;
+    }
     await saveRequestDetail(buildRequestDetail({
       provider: target?.provider || "typesafe",
       model: response.model || "jev-latest",
@@ -264,7 +269,9 @@ async function saveDecisionDetail({ response, verdict, target }) {
         prompt_tokens: response.usage.input_tokens,
         completion_tokens: response.usage.output_tokens,
       },
-      request: { route: response.route, kind: verdict?.kind || null },
+      request: { kind: verdict?.kind || null, questions: questions || null },
+      providerRequest: { model: response.model, route: response.route?.canonicalSlug || null },
+      providerResponse: { answers, probabilities },
       response: { verdict: verdict || null },
       decision: verdict
         ? buildDecisionDetail(verdict.kind === "model" ? verdict : null, verdict.kind === "tool" ? verdict : null)
@@ -272,7 +279,7 @@ async function saveDecisionDetail({ response, verdict, target }) {
       status: "success",
     }));
   } catch (error) {
-    log?.debug?.("DECISION", `usage not recorded: ${error.message}`);
+    // log may not be in scope here; fail silently.
   }
 }
 
