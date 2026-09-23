@@ -416,7 +416,6 @@ held-out set of discriminating tasks is what would turn that into a rate.
 ## 10. Reproducing
 
 ```bash
-# both arms, report files for the join
 # screen a task first: it only tests quality if the fixed models disagree
 node scripts/bench-harness.mjs --model kr/claude-haiku-4.5 --only t4-expr --repeat 3 --report /tmp/cheap.json
 node scripts/bench-harness.mjs --model kr/claude-sonnet-5  --only t4-expr --repeat 3 --report /tmp/strong.json
