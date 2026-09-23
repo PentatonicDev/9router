@@ -1,0 +1,24 @@
+diff --git a/swebench/harness/run_evaluation.py b/swebench/harness/run_evaluation.py
+index bf9680f..389c914 100644
+--- a/swebench/harness/run_evaluation.py
++++ b/swebench/harness/run_evaluation.py
+@@ -122,6 +122,9 @@ def create_container(
+                 # Docker's default seccomp profile only permits CLONE_NEWUSER with
+                 # CAP_SYS_ADMIN, which browser sandboxes need (e.g. openlayers karma)
+                 cap_add=["SYS_ADMIN"],
++                nano_cpus=2_000_000_000,
++                mem_limit="4g",
++                pids_limit=512,
+             )
+         except docker.errors.APIError as e:
+             if "409" in str(e) or "Conflict" in str(e):
+@@ -139,6 +142,9 @@ def create_container(
+                     # Docker's default seccomp profile only permits CLONE_NEWUSER with
+                     # CAP_SYS_ADMIN, which browser sandboxes need (e.g. openlayers karma)
+                     cap_add=["SYS_ADMIN"],
++                    nano_cpus=2_000_000_000,
++                    mem_limit="4g",
++                    pids_limit=512,
+                 )
+             else:
+                 raise
