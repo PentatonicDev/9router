@@ -54,6 +54,7 @@ docs/*
 !docs/DECISION-ROUTING.md
 !docs/swebench-subset.json
 !docs/swebench-screen-pool.json
+!docs/swebench-discriminating.json
 test/*
 open-sse/test/*
 RM.vn.md
