@@ -10,8 +10,10 @@ of a pool serves each turn of a real coding agent, how far a tool verdict may go
 and how much reasoning budget a mechanical turn gets. This document records what
 was measured, how, and which claims the measurements do *not* support.
 
-Every number below was produced by executing the system described, against live
-providers, on 2026-09-23. Nothing here is derived from reading the code.
+Measurements below combine live provider calls with explicitly labelled
+synthetic conversation probes and local regression tests, all run on 2026-09-23.
+Only the Claude Code A/B used real agent trajectories; no production decision
+state was captured for the 43 routed turns.
 
 ## 1. The result, and the bug that raising N exposed
 
@@ -27,16 +29,18 @@ $1.57339 → $0.16615, −89.4%. At n=9 the pass rate moved and the picture chan
 | routed (buggy) | `coding-auto` (combo, enforce) | 6/9 | 35–88% | $0.50395 | $0.00547 | $0.50943 | $0.08490 |
 
 The routed arm served **43 of 43 turns on haiku** and failed all three repeats of
-the one task the control arm passed twice. A pool that had measured 6/6 correct in
-isolation was collapsing to the cheapest model in production — so the gap was not
-a threshold to retune but a defect to find. Section 2.1 is that defect.
+the one task the control arm passed twice. That discrepancy prompted an audit of
+the decision state, which found a reproducible truncation defect (§2.1). Because
+production decision states were not recorded, the experiment does not show that
+the defect caused the 43 haiku selections or the pass-rate gap.
 
-**The honest status of the cost number.** −91% was measured on code that routed
-blind; it is the cost of a router that always picked haiku, which is a lower bound
-on spend and not a result. Section 8.1 records the re-measurement after the fix:
-7/9 at −91.6%, with the recovered task being the one that failed all three repeats
-before. `bench-report.mjs` prints the interval-overlap caveat next to every ratio
-rather than letting it stand alone.
+**The honest status of the cost number.** −91% was measured before the state fix;
+all 43 requests were served by haiku. It is an observed cost for that run, not
+evidence that a router protects quality or the cost of an optimal policy.
+Section 8.1 records the re-measurement after the fix: 7/9 at −91.6%; one
+previously failing repeat passed, but independent stochastic runs cannot
+attribute that improvement to the fix. `bench-report.mjs` prints the
+interval-overlap caveat next to every ratio rather than letting it stand alone.
 
 ## 2. The finding that mattered: pool shape
 
@@ -99,8 +103,9 @@ first kept turn role: assistant
 task statement survived: false
 ```
 
-Asked without the premise, every remaining turn reads as mechanical. Walking the
-same slugify session through the live decision model, one turn at a time:
+To isolate what losing the premise can do, we built a **synthetic** slugify
+conversation and sent its states to the live decision model. These were not
+captured production turns:
 
 | what the window held | pick | confidence | deliberation |
 |---|---|---|---|
@@ -109,23 +114,27 @@ same slugify session through the live decision model, one turn at a time:
 | turn 4: after the test fails on the accent | sonnet-5 | 0.83 | 0.51 |
 | **turn 5: statement truncated away** | **haiku-4.5** | 0.81 | 0.31 |
 
-The pick flips on the last row, and only on that row. The confidence barely moves
-(0.83 → 0.81), so no gate could have caught it: a confident answer to a question
-missing its premise is still confident. That is how 43 of 43 turns reached haiku
-and the routed arm lost a task the control arm passed.
+The pick flips on the last row in this constructed probe. The confidence barely
+moves (0.83 → 0.81), so the current gate cannot distinguish these two answers:
+a confident answer to a question missing its premise remains confident. The
+43-of-43 haiku turns observed in the routed arm are consistent with this failure
+mode, but the actual production `state` for those turns was not recorded;
+this probe does **not** establish that every one of those picks lost the premise.
 
 Two confounders were ruled out by measurement rather than argument. Agent
 boilerplate in `assistant_instructions` lowers confidence (0.96 → 0.79) but does
 **not** flip the pick. The active `ponytail` injection ("lazy senior developer,
 ship the one-liner") lowers it further (0.97 → 0.74) and also does not flip it.
-Only losing the statement flips it.
+In these probes, only losing the statement flipped it.
 
 **The fix** costs the first user turn against the budget *before* the newest-first
 walk, so truncation eats tool traffic instead of the premise. The window still
 ends on the latest turn and still respects the cap (23794 of 24000 chars on the
-loop above). Verified end to end against the live router: the same 40-iteration
-shape that used to route to haiku now returns `kr/claude-opus-5` at strength 0.91,
-deliberation 0.73.
+loop above). Verified end to end against the live router on a separate synthetic
+40-iteration *architecture* task: after the fix the router returned
+`kr/claude-opus-5` at strength 0.91, deliberation 0.73. This confirms the
+router can escalate when the task anchor survives; it does not establish which
+model that exact request would have reached before the fix.
 
 The general lesson is not about this budget. **A context-management policy tuned
 for generation is not automatically valid for a routing question asked over the
@@ -285,7 +294,9 @@ re-run because a fixed model never reaches the router, so its numbers stand.
 | routed, buggy state | 6/9 | 35–88% | $0.50395 | $0.00547 | $0.50943 | $0.08490 |
 | routed, anchored state | **7/9** | 45–94% | $0.47020 | $0.00503 | $0.47524 | $0.06789 |
 
-The recovered task is the one whose three repeats all failed before. Cost is
+One of three repeats of the previously failing task passed after the fix, versus
+zero before. These are independent stochastic runs, not the same trajectory replayed;
+that difference is **not** evidence the fix caused a successful solve. Cost is
 −91.6% against the control, with the decision model at 1.06% of spend and 32 of 40
 verdicts applied.
 
@@ -307,8 +318,8 @@ single most valuable addition to this methodology and is not yet done.
 ## 9. Design implications
 
 1. **Fix the option set before tuning the gate.** A gate is only meaningful
-   relative to the option count; near-duplicate options are the cheapest quality
-   bug to remove.
+   relative to the option count; near-duplicate options dilute probability mass
+   in the measured decision probes.
 2. **Normalize the acceptance score against the uniform baseline.** Raw softmax
    confidence is not comparable across pool sizes.
 3. **Two bands beat one threshold.** A second agreeing verdict unlocked a third of
@@ -323,11 +334,12 @@ single most valuable addition to this methodology and is not yet done.
 7. **Label diagnostics by what they measure**, not by what they usually mean.
 8. **Audit what truncation sacrifices before asking a routing question.** A context
    policy tuned for generation optimizes for recency; a routing question needs the
-   premise. Dropping it yields a confident wrong answer, not a visibly degraded one,
-   so no confidence gate can catch it.
-9. **Raise N before believing a free lunch.** At n=3 this router looked strictly
-   better; at n=9 it was worse on quality, and the gap was a defect rather than a
-   tuning problem. Small-N agreement is what a bug looks like before it is found.
+   premise. The synthetic probe showed a high-confidence tier flip when the
+   premise was dropped; this particular error escaped the current gate.
+9. **Raise N before believing a free lunch.** At n=3 the arms tied in pass rate;
+   at n=9 they differed by two successes and the intervals still overlapped.
+   Truncation was a real defect found during investigation, but the run did not
+   capture enough state to attribute that difference to it.
 10. **A benchmark whose pass rate cannot fall cannot validate a router.** Include at
     least one task a cheap model reliably fails, or the quality axis is untested no
     matter how many repeats are run.
