@@ -14,7 +14,7 @@ import { buildState, hasCacheBreakpoint } from "../../open-sse/decision/state.js
 import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist, shortlistTools, SHORTLIST_MAX } from "../../open-sse/decision/questions.js";
 import { injectHint, hintText } from "../../open-sse/decision/injectHint.js";
 import { extractTools, applyToolChoice, supportsToolChoice, UNSUPPORTED_EXECUTORS } from "../../open-sse/decision/tools.js";
-import { rankPool, priceOf, decisionCandidates, normalizeDecisionConfig } from "../../src/sse/services/decisionRouter.js";
+import { rankPool, priceOf, decisionCandidates, normalizeDecisionConfig, deferUpOnDoubt } from "../../src/sse/services/decisionRouter.js";
 import { DECISION_PRESETS } from "../../open-sse/decision/presets.js";
 
 const choice = (pick, confidence, probabilities) => ({
@@ -132,6 +132,34 @@ describe("decisionCandidates", () => {
       .toEqual(["kr/claude-haiku-4.5-thinking", "kr/claude-opus-5-agentic"]);
     expect(decisionCandidates(["moonshot/kimi-k2", "moonshot/kimi-k2-thinking"]))
       .toEqual(["moonshot/kimi-k2", "moonshot/kimi-k2-thinking"]);
+  });
+});
+
+// Measured on the expression-evaluator task: fixed haiku solved 1/3, fixed sonnet
+// 3/3. The routed arm abstained on 19 of 19 turns (strength 0.23–0.51) while
+// rating deliberation 0.50–0.71, so every turn fell through to the cheapest model
+// and it solved 0/3. Doubt on a step that needs thought must not mean "cheapest".
+describe("deferUpOnDoubt", () => {
+  const candidates = ["kr/claude-haiku-4.5", "kr/claude-sonnet-5", "kr/claude-opus-5"];
+
+  it("steps to the next tier up when the verdict abstains on a deliberate step", () => {
+    for (const reason of ["no_favourite", "awaiting_confirmation", "signals_disagree"]) {
+      expect(deferUpOnDoubt({ apply: false, reason, deliberation: 0.6 }, candidates)).toBe("kr/claude-sonnet-5");
+    }
+  });
+
+  it("leaves a mechanical step on the pool order", () => {
+    expect(deferUpOnDoubt({ apply: false, reason: "no_favourite", deliberation: 0.49 }, candidates)).toBeNull();
+    expect(deferUpOnDoubt({ apply: false, reason: "no_favourite", deliberation: null }, candidates)).toBeNull();
+  });
+
+  it("never acts on a verdict that was not usable at all", () => {
+    expect(deferUpOnDoubt({ apply: false, reason: "no_usable_pick", deliberation: 0.9 }, candidates)).toBeNull();
+    expect(deferUpOnDoubt({ apply: false, reason: "no_deliberation_signal" }, candidates)).toBeNull();
+  });
+
+  it("has nowhere to go with a single candidate", () => {
+    expect(deferUpOnDoubt({ apply: false, reason: "no_favourite", deliberation: 0.9 }, ["kr/claude-haiku-4.5"])).toBeNull();
   });
 });
 
@@ -783,6 +811,34 @@ describe("decideComboModel asks over the pool it validates against", () => {
       expect(out.models[0]).toBe("kr/claude-haiku-4.5");
       expect(out.decision).toMatchObject({ apply: true, deliberation: 0.12 });
       expect(out.models).toHaveLength(pool.length);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("puts the next tier first when the verdict abstains on a deliberate step", async () => {
+    const { decideComboModel } = await import("../../src/sse/services/decisionRouter.js");
+    // The shape measured on the expression task: a flat split, deliberation 0.6.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      model: "typesafe-ai/jev",
+      answers: {
+        model: { type: "choice", choice: "kr/claude-haiku-4.5", confidence: 0.45, probabilities: {
+          "kr/claude-haiku-4.5": 0.45, "kr/claude-sonnet-5": 0.4, "kr/claude-opus-5": 0.15,
+        } },
+        needs_reasoning: { type: "noul", noul: 0.6 },
+      },
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    const pool = ["kr/claude-haiku-4.5", "kr/claude-sonnet-5", "kr/claude-opus-5"];
+    try {
+      const out = await decideComboModel({
+        body: { messages: [{ role: "user", content: "implement an expression evaluator" }] },
+        models: pool, ranked: pool, comboName: "coding", config: normalizeDecisionConfig({ mode: "enforce" }),
+        target, log: {},
+      });
+      expect(out.decision).toMatchObject({ apply: false, reason: "no_favourite", deferredTo: "kr/claude-sonnet-5" });
+      expect(out.models).toEqual(["kr/claude-sonnet-5", "kr/claude-haiku-4.5", "kr/claude-opus-5"]);
     } finally {
       vi.unstubAllGlobals();
     }

@@ -172,6 +172,21 @@ function hasAnthropicThinking(body) {
   return typeof type === "string" && type !== "disabled";
 }
 
+/** Deliberation at or above this makes an abstention defer to the next tier up. */
+export const DEFER_DELIBERATION = 0.5;
+
+/**
+ * An abstention on a step that needs thought should not leave the pool's cheapest
+ * model serving it by default. The candidates are cheapest-first, so the one after
+ * the cheapest is the next tier up. Null when the verdict was not usable at all or
+ * the step reads as mechanical — then the pool order stands.
+ */
+export function deferUpOnDoubt(decision, candidates) {
+  if (!["no_favourite", "awaiting_confirmation", "signals_disagree"].includes(decision?.reason)) return null;
+  if (!(decision.deliberation >= DEFER_DELIBERATION)) return null;
+  return candidates[1] || null;
+}
+
 export function decisionCandidates(pool) {
   const byBase = new Map();
   for (const model of pool) {
@@ -238,6 +253,15 @@ export async function decideComboModel({ body, models, comboName, config, target
   await recordUsage({ response, log, target, verdict: verdictMeta(decision, { kind: "model", comboName }) });
 
   if (!decision.apply) {
+    const deferred = deferUpOnDoubt(decision, candidates);
+    if (deferred) {
+      log?.info?.("DECISION", `model: ${deferred} for "${comboName}" (deferred up: ${decision.reason}, deliberar ${fmt(decision.deliberation)}, ${response.latencyMs}ms)`);
+      return {
+        models: [deferred, ...pool.filter((m) => m !== deferred), ...(fallback || [])],
+        decision: { ...decision, deferredTo: deferred },
+        reason: "deferred_up",
+      };
+    }
     log?.info?.("DECISION", `model: no change (${decision.reason}, strength ${fmt(decision.strength)}, ${response.latencyMs}ms)`);
     return { models, decision, reason: decision.reason };
   }
