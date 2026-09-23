@@ -1,5 +1,6 @@
 import { getDb } from "../kysely.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { DECISION_PRESETS, decisionPreset } from "open-sse/decision/presets.js";
 
 const DEFAULT_MITM_ROUTER_BASE = "http://localhost:20128";
 const DEFAULT_HEADROOM_URL = process.env.HEADROOM_URL || "http://localhost:8787";
@@ -93,21 +94,9 @@ const DEFAULT_SETTINGS = {
     // `model` and nothing else.
     provider: "vercel-ai-gateway",
     model: "typesafe-ai/jev",
-    // Cap the reasoning budget per turn from the same verdict that picks the model:
-    // a mechanical turn gets a low ceiling, a hard one is left alone. Separate from
-    // `mode` because the two levers carry different evidence — model routing is
-    // proven across three pool orders, this one is measured at 20x on Bedrock with
-    // few samples.
-    effort: false,
-    toolMode: "hint",
-    // Winner strength for the model decision, confidence for the tool decision (see
-    // decide.js). jev scales its confidence by the option count, so the model gate
-    // cannot read it; a tool roster is a Choice too and this one is still measured
-    // there.
-    minStrength: 0.35,
-    switchStrength: 0.6,
-    minConfidence: 0.7,
-    switchConfidence: 0.85,
+    // Preset controls all three verdict axes: model, tool and effort.
+    preset: "balanced",
+    ...DECISION_PRESETS.balanced,
     // Matches STREAM_STATUS_GRACE_MS: within it the request is answered before the
     // SSE has to open, so a slow decision costs latency but not a broken stream.
     // The steady state is ~350ms; the tail is what this budget is for.
@@ -131,7 +120,8 @@ export function mergeWithDefaults(raw) {
   // "no connection yet" and linking to /dashboard/providers/undefined on a live
   // gateway. Filling the missing sub-keys here keeps every reader on the same shape.
   if (merged.decisionRouter && typeof merged.decisionRouter === "object" && !Array.isArray(merged.decisionRouter)) {
-    merged.decisionRouter = { ...DEFAULT_SETTINGS.decisionRouter, ...merged.decisionRouter };
+    const preset = decisionPreset(merged.decisionRouter.preset);
+    merged.decisionRouter = { ...DEFAULT_SETTINGS.decisionRouter, ...merged.decisionRouter, preset, ...DECISION_PRESETS[preset] };
   }
   for (const [key, defVal] of Object.entries(DEFAULT_SETTINGS)) {
     if (merged[key] === undefined) {

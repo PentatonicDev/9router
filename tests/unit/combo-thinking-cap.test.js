@@ -149,6 +149,48 @@ describe("clampToMax via applyThinking — openai target", () => {
   });
 });
 
+describe("translateRequest: maxThinkingLevel reaches Kiro's direct translator", () => {
+  it("caps Claude adaptive effort before Kiro builds its native request", () => {
+    const body = {
+      model: "kr/claude-sonnet-5",
+      messages: [{ role: "user", content: "hi" }],
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
+    };
+    const out = translateRequest(FORMATS.CLAUDE, FORMATS.KIRO, "claude-sonnet-5", body,
+      false, {}, "kiro", null, [], null, null, "low");
+    expect(out.additionalModelRequestFields?.output_config?.effort).toBe("low");
+  });
+
+  it("caps a thinking suffix without requiring explicit client effort", () => {
+    const body = { messages: [{ role: "user", content: "hi" }] };
+    const out = translateRequest(FORMATS.CLAUDE, FORMATS.KIRO, "claude-sonnet-5-thinking", body,
+      false, {}, "kiro", null, [], null, null, "low");
+    expect(out.additionalModelRequestFields?.output_config?.effort).toBe("low");
+  });
+
+  it("caps an explicit model(high) override after it replaces the body effort", () => {
+    const body = { messages: [{ role: "user", content: "hi" }], output_config: { effort: "low" } };
+    const out = translateRequest(FORMATS.CLAUDE, FORMATS.KIRO, "claude-sonnet-5(high)", body,
+      false, {}, "kiro", null, [], null, null, "low");
+    expect(out.additionalModelRequestFields?.output_config?.effort).toBe("low");
+  });
+
+  it("caps OpenAI-format Kiro requests through their translator too", () => {
+    const body = { messages: [{ role: "user", content: "hi" }], reasoning_effort: "high" };
+    const out = translateRequest(FORMATS.OPENAI, FORMATS.KIRO, "claude-sonnet-5", body,
+      false, {}, "kiro", null, [], null, null, "low");
+    expect(out.additionalModelRequestFields?.output_config?.effort).toBe("low");
+  });
+
+  it("does not enable thinking on a plain model without client intent", () => {
+    const body = { messages: [{ role: "user", content: "hi" }] };
+    const out = translateRequest(FORMATS.CLAUDE, FORMATS.KIRO, "claude-haiku-4.5", body,
+      false, {}, "kiro", null, [], null, null, "low");
+    expect(out.additionalModelRequestFields).toBeUndefined();
+  });
+});
+
 describe("translateRequest: maxThinkingLevel threads through to the Codex target", () => {
   it("Claude budget_tokens 32000 → Codex body.reasoning_effort capped to high (not xhigh)", () => {
     const body = {

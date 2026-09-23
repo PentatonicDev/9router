@@ -181,6 +181,9 @@ export const PROVIDER_PRICING = {
     "typesafe-ai/jev": { input: 0.042, output: 0, cached: 0.042, reasoning: 0 },
     "typesafe/jev-1.13": { input: 0.042, output: 0, cached: 0.042, reasoning: 0 },
   },
+  "vercel-ai-gateway": {
+    "typesafe-ai/jev": { input: 0.042, output: 0, cached: 0.042, reasoning: 0 },
+  },
   // GitHub Copilot (gh) — explicit override, matches canonical gpt-5.3-codex rate
   gh: {
     "gpt-5.3-codex": { input: 1.75, output: 14.00, cached: 0.175, reasoning: 14.00, cache_creation: 1.75 },

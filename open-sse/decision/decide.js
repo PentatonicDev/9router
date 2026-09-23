@@ -31,26 +31,6 @@ export const DEFAULT_MIN_STRENGTH = 0.35;
 export const DEFAULT_SWITCH_STRENGTH = 0.6;
 
 /**
- * Whether to change the model serving this session. One threshold cannot separate
- * what was measured: clear verdicts land at 0.96–1.00, vague tasks and bad criteria
- * at 0.43–0.57. In between, a second agreeing verdict is what justifies the cache
- * rewrite a switch costs.
- */
-export function decideSwitch({
-  confidence,
-  verdict,
-  previousVerdict = null,
-  minConfidence = DEFAULT_MIN_CONFIDENCE,
-  switchConfidence = DEFAULT_SWITCH_CONFIDENCE,
-} = {}) {
-  if (!verdict) return { change: false, reason: "no_verdict" };
-  if (!(confidence >= minConfidence)) return { change: false, reason: "low_confidence" };
-  if (confidence >= switchConfidence) return { change: true, reason: "clear" };
-  if (verdict === previousVerdict) return { change: true, reason: "confirmed" };
-  return { change: false, reason: "awaiting_confirmation" };
-}
-
-/**
  * The pool ordered cheapest first. Ties keep the pool's own order, so a caller that
  * already ranked its models keeps that rank. A model with no known price sorts last:
  * it cannot be shown to be the cheap choice.

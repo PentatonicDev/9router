@@ -19,6 +19,7 @@ import {
 } from "../../config/kiroConstants.js";
 import { parseDataUri } from "../concerns/image.js";
 import { DEFAULT_IMAGE_MIME } from "../schema/index.js";
+import { capKiroThinking } from "../concerns/thinkingUnified.js";
 import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
 import {
   canonicalizeKiroConversation,
@@ -314,7 +315,9 @@ export function openaiToKiroRequest(model, body, stream, credentials) {
 
   const modelIntent = resolveKiroModelIntent(model);
   const { upstream: upstreamModel, agentic } = modelIntent;
-  const thinkingBody = applyKiroThinkingOverride(body, modelIntent.thinkingOverride);
+  const thinkingBody = credentials?._maxThinkingLevel
+    ? capKiroThinking(applyKiroThinkingOverride(body, modelIntent.thinkingOverride), modelIntent.model, credentials._maxThinkingLevel)
+    : applyKiroThinkingOverride(body, modelIntent.thinkingOverride);
   const thinkingBudget = resolveKiroThinkingBudget(thinkingBody, credentials?.rawHeaders, modelIntent.model);
   const additionalModelRequestFields = buildKiroAdditionalModelRequestFieldsForModel(thinkingBody, upstreamModel);
   const usesNativeGptEffort = usesKiroNativeGptEffort(thinkingBody, upstreamModel);

@@ -195,7 +195,7 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
   const config = normalizeDecisionConfig(settings.decisionRouter);
   if (config.mode === "off") return unchanged;
 
-  const target = await resolveDecisionTarget(config, { apiKey, log });
+  const target = await resolveDecisionTarget(config, { apiKey, allowedConnectionIds, comboOwner, settings, log });
   if (!target) return unchanged;
 
   // A combo-of-combos lists tiers. Their names carry no price — PATTERN_PRICING
@@ -250,7 +250,7 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
  * same body reuses the decision while an appended tool result (a genuinely
  * different question) gets its own.
  */
-function createToolDecider({ settings, apiKey, log }) {
+function createToolDecider({ settings, apiKey, allowedConnectionIds, comboOwner, log }) {
   const config = normalizeDecisionConfig(settings.decisionRouter);
   if (config.mode === "off") return null;
   // toolMode "off" means tool routing is not wanted, so the call is not made at
@@ -272,7 +272,7 @@ function createToolDecider({ settings, apiKey, log }) {
     const memoKey = `${provider}/${model}|${signature}`;
     if (memo.has(memoKey)) return memo.get(memoKey);
 
-    credentialPromise ||= resolveDecisionTarget(config, { apiKey, log });
+    credentialPromise ||= resolveDecisionTarget(config, { apiKey, allowedConnectionIds, comboOwner, settings, log });
     const target = await credentialPromise;
     if (!target) {
       const skipped = { mode: "passthrough", reason: "no_credential" };
@@ -309,7 +309,10 @@ function decisionSignature(body, tools) {
  *  candidate in the fallback loop already shares. */
 function getToolDecider(routingContext, { settings, apiKey, log }) {
   if (routingContext.toolDecider === undefined) {
-    routingContext.toolDecider = createToolDecider({ settings, apiKey, log });
+    routingContext.toolDecider = createToolDecider({
+      settings, apiKey, allowedConnectionIds: routingContext.apiKeyContext?.allowedConnectionIds,
+      comboOwner: routingContext.comboOwner, log,
+    });
   }
   return routingContext.toolDecider;
 }
@@ -533,7 +536,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     // Use shared chatCore
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
-    const perTurnEffort = chatSettings.decisionRouter?.effort
+    const perTurnEffort = normalizeDecisionConfig(chatSettings.decisionRouter).effort
       ? effortCeilingForDeliberation(routingContext.deliberation)
       : null;
     const maxThinkingLevel = resolveMaxThinkingLevel(

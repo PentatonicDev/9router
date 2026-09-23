@@ -161,6 +161,17 @@ function clampToMax(cfg, maxLevel) {
   return { mode: "level", level: maxLevel };
 }
 
+export function capKiroThinking(body, model, maxLevel) {
+  const maxIdx = THINKING_ORDER.indexOf(maxLevel);
+  if (maxIdx < 0) return body;
+  const intent = extractThinking(body);
+  if (!intent && !/-thinking(?:-agentic)?$/.test(model)) return body;
+  if (intent?.mode === "none") return body;
+  const current = intent ? THINKING_ORDER.indexOf(toLevel(intent)) : Infinity;
+  if (current >= 0 && current <= maxIdx) return body;
+  return { ...body, output_config: { ...body.output_config, effort: maxLevel } };
+}
+
 function normalizeOpenAILevel(level, supportedLevels) {
   if (level !== "max" && level !== "ultra") return level;
   if (supportedLevels?.includes(level)) return level;

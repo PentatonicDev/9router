@@ -27,8 +27,12 @@ const arg = (name, fallback) => {
 };
 const BASE = (arg("url", process.env.NINEROUTER_URL || "http://127.0.0.1:20127")).replace(/\/+$/, "");
 const MODEL = arg("model", null);
+// The router answers 401 when requireApiKey is on, and the harness's own key is
+// what attributes every usage row to this run.
+const KEY = arg("key", process.env.NINEROUTER_KEY || "local-only");
 const REPEAT = Number(arg("repeat", "1"));
 const KEEP = process.argv.includes("--keep");
+const REPORT = arg("report", null);
 
 if (!MODEL) {
   console.error("--model is required (the combo name the harness should ask for)");
@@ -74,7 +78,7 @@ function materialize(task, dir) {
 function runHarness(dir, prompt) {
   // The child must not inherit this session's own Claude Code environment: a stale
   // CLAUDE_CODE_SESSION_ID or ANTHROPIC_BASE_URL makes it hang before its first call.
-  const env = { ...process.env, ANTHROPIC_BASE_URL: BASE, ANTHROPIC_AUTH_TOKEN: "local-only" };
+  const env = { ...process.env, ANTHROPIC_BASE_URL: BASE, ANTHROPIC_AUTH_TOKEN: KEY };
   for (const key of ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ATTENDED"]) delete env[key];
   // And it must not read or write the operator's own config. Without this the child
   // picks up whatever model overrides that config carries — measured, it resolved a
@@ -90,6 +94,10 @@ function runHarness(dir, prompt) {
 const pad = (v, n) => String(v ?? "").padEnd(n).slice(0, n);
 let passed = 0;
 let total = 0;
+// Each run's wall-clock window, so the analysis step can attribute the router's own
+// usage rows to the run that caused them. The client cannot see what the router
+// spent on its behalf, and a pass rate without its cost is half the measurement.
+const runs = [];
 
 console.log(`bench-harness → ${BASE} · harness asks for "${MODEL}" · ${REPEAT}x per task\n`);
 console.log(`${pad("task", 12)} ${pad("run", 4)} ${pad("check", 6)} ${pad("ms", 8)} note`);
@@ -104,17 +112,25 @@ for (const task of TASKS) {
       fs.rmSync(dir, { recursive: true, force: true });
       continue;
     }
+    const startedAt = new Date().toISOString();
     const { ms, out } = runHarness(dir, task.prompt);
+    const endedAt = new Date().toISOString();
     const after = spawnSync(task.check[0], task.check.slice(1), { cwd: dir, encoding: "utf8" });
     const ok = after.status === 0;
     total++;
     if (ok) passed++;
+    runs.push({ task: task.id, run: i, model: MODEL, ok, ms, startedAt, endedAt });
     console.log(`${pad(task.id, 12)} ${pad(i, 4)} ${pad(ok ? "PASS" : "FAIL", 6)} ${pad(ms, 8)} ${ok ? "" : (after.stdout || after.stderr || out).split("\n")[0]?.slice(0, 60) || ""}`);
     if (!KEEP) fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
 console.log(`\n${passed}/${total} passed across ${TASKS.length} tasks.`);
+if (REPORT) {
+  fs.writeFileSync(REPORT, JSON.stringify({ model: MODEL, base: BASE, passed, total, runs }, null, 2));
+  console.log(`report → ${REPORT}`);
+}
 console.log("Compare against the same run with the router setting changed — the harness is identical in both.");
-console.log("Run it once with decisionRouter.effort off and once with on, and diff the pass column first:");
-console.log("fewer tokens is only a win if the pass column holds.");
+console.log("A fixed model and an auto combo are two arms of the same experiment: only a combo whose");
+console.log("strategy is \"auto\" reaches the decision router, so both can run without touching settings.");
+console.log("Diff the pass column first: fewer tokens is only a win if the pass column holds.");

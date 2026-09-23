@@ -14,7 +14,8 @@ import { buildState, hasCacheBreakpoint } from "../../open-sse/decision/state.js
 import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist, shortlistTools, SHORTLIST_MAX } from "../../open-sse/decision/questions.js";
 import { injectHint, hintText } from "../../open-sse/decision/injectHint.js";
 import { extractTools, applyToolChoice, supportsToolChoice, UNSUPPORTED_EXECUTORS } from "../../open-sse/decision/tools.js";
-import { rankPool, priceOf } from "../../src/sse/services/decisionRouter.js";
+import { rankPool, priceOf, decisionCandidates, normalizeDecisionConfig } from "../../src/sse/services/decisionRouter.js";
+import { DECISION_PRESETS } from "../../open-sse/decision/presets.js";
 
 const choice = (pick, confidence, probabilities) => ({
   type: "choice",
@@ -44,10 +45,6 @@ describe("normalizeAnswers", () => {
   });
 });
 
-// The gate reads SEPARATION (top-1 minus top-2), never the confidence jev reports:
-// measured on one state, the same winner scored confidence 1.00 over 3 options,
-// 0.45 over 6 and 0.31 over 12. A threshold on that value silently tightened every
-// time the pool grew, which is how 97% of verdicts were discarded.
 // The model gate reads winner STRENGTH, never the confidence jev reports: that
 // value scales with the option count — measured on one state, the same winner
 // scored 1.00 over 3 options, 0.45 over 6 and 0.31 over 12 — so a threshold on it
@@ -100,6 +97,41 @@ describe("decideStrength", () => {
       .toMatchObject({ change: false, reason: "awaiting_confirmation" });
     expect(decideStrength({ strength: 0.45, verdict: "x", previousVerdict: "x" }))
       .toMatchObject({ change: true, reason: "confirmed" });
+  });
+});
+
+describe("decision presets", () => {
+  it("prices the Vercel-hosted jev instead of recording free decisions", () => {
+    expect(priceOf("vercel-ai-gateway/typesafe-ai/jev")).toBe(0.042);
+  });
+
+  it("keeps preset as the only source for all three routing axes", async () => {
+    const { mergeWithDefaults } = await import("../../src/lib/db/repos/settingsRepo.js");
+    for (const [preset, expected] of Object.entries(DECISION_PRESETS)) {
+      const raw = { decisionRouter: { preset, minStrength: 0.01, toolMode: "forced", effort: false } };
+      expect(mergeWithDefaults(raw).decisionRouter).toMatchObject({ preset, ...expected });
+      expect(normalizeDecisionConfig(raw.decisionRouter)).toMatchObject({ preset, ...expected });
+    }
+    expect(normalizeDecisionConfig({ preset: "unknown", timeoutMs: NaN })).toMatchObject({
+      preset: "balanced", ...DECISION_PRESETS.balanced, timeoutMs: 1500,
+    });
+  });
+});
+
+describe("decisionCandidates", () => {
+  it("offers one base per model family while preserving available variants as fallbacks", () => {
+    const pool = [
+      "kr/claude-haiku-4.5-thinking", "kr/claude-haiku-4.5", "kr/claude-haiku-4.5-agentic",
+      "kr/claude-sonnet-5-thinking", "kr/claude-sonnet-5", "kr/claude-opus-5",
+      "kr/claude-opus-5-thinking-agentic",
+    ];
+    expect(decisionCandidates(pool)).toEqual([
+      "kr/claude-haiku-4.5", "kr/claude-sonnet-5", "kr/claude-opus-5",
+    ]);
+    expect(decisionCandidates(["kr/claude-haiku-4.5-thinking", "kr/claude-opus-5-agentic"]))
+      .toEqual(["kr/claude-haiku-4.5-thinking", "kr/claude-opus-5-agentic"]);
+    expect(decisionCandidates(["moonshot/kimi-k2", "moonshot/kimi-k2-thinking"]))
+      .toEqual(["moonshot/kimi-k2", "moonshot/kimi-k2-thinking"]);
   });
 });
 
@@ -669,6 +701,44 @@ describe("decideComboModel asks over the pool it validates against", () => {
     expect(options.sort()).toEqual(["cc/claude-opus-5", "ocg/deepseek-flash"]);
     expect(options).not.toContain("tier-hard");
     vi.unstubAllGlobals();
+  });
+
+  it("asks only base candidates, not four nearly identical variants per tier", async () => {
+    const { decideComboModel } = await import("../../src/sse/services/decisionRouter.js");
+    let asked;
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      asked = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        model: "typesafe-ai/jev",
+        answers: {
+          model: { type: "choice", choice: "kr/claude-haiku-4.5", confidence: 0.91, probabilities: {
+            "kr/claude-haiku-4.5": 0.91, "kr/claude-sonnet-5": 0.08, "kr/claude-opus-5": 0.01,
+          } },
+          needs_reasoning: { type: "noul", noul: 0.12 },
+        },
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const pool = [
+      "kr/claude-haiku-4.5", "kr/claude-haiku-4.5-thinking", "kr/claude-sonnet-5",
+      "kr/claude-sonnet-5-agentic", "kr/claude-opus-5", "kr/claude-opus-5-thinking-agentic",
+    ];
+    try {
+      const out = await decideComboModel({
+        body: { messages: [{ role: "user", content: "rename usrNm" }] },
+        models: pool, ranked: pool, comboName: "coding", config: normalizeDecisionConfig({ mode: "enforce" }),
+        target, log: {},
+      });
+      expect(Object.keys(asked.questions.model.criteria)).toEqual([
+        "kr/claude-haiku-4.5", "kr/claude-sonnet-5", "kr/claude-opus-5",
+      ]);
+      expect(out.models[0]).toBe("kr/claude-haiku-4.5");
+      expect(out.decision).toMatchObject({ apply: true, deliberation: 0.12 });
+      expect(out.models).toHaveLength(pool.length);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps the verdict instead of discarding it as no_usable_pick", async () => {

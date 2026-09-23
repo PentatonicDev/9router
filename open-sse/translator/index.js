@@ -5,7 +5,7 @@ import { cloakClaudeTools, decloakStreamChunk } from "../utils/claudeCloaking.js
 import { restoreToolNames } from "../utils/opencodeFingerprint.js";
 import { filterToOpenAIFormat } from "./formats/openai.js";
 import { normalizeThinkingConfig } from "../services/provider.js";
-import { applyThinking, captureThinking } from "./concerns/thinkingUnified.js";
+import { applyThinking, capKiroThinking, captureThinking } from "./concerns/thinkingUnified.js";
 import { captureSessionId } from "../utils/sessionManager.js";
 import { AntigravityExecutor } from "../executors/antigravity.js";
 import { PROVIDERS } from "../providers/index.js";
@@ -71,6 +71,11 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
     fixMissingToolResponses(result);
   }
 
+  // Kiro translates thinking before generic normalization, so cap its source body.
+  if (targetFormat === FORMATS.KIRO && maxThinkingLevel) {
+    result = capKiroThinking(result, model, maxThinkingLevel);
+    if (credentials) credentials._maxThinkingLevel = maxThinkingLevel;
+  }
   // Capture thinking intent from the original (pre-translation) body, before any
   // format conversion strips/renames the fields. Applied after translation.
   const thinkingIntent = captureThinking(result);

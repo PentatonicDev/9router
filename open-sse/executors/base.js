@@ -147,13 +147,16 @@ export class BaseExecutor {
           body: bodyStr,
           signal: mergedSignal
         }, proxyOptions);
-        // Time to upstream response headers: separates gateway/network cost from
-        // model time. dbg() is a no-op in production, so this is carried out too.
-        const connectMs = Date.now() - fetchT0;
+        // Time to upstream response headers. This is NOT the handshake alone: a
+        // non-streaming upstream withholds headers until it has read the prompt,
+        // so a large request charges its prefill here. Measured against Kiro:
+        // 1.0s for a 0.4KB body, 2.25s for 225KB, ~33s for a 746k-token request.
+        // dbg() is a no-op in production, so this is carried out too.
+        const upstreamWaitMs = Date.now() - fetchT0;
         clearTimeout(connectTimer);
         const ct = response.headers?.get?.("content-type") || "";
         const cl = response.headers?.get?.("content-length") || "?";
-        dbg("FETCH", `${this.provider.toUpperCase()} ← ${response.status} | ttft=${connectMs}ms | ct=${ct} | cl=${cl}`);
+        dbg("FETCH", `${this.provider.toUpperCase()} ← ${response.status} | upstreamWait=${upstreamWaitMs}ms | ct=${ct} | cl=${cl}`);
 
         if (await tryRetry(urlIndex, response.status, `status ${response.status}`, response)) { urlIndex--; continue; }
 
@@ -163,7 +166,7 @@ export class BaseExecutor {
           continue;
         }
 
-        return { response, url, headers, transformedBody, phases: { connect_ms: connectMs } };
+        return { response, url, headers, transformedBody, phases: { connect_ms: upstreamWaitMs } };
       } catch (error) {
         clearTimeout(connectTimer);
         lastError = error;

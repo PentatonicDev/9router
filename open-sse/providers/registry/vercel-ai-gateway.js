@@ -46,6 +46,7 @@ export default {
     defaultModel: "typesafe-ai/jev",
     timeoutMs: 1500,
   },
+  models: [{ id: "typesafe-ai/jev", name: "Jev", kind: "systemone" }],
   modelsFetcher: { url: "https://ai-gateway.vercel.sh/v1/models", type: "openai" },
   passthroughModels: true,
   features: {

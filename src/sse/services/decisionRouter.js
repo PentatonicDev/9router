@@ -15,25 +15,26 @@ import { getPricingForModel } from "open-sse/providers/pricing.js";
 import { resolveCriteria } from "open-sse/decision/modelBriefs.js";
 import { rankByCost } from "open-sse/decision/decide.js";
 import { getModelInfo } from "./model.js";
+import { DECISION_PRESETS, decisionPreset } from "open-sse/decision/presets.js";
 
 export const DEFAULT_DECISION = {
   mode: "off",
   provider: "vercel-ai-gateway",
   model: "typesafe-ai/jev",
-  effort: false,
-  toolMode: "hint",
-  // Winner strength, not confidence (see decide.js): jev scales its confidence by
-  // the option count, so the same winner reads 1.00 in a pool of 3 and 0.31 in a
-  // pool of 12. Calibrated on 383 production verdicts over the 12-model pool.
-  minStrength: 0.35,
-  switchStrength: 0.6,
+  preset: "balanced",
+  ...DECISION_PRESETS.balanced,
   timeoutMs: 1500,
 };
 
 export function normalizeDecisionConfig(raw) {
   const config = { ...DEFAULT_DECISION, ...(raw || {}) };
-  if (!Number.isFinite(config.timeoutMs)) config.timeoutMs = DEFAULT_DECISION.timeoutMs;
-  return config;
+  const preset = decisionPreset(config.preset);
+  return {
+    ...config,
+    preset,
+    ...DECISION_PRESETS[preset],
+    timeoutMs: Number.isFinite(config.timeoutMs) && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_DECISION.timeoutMs,
+  };
 }
 
 /** The raw registry entry, which carries `transport` and `systemoneConfig`. */
@@ -58,7 +59,7 @@ export function decisionProviders() {
  * The lock key is namespaced per gateway: without its own scope the account
  * breaker would take the shared chat provider offline for chat too.
  */
-export async function resolveDecisionTarget(config, { apiKey = null, log } = {}) {
+export async function resolveDecisionTarget(config, { apiKey = null, allowedConnectionIds = null, comboOwner = null, settings, log } = {}) {
   const entry = registryEntry(config.provider);
   const url = decisionUrlFor(entry);
   if (!url) {
@@ -67,7 +68,9 @@ export async function resolveDecisionTarget(config, { apiKey = null, log } = {})
   }
   const lockKey = `decision:${entry.id}`;
   try {
-    const credentials = await getProviderCredentials(entry.id, new Set(), lockKey, { apiKey });
+    const credentials = await getProviderCredentials(entry.id, new Set(), lockKey, {
+      apiKey, allowedConnectionIds, keyOwner: comboOwner, settings,
+    });
     if (credentials?.noActiveCredentials) {
       log?.info?.("DECISION", `no active credentials for ${entry.id} - decisions disabled`);
       return null;
@@ -169,6 +172,17 @@ function hasAnthropicThinking(body) {
   return typeof type === "string" && type !== "disabled";
 }
 
+export function decisionCandidates(pool) {
+  const byBase = new Map();
+  for (const model of pool) {
+    const base = /^(?:kr|kiro)\//.test(model)
+      ? model.replace(/-(?:thinking-agentic|thinking|agentic)$/, "")
+      : model;
+    if (!byBase.has(base) || model === base) byBase.set(base, model);
+  }
+  return [...byBase.values()];
+}
+
 const ask = (target, config, state, questions, log) =>
   askJev({
     url: target.url,
@@ -200,7 +214,9 @@ export async function decideComboModel({ body, models, comboName, config, target
   const pool = ranked?.length ? ranked : rankByCost(models, costOf);
   if (pool.length < 2) return { models, decision: null };
 
-  const { questions } = buildModelQuestions(pool, criteriaResolver(config));
+  const candidates = decisionCandidates(pool);
+  if (candidates.length < 2) return { models, decision: null };
+  const { questions } = buildModelQuestions(candidates, criteriaResolver(config));
   const state = buildState(body, { maxStateChars: 24000 });
   const response = await ask(target, config, state, questions, log);
 
@@ -211,7 +227,7 @@ export async function decideComboModel({ body, models, comboName, config, target
 
   const decision = resolveModelDecision({
     answers: response.answers,
-    models: pool,
+    models: candidates,
     priceOf: costOf,
     hardTaskPriceOf: priceOf,
     minStrength: config.minStrength,
@@ -222,13 +238,13 @@ export async function decideComboModel({ body, models, comboName, config, target
   await recordUsage({ response, log, target, verdict: verdictMeta(decision, { kind: "model", comboName }) });
 
   if (!decision.apply) {
-    log?.info?.("DECISION", `model: no change (${decision.reason}, conf ${fmt(decision.confidence)}, ${response.latencyMs}ms)`);
+    log?.info?.("DECISION", `model: no change (${decision.reason}, strength ${fmt(decision.strength)}, ${response.latencyMs}ms)`);
     return { models, decision, reason: decision.reason };
   }
 
   log?.info?.(
     "DECISION",
-    `model: ${decision.model} for "${comboName}" (conf ${fmt(decision.confidence)}, deliberar ${fmt(decision.deliberation)}, ${response.latencyMs}ms)`
+    `model: ${decision.model} for "${comboName}" (strength ${fmt(decision.strength)}, deliberar ${fmt(decision.deliberation)}, ${response.latencyMs}ms)`
   );
   return { models: [decision.model, ...pool.filter((m) => m !== decision.model), ...(fallback || [])], decision };
 }
@@ -368,6 +384,7 @@ function verdictMeta(decision, extra = {}) {
     tool: decision.tool || null,
     mode: decision.mode || null,
     confidence: round(decision.confidence),
+    strength: round(decision.strength),
     deliberation: round(decision.deliberation),
   };
 }

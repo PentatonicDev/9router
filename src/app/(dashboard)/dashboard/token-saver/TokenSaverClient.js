@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Card, Button, Input, Modal, Toggle, ConfirmModal, Select, SegmentedControl } from "@/shared/components";
+import { Card, Button, Input, Modal, Toggle, ConfirmModal, Select, SegmentedControl, ModelSelectModal } from "@/shared/components";
 import { getProvidersByKind } from "@/shared/constants/providers";
+import { DECISION_PRESETS } from "open-sse/decision/presets.js";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { getCurrentLocale, onLocaleChange } from "@/i18n/runtime";
 import {
@@ -97,12 +98,11 @@ export default function TokenSaverClient() {
   const [pxpipeActionError, setPxpipeActionError] = useState("");
   const [locale, setLocale] = useState("en");
 
-  // Decision Router state
   const [drConfig, setDrConfig] = useState(null);
-  const [drExpanded, setDrExpanded] = useState(false);
   const [drConnections, setDrConnections] = useState([]);
   const [drComboStrategies, setDrComboStrategies] = useState({});
-  const [drProbe, setDrProbe] = useState(null);
+  const [drModelPickerOpen, setDrModelPickerOpen] = useState(false);
+  const drPatchQueue = useRef(Promise.resolve());
 
   const { copied, copy } = useCopyToClipboard();
 
@@ -496,7 +496,7 @@ export default function TokenSaverClient() {
           setPxpipeEnabled(!!data.pxpipeEnabled);
           if (typeof data.pxpipeMinChars === "number") setPxpipeMinChars(data.pxpipeMinChars);
           if (data.decisionRouter) {
-            setDrConfig(data.decisionRouter);
+            setDrConfig({ ...data.decisionRouter, preset: data.decisionRouter.preset || "balanced" });
             setDrComboStrategies(data.comboStrategies || {});
           }
           refreshHeadroomStatus();
@@ -554,16 +554,11 @@ export default function TokenSaverClient() {
     { value: "shadow", label: "Shadow" },
     { value: "enforce", label: "Enforce" },
   ];
-  const DR_PRESETS = [
-    { value: "cautious", label: "Cautious", minConfidence: 0.8, switchConfidence: 0.9 },
-    { value: "balanced", label: "Balanced", minConfidence: 0.7, switchConfidence: 0.85 },
-    { value: "eager", label: "Eager", minConfidence: 0.6, switchConfidence: 0.75 },
-  ];
-  const DR_TOOL_MODES = [
-    { value: "off", label: "Off — models only" },
-    { value: "hint", label: "Hint — suggest, never pin" },
-    { value: "forced", label: "Forced — allow pinning" },
-  ];
+  const DR_PRESETS = Object.entries(DECISION_PRESETS).map(([value, settings]) => ({
+    value,
+    label: value[0].toUpperCase() + value.slice(1),
+    ...settings,
+  }));
 
   const drGateways = getProvidersByKind("systemone");
   const drGateway = drConfig && drGateways.find((g) => g.id === drConfig.provider || g.alias === drConfig.provider);
@@ -577,49 +572,34 @@ export default function TokenSaverClient() {
   const drAutoCombos = Object.entries(drComboStrategies)
     .filter(([, v]) => v?.fallbackStrategy === "auto")
     .map(([name]) => name);
-  const drActivePreset = drConfig && DR_PRESETS.find(
-    (p) => p.minConfidence === drConfig.minConfidence && p.switchConfidence === drConfig.switchConfidence,
-  )?.value || "custom";
+  const drActivePreset = DR_PRESETS.find((p) => p.value === drConfig?.preset)?.value || "balanced";
+  const drActivePresetSettings = DECISION_PRESETS[drActivePreset];
 
   const drPatch = (next) => {
     setDrConfig(next);
-    fetch("/api/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decisionRouter: next }),
-    }).catch(() => {});
+    drPatchQueue.current = drPatchQueue.current
+      .catch(() => {})
+      .then(() => fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decisionRouter: next }),
+      }));
   };
   const drSet = (key, value) => drConfig && drPatch({ ...drConfig, [key]: value });
   const drSetPreset = (value) => {
-    const p = DR_PRESETS.find((x) => x.value === value);
-    if (p && drConfig) drPatch({ ...drConfig, minConfidence: p.minConfidence, switchConfidence: p.switchConfidence });
+    const preset = DECISION_PRESETS[value];
+    if (preset && drConfig) drPatch({ ...drConfig, ...preset, preset: value });
   };
-  const drSetGateway = (id) => {
+  const drSelectModel = (model) => {
     if (!drConfig) return;
-    const next = drGateways.find((g) => g.id === id);
-    const untouched = !drGateway?.systemoneConfig?.defaultModel
-      || drConfig.model === drGateway.systemoneConfig.defaultModel;
-    drPatch({
-      ...drConfig,
-      provider: id,
-      model: untouched ? (next?.systemoneConfig?.defaultModel || drConfig.model) : drConfig.model,
-    });
-  };
-  const drHandleTest = async () => {
-    setDrProbe({ ok: null, message: "Testing…" });
-    try {
-      const res = await fetch("/api/providers/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: drGatewayId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      setDrProbe(res.ok && data?.valid
-        ? { ok: true, message: "Decision endpoint answered." }
-        : { ok: false, message: data?.error || "Validation failed" });
-    } catch (e) {
-      setDrProbe({ ok: false, message: e.message });
-    }
+    const gateway = drGateways
+      .filter((item) => model.value.startsWith(`${item.alias}/`) || model.value.startsWith(`${item.id}/`))
+      .sort((a, b) => Math.max(b.alias?.length || 0, b.id.length) - Math.max(a.alias?.length || 0, a.id.length))[0];
+    const provider = gateway?.id || drGatewayId;
+    const prefix = model.value.startsWith(`${gateway?.alias}/`) ? gateway.alias : provider;
+    const modelId = model.value.startsWith(`${prefix}/`) ? model.value.slice(prefix.length + 1) : model.id;
+    drPatch({ ...drConfig, provider, model: modelId });
+    setDrModelPickerOpen(false);
   };
 
   return (
@@ -983,6 +963,17 @@ export default function TokenSaverClient() {
           />
         </div>
 
+        <div className="flex items-center justify-between pt-4 border-t border-border gap-4">
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">Decision model</p>
+            <p className="text-sm text-text-muted">
+              {drConfig.model || drGateway?.systemoneConfig?.defaultModel || "No model selected"}
+              {drConnBroken ? " · connection unavailable" : !drConn ? " · no connection" : ""}
+            </p>
+          </div>
+          <Button size="sm" variant="secondary" onClick={() => setDrModelPickerOpen(true)}>Select model</Button>
+        </div>
+
         {drConfig.mode !== "off" && (
           <>
             {drAutoCombos.length > 0 && (
@@ -1006,132 +997,40 @@ export default function TokenSaverClient() {
               </p>
             )}
 
+
             <div className="flex items-center justify-between pt-4 border-t border-border gap-4">
               <div className="min-w-0 flex-1">
                 <p className="font-medium">How decisive</p>
                 <p className="text-sm text-text-muted">
-                  {drActivePreset === "custom"
-                    ? "Custom thresholds — adjust below."
-                    : DR_PRESETS.find((p) => p.value === drActivePreset)?.label + " — " +
-                      (drActivePreset === "cautious" ? "acts only on near-certain verdicts."
-                        : drActivePreset === "eager" ? "also acts on weaker verdicts."
-                        : "acts on clear verdicts.")}
+                  {drActivePreset === "cautious" ? "Acts only on near-certain verdicts."
+                    : drActivePreset === "eager" ? "Also acts on weaker verdicts."
+                    : "Acts on clear verdicts."}
+                  {drActivePresetSettings?.toolMode === "off" ? " Tools off." : drActivePresetSettings?.toolMode === "forced" ? " Tool pinning allowed." : " Tool suggestions enabled."}
+                  {drActivePresetSettings?.effort ? " Reasoning cap enabled." : " Reasoning unchanged."}
                 </p>
               </div>
               <SegmentedControl
                 options={DR_PRESETS.map((p) => ({ value: p.value, label: p.label }))}
-                value={drActivePreset === "custom" ? null : drActivePreset}
+                value={drActivePreset}
                 onChange={drSetPreset}
                 size="sm"
               />
             </div>
 
-            <div className="pt-4 border-t border-border">
-              <button
-                type="button"
-                onClick={() => setDrExpanded(!drExpanded)}
-                className="inline-flex w-fit items-center gap-1 text-xs text-text-muted hover:text-primary"
-              >
-                <span className="material-symbols-outlined text-[16px]">
-                  {drExpanded ? "expand_less" : "expand_more"}
-                </span>
-                Advanced
-              </button>
-
-              {drExpanded && (
-                <div className="flex flex-col gap-4 mt-3 rounded-lg border border-black/5 p-3 dark:border-white/5">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <Select
-                      label="Gateway"
-                      options={drConnectedGateways.length > 0
-                        ? drConnectedGateways.map((g) => ({ value: g.id, label: g.name }))
-                        : drGateways.map((g) => ({ value: g.id, label: g.name }))}
-                      value={drGatewayId}
-                      onChange={(e) => drSetGateway(e.target.value)}
-                      hint={drConnectedGateways.length > 0
-                        ? "Only gateways with an active connection."
-                        : "No connections — add one in Tools & Providers."}
-                    />
-                    <Input
-                      label="Model"
-                      value={drConfig.model ?? ""}
-                      onChange={(e) => drSet("model", e.target.value)}
-                      placeholder={drGateway?.systemoneConfig?.defaultModel || ""}
-                      hint="The decision model. Swap it by editing this field."
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <Select
-                      label="Tool routing"
-                      options={DR_TOOL_MODES.map((m) => ({ value: m.value, label: m.label }))}
-                      value={drConfig.toolMode}
-                      onChange={(e) => drSet("toolMode", e.target.value)}
-                      hint="How far a tool verdict may go."
-                    />
-                    <div className="flex flex-col gap-3">
-                      <Input
-                        label="Min confidence"
-                        type="number"
-                        step="0.05"
-                        min="0"
-                        max="1"
-                        value={drConfig.minConfidence}
-                        onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) drSet("minConfidence", n); }}
-                        hint="Below this the verdict is discarded."
-                      />
-                      <Input
-                        label="Switch confidence"
-                        type="number"
-                        step="0.05"
-                        min="0"
-                        max="1"
-                        value={drConfig.switchConfidence}
-                        onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) drSet("switchConfidence", n); }}
-                        hint="At or above this it switches; below, needs two agreeing verdicts."
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium">Cap reasoning on mechanical turns</p>
-                      <p className="text-xs text-text-muted">
-                        The verdict that picks the model also caps the reasoning budget.
-                      </p>
-                    </div>
-                    <Toggle size="sm" checked={drConfig.effort === true} onChange={() => drSet("effort", drConfig.effort !== true)} />
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <span className="rounded bg-black/5 px-1.5 py-0.5 dark:bg-white/5">{drGateway?.name || drGatewayId}</span>
-                    {drConn ? (
-                      <span className={drConnBroken ? "text-amber-600 dark:text-amber-500" : "text-text-muted"}>
-                        {drConn.name || "connection"}
-                        {drConnBroken ? " (marked unavailable)" : ""}
-                      </span>
-                    ) : (
-                      <span className="text-amber-600 dark:text-amber-500">
-                        no connection — add one in Tools &amp; Providers
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <Button size="sm" variant="secondary" onClick={drHandleTest}>Test</Button>
-                    {drProbe && (
-                      <span className={`text-xs ${drProbe.ok === false ? "text-error" : drProbe.ok ? "text-success" : "text-text-muted"}`}>
-                        {drProbe.message}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
           </>
         )}
       </Card>
       )}
+      {drConfig && <ModelSelectModal
+        isOpen={drModelPickerOpen}
+        onClose={() => setDrModelPickerOpen(false)}
+        onSelect={drSelectModel}
+        selectedModel={drConfig?.model ? `${drGateway?.alias || drGatewayId}/${drConfig.model}` : ""}
+        activeProviders={drConnections.filter((c) => drConnectedGateways.some((g) => g.id === c.provider))}
+        title="Select decision model"
+        kindFilter="systemone"
+        singleSelect
+      />}
 
       <Modal
         isOpen={showHeadroomInstallModal}

@@ -8,17 +8,23 @@ import Pagination from "@/shared/components/Pagination";
 import { cn } from "@/shared/utils/cn";
 import { AI_PROVIDERS, getProviderByAlias } from "@/shared/constants/providers";
 
-// Stages recorded per request, all as per-stage deltas. connect_ms is the upstream
-// handshake; the gap between it and client_complete_ms is model generation plus the
-// streaming relay, derived here rather than stored so the segments always sum to the
-// measured total. A key absent from `phases` means the stage did not run.
+// Stages recorded per request, all as per-stage deltas. The gap between the last
+// stage and client_complete_ms is model generation plus the streaming relay,
+// derived here rather than stored so the segments always sum to the measured
+// total. A key absent from `phases` means the stage did not run.
+//
+// connect_ms is time-to-response-headers (executors/base.js), which on a
+// non-streaming upstream includes the model reading the prompt — measured against
+// Kiro: 0.4KB body answers headers in 1.0s, 225KB in 2.25s, and a 746k-token
+// request sat at 33s with the socket long since open. "Upstream wait" is what the
+// number measures; calling it a handshake sends the reader after the network.
 const PHASE_LADDER = [
   ["parse_ms", "Parse", "bg-slate-400"],
   ["auth_ms", "Auth", "bg-sky-500"],
   ["routing_ms", "Routing", "bg-indigo-500"],
   ["translate_ms", "Translate", "bg-violet-500"],
   ["preprocess_ms", "Preprocess", "bg-purple-500"],
-  ["connect_ms", "Connect", "bg-amber-500"],
+  ["connect_ms", "Upstream wait", "bg-amber-500"],
   ["peek_ms", "Peek", "bg-orange-500"],
 ];
 

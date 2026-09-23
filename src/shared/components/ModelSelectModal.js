@@ -81,6 +81,7 @@ export default function ModelSelectModal({
   capFilter = null,
   addedModelValues = [],
   closeOnSelect = true,
+  singleSelect = false,
 }) {
   // Filter activeProviders by serviceKinds when kindFilter set (e.g. "webSearch", "webFetch")
   const filteredActiveProviders = useMemo(() => {
@@ -88,7 +89,9 @@ export default function ModelSelectModal({
     return activeProviders.filter((p) => {
       const info = AI_PROVIDERS[p.provider];
       const kinds = info?.serviceKinds || ["llm"];
-      return kinds.includes(kindFilter);
+      return kindFilter === "systemone"
+        ? kinds.includes(kindFilter) && (AI_PROVIDERS[p.provider]?.systemoneConfig?.defaultModel || AI_PROVIDERS[p.provider]?.serviceKinds?.includes("systemone"))
+        : kinds.includes(kindFilter);
     });
   }, [activeProviders, kindFilter]);
   const { getCaps } = useModelCaps();
@@ -207,17 +210,18 @@ export default function ModelSelectModal({
       // user-added models may have typed capabilities (for example imageToText)
       // while still being valid chat/combo targets.
       if (!kindFilter) return models.filter((m) => m.isPlaceholder || m.isCustom || !getModelKind(m) || getModelKind(m) === "llm");
-      if (!TYPED_KINDS.has(kindFilter)) return models;
-      return models.filter((m) => m.isPlaceholder || getModelKind(m) === kindFilter);
+      return models.filter((m) => !m.isPlaceholder && getModelKind(m) === kindFilter);
     };
 
     // Get all active provider IDs from connections (filtered by kindFilter if set)
     const activeConnectionIds = filteredActiveProviders.map(p => p.provider);
 
     // No-auth providers: filter by kindFilter as well
-    const noAuthIds = kindFilter
-      ? NO_AUTH_PROVIDER_IDS.filter((id) => (AI_PROVIDERS[id]?.serviceKinds || ["llm"]).includes(kindFilter))
-      : NO_AUTH_PROVIDER_IDS;
+    const noAuthIds = kindFilter === "systemone"
+      ? []
+      : kindFilter
+        ? NO_AUTH_PROVIDER_IDS.filter((id) => (AI_PROVIDERS[id]?.serviceKinds || ["llm"]).includes(kindFilter))
+        : NO_AUTH_PROVIDER_IDS;
 
     // Only show connected providers (including both standard and custom)
     const providerIdsToShow = new Set([
@@ -249,7 +253,7 @@ export default function ModelSelectModal({
       }
 
       if (providerInfo.passthroughModels) {
-        const aliasModels = Object.entries(modelAliases)
+        const aliasModels = kindFilter === "systemone" ? [] : Object.entries(modelAliases)
           .filter(([, fullModel]) => fullModel.startsWith(`${alias}/`))
           .map(([aliasName, fullModel]) => ({
             id: fullModel.replace(`${alias}/`, ""),
@@ -257,7 +261,7 @@ export default function ModelSelectModal({
             value: fullModel,
           }));
         const customRegisteredModels = customModels
-          .filter((m) => m.providerAlias === alias)
+          .filter((m) => kindFilter !== "systemone" && m.providerAlias === alias)
           .map((m) => ({
             id: m.id,
             name: m.name || m.id,
@@ -266,9 +270,13 @@ export default function ModelSelectModal({
             isCustom: true,
           }));
 
-        // For typed kinds, only include hardcoded typed models (aliases are typically LLM-only and lack type info)
+        // System One requires explicit model kind metadata; aliases are not evidence.
         let combined = aliasModels;
-        if (kindFilter && TYPED_KINDS.has(kindFilter)) {
+        if (kindFilter === "systemone") {
+          combined = getModelsByProviderId(providerId)
+            .filter((m) => getModelKind(m) === kindFilter)
+            .map((m) => ({ id: m.id, name: m.name, value: `${alias}/${m.id}`, kind: kindFilter }));
+        } else if (kindFilter && TYPED_KINDS.has(kindFilter)) {
           const registeredTyped = customRegisteredModels.filter((m) => getModelKind(m) === kindFilter);
           combined = [
             ...registeredTyped,
@@ -278,7 +286,7 @@ export default function ModelSelectModal({
             .filter((m) => !registeredTyped.some((registered) => registered.value === m.value)),
           ];
           // Fallback: provider-as-model when no hardcoded models match (tts/image/webFetch only)
-          if (combined.length === 0 && ALLOW_PROVIDER_FALLBACK_KINDS.has(kindFilter)) {
+          if (kindFilter !== "systemone" && combined.length === 0 && ALLOW_PROVIDER_FALLBACK_KINDS.has(kindFilter)) {
             const supports = (providerInfo.serviceKinds || ["llm"]).includes(kindFilter);
             if (supports) combined = [{ id: providerId, name: providerInfo.name, value: alias }];
           }
@@ -306,6 +314,8 @@ export default function ModelSelectModal({
           };
         }
       } else if (isCustomProvider) {
+        // Compatible providers expose no authoritative System One model catalog.
+        if (kindFilter === "systemone") return;
         // Custom (openai/anthropic-compatible) providers are LLM-only — skip for typed media kinds
         if (kindFilter && TYPED_KINDS.has(kindFilter)) return;
         // Find connection object to get prefix synchronously without waiting for providerNodes fetch
@@ -356,15 +366,17 @@ export default function ModelSelectModal({
         };
       } else {
         const liveModels = liveModelsByProvider[providerId] || [];
-        const hardcodedModels = liveModels.length > 0
-          ? liveModels
-          : getModelsByProviderId(providerId);
+        const hardcodedModels = kindFilter === "systemone"
+          ? getModelsByProviderId(providerId)
+          : liveModels.length > 0
+            ? liveModels
+            : getModelsByProviderId(providerId);
         const hardcodedIds = new Set(hardcodedModels.map((m) => m.id));
 
         // Custom models: if no hardcoded models (e.g. openrouter), show all aliases for this provider
         // Otherwise only show aliases where aliasName === modelId ("Add Model" button pattern)
         const hasHardcoded = hardcodedModels.length > 0;
-        const customAliasModels = Object.entries(modelAliases)
+        const customAliasModels = kindFilter === "systemone" ? [] : Object.entries(modelAliases)
           .filter(([aliasName, fullModel]) =>
             fullModel.startsWith(`${alias}/`) &&
             (hasHardcoded ? aliasName === fullModel.replace(`${alias}/`, "") : true) &&
@@ -378,7 +390,7 @@ export default function ModelSelectModal({
         // Custom models registered via /api/models/custom (provider "Add Model" button)
         const customAliasIds = new Set(customAliasModels.map((m) => m.id));
         const customRegisteredModels = customModels
-          .filter((m) => m.providerAlias === alias && !hardcodedIds.has(m.id) && !customAliasIds.has(m.id))
+          .filter((m) => kindFilter !== "systemone" && m.providerAlias === alias && !hardcodedIds.has(m.id) && !customAliasIds.has(m.id))
           .map((m) => ({ id: m.id, name: m.name || m.id, value: `${alias}/${m.id}`, isCustom: true }));
 
         const merged = [
@@ -396,7 +408,7 @@ export default function ModelSelectModal({
 
         // Provider-as-model fallback: providers that support the kind but have no hardcoded models
         // can still be picked (value = providerAlias). Skips embedding (always needs model).
-        if (allModels.length === 0 && kindFilter && ALLOW_PROVIDER_FALLBACK_KINDS.has(kindFilter)) {
+        if (allModels.length === 0 && kindFilter && kindFilter !== "systemone" && ALLOW_PROVIDER_FALLBACK_KINDS.has(kindFilter)) {
           const supports = (providerInfo.serviceKinds || ["llm"]).includes(kindFilter);
           if (supports) {
             allModels = [{ id: providerId, name: providerInfo.name, value: alias }];
@@ -451,6 +463,7 @@ export default function ModelSelectModal({
     const filtered = {};
     Object.entries(groupedModels).forEach(([providerId, group]) => {
       let models = group.models;
+      if (singleSelect && kindFilter) models = models.filter((model) => !model.isPlaceholder && getModelKind(model) === kindFilter);
       // Filter by input-modality capability (vision/pdf/audioInput/videoInput).
       if (capFilter) {
         models = models.filter((m) => getCaps(m.value)?.[capFilter] === true);
@@ -465,6 +478,7 @@ export default function ModelSelectModal({
         );
         if (models.length === 0 && !providerNameMatches) return;
       }
+      if (models.length === 0 && kindFilter === "systemone") return;
       filtered[providerId] = {
         ...group,
         models: sortModels(models),
@@ -472,9 +486,11 @@ export default function ModelSelectModal({
     });
 
     return filtered;
-  }, [groupedModels, searchQuery, addedModelValues]);
+  }, [groupedModels, searchQuery, addedModelValues, capFilter, singleSelect, kindFilter]);
 
   const handleSelect = (model) => {
+    if (singleSelect && model?.isPlaceholder) return;
+    if (singleSelect && kindFilter && getModelKind(model) !== kindFilter) return;
     const value = model?.value || model?.name || model;
     const isAdded = addedModelValues.includes(value);
 
@@ -484,7 +500,7 @@ export default function ModelSelectModal({
       onSelect(model);
     }
 
-    if (closeOnSelect) {
+    if (closeOnSelect || singleSelect) {
       onClose();
       setSearchQuery("");
     }
@@ -505,7 +521,7 @@ export default function ModelSelectModal({
       {/* Info bar */}
       <div className="flex items-center gap-2 mb-3 px-2.5 py-2 bg-primary/8 border border-primary/20 rounded-lg text-xs text-text-muted">
         <span className="material-symbols-outlined text-primary shrink-0" style={{ fontSize: "14px" }}>info</span>
-        <span>Click to add, click again to remove. Changes are saved automatically.</span>
+        <span>{singleSelect ? "Choose one model. Selection saves automatically." : "Click to add, click again to remove. Changes are saved automatically."}</span>
       </div>
 
       {/* Search - compact */}
@@ -661,4 +677,5 @@ ModelSelectModal.propTypes = {
   kindFilter: PropTypes.string,
   addedModelValues: PropTypes.arrayOf(PropTypes.string),
   closeOnSelect: PropTypes.bool,
+  singleSelect: PropTypes.bool,
 };

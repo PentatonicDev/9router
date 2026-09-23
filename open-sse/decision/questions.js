@@ -96,14 +96,6 @@ export function readShortlist(answers, shards) {
 }
 
 /**
- * The reasoning depth the next step needs, as ordered levels. The tier each level
- * maps to is decided in code, not by the model: a rate table is arithmetic, and
- * arithmetic is a documented jaggedness weakness of the decision model. Asking a
- * Choice over models with prices in the criteria measured 0.62 against the same
- * state that scores 0.82 here — the model judged the task fine and the price
- * comparison is what it could not do.
- */
-/**
  * Which model should serve this step, and how much deliberation it needs.
  *
  * `criteriaFor` must return what the model is FOR: capability flags alone decided
