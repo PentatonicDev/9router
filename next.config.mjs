@@ -64,9 +64,8 @@ const nextConfig = {
   async redirects() {
     return [
       {
-        // The Media Providers section became Tools Providers when a decision
-        // model joined the list. Old links, bookmarks and anything a user pasted
-        // into a client keep working.
+        // Media Providers was renamed Tools Providers; old links and bookmarks
+        // keep working.
         source: "/dashboard/media-providers/:path*",
         destination: "/dashboard/tools-providers/:path*",
         permanent: true

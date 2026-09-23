@@ -9,14 +9,12 @@ import { createRequestLogger } from "../utils/requestLogger.js";
 import { getModelTargetFormat, getModelSupportedFormats, getModelStrip, getModelUpstreamId, getModelType, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.js";
 import { PROVIDERS } from "../config/providers.js";
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
-import { HTTP_STATUS, TOKEN_SAVER_HEADER, DECISION_HEADER } from "../config/runtimeConfig.js";
-import { injectHint } from "../decision/injectHint.js";
-import { applyToolChoice } from "../decision/tools.js";
+import { HTTP_STATUS, TOKEN_SAVER_HEADER } from "../config/runtimeConfig.js";
 import { handleBypassRequest } from "../utils/bypassHandler.js";
 import { trackPendingRequest, appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { getExecutor } from "../executors/index.js";
 import { supportsGrokCliReasoningEffort } from "../config/grokCli.js";
-import { buildRequestDetail, buildDecisionDetail, extractRequestConfig } from "./chatCore/requestDetail.js";
+import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDetail.js";
 import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
@@ -61,7 +59,7 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, errorContext = {}, onCredentialsRefreshed, onRequestSuccess, onDisconnect, signal, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, entryPhases, comboName, maxThinkingLevel = null, decideTool = null, decision = null }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, errorContext = {}, onCredentialsRefreshed, onRequestSuccess, onDisconnect, signal, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, entryPhases, comboName, maxThinkingLevel = null }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   // Phases measured before this point (handler entry, auth, routing) plus the ones
@@ -325,37 +323,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     try { onPxpipeEvent?.({ provider, model, ...pxpipeSummary }); } catch { /* stats must not break requests */ }
   }
 
-  // System One tool routing. Last of the body mutators on purpose: pxpipe reassigns
-  // `translatedBody` outright, and anchorClaudeCache below must pin the final body.
-  // Delegated, because open-sse cannot reach settings or provider connections.
-  // The model verdict arrived with the options; the tool verdict is produced here, so
-  // this is the only place both exist — which is why the request detail is assembled
-  // from here rather than from the caller.
-  let toolDecision = null;
-  if (typeof decideTool === "function"
-      && clientRawRequest?.headers?.[DECISION_HEADER]?.toLowerCase() !== "off") {
-    try {
-      const result = await decideTool({
-        body: translatedBody,
-        format: finalFormat,
-        provider,
-        model: upstreamModel,
-      });
-      toolDecision = result || null;
-      if (result?.mode && result.mode !== "passthrough") {
-        const applied = result.mode === "hint"
-          ? injectHint(translatedBody, finalFormat, result.tool)
-          : applyToolChoice(translatedBody, finalFormat, result);
-        xf.push(`DECISION:${result.mode}:${result.tool || "-"}:${applied ? "applied" : "noop"}`);
-      } else if (result) {
-        xf.push(`DECISION:skip:${result.reason || "-"}`);
-      }
-    } catch (error) {
-      // Fails open: a decision provider must never break the request it advises.
-      log?.warn?.("DECISION", `tool decision failed: ${error.message}`);
-    }
-  }
-
   phases.preprocess_ms = Date.now() - preprocessT0;
 
   if (xf.length && log?.line) log.line(reqTag, "⚙", xf.join(" · "));
@@ -458,7 +425,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
       providerRequest: translatedBody || null,
       response: { error: error.message || String(error), status: error.name === "AbortError" ? 499 : 502, thinking: null },
       pxpipe: pxpipeSummary,
-      decision: buildDecisionDetail(decision, toolDecision),
       status: "error"
     })).catch(() => { });
 
@@ -534,7 +500,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
       providerRequest: finalBody || translatedBody || null,
       response: { error: message, status: statusCode, thinking: null },
       pxpipe: pxpipeSummary,
-      decision: buildDecisionDetail(decision, toolDecision),
       status: "error"
     })).catch(() => { });
 
@@ -548,7 +513,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
   }
 
   // Usage and details record the id the executor actually invoked when it says so (Bedrock prefixes).
-  const sharedCtx = { provider, model: upstreamModelId || model, body, stream, errorContext, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log, phases, comboName , decision: buildDecisionDetail(decision, toolDecision) };
+  const sharedCtx = { provider, model: upstreamModelId || model, body, stream, errorContext, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log, phases, comboName };
   const appendLog = (extra) => appendRequestLog({ model, provider, connectionId, ...extra }).catch(() => { });
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);
 

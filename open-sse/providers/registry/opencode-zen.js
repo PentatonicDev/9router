@@ -121,10 +121,6 @@ export default {
   serviceKinds: ["llm", "systemone"],
   systemoneConfig: {
     baseUrl: "https://opencode.ai/zen/v1/systemone",
-    // Declared so the decision router can target this lane: `defaultModel` is what
-    // the router sends as `model`, and what marks a model as an evaluation model.
-    defaultModel: "jev-1.13-free",
-    modelType: "evaluation",
     headers: {
       "x-opencode-client": "desktop",
       "User-Agent": "opencode/1.18.31",

@@ -213,7 +213,7 @@ function toOpenAICompletion(responseBody, targetFormat) {
 /**
  * Handle non-streaming response from provider.
  */
-export async function handleNonStreamingResponse({ providerResponse, provider, errorContext, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log, decision, phases: entryPhases }) {
+export async function handleNonStreamingResponse({ providerResponse, provider, errorContext, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log, phases: entryPhases }) {
   trackDone();
   const contentType = providerResponse.headers.get("content-type") || "";
   let responseBody;
@@ -332,7 +332,6 @@ export async function handleNonStreamingResponse({ providerResponse, provider, e
       finish_reason: translatedResponse?.choices?.[0]?.finish_reason || "unknown"
     },
     pxpipe,
-    decision,
     status: "success"
   }, { endpoint: clientRawRequest?.endpoint || null })).catch(err => {
     console.error("[RequestDetail] Failed to save:", err.message);

@@ -64,37 +64,6 @@ export function extractUsageFromResponse(responseBody) {
   return null;
 }
 
-/**
- * Merge the two verdicts a request can carry into the detail block. The model verdict
- * comes from the caller (it was decided before the account loop), the tool verdict from
- * the core itself. Either can be absent, and a request with neither gets no block at all
- * rather than an empty one.
- */
-export function buildDecisionDetail(modelDecision, toolDecision) {
-  const parts = {};
-  if (modelDecision) {
-    parts.model = {
-      chosen: modelDecision.model || null,
-      applied: modelDecision.apply === true,
-      reason: modelDecision.reason || null,
-      confidence: num(modelDecision.confidence),
-      deliberation: num(modelDecision.deliberation),
-    };
-  }
-  if (toolDecision) {
-    parts.tool = {
-      mode: toolDecision.mode || null,
-      tool: toolDecision.tool || null,
-      reason: toolDecision.reason || null,
-      confidence: num(toolDecision.confidence),
-      latencyMs: num(toolDecision.latencyMs),
-    };
-  }
-  return Object.keys(parts).length ? parts : undefined;
-}
-
-const num = (v) => (typeof v === "number" ? Number(v.toFixed(3)) : null);
-
 export function buildRequestDetail(base, overrides = {}) {
   return {
     provider: base.provider || "unknown",
@@ -117,16 +86,6 @@ export function buildRequestDetail(base, overrides = {}) {
     providerResponse: base.providerResponse || null,
     response: base.response || {},
     pxpipe: base.pxpipe || undefined,
-    // What the decision provider chose for this request, and why. The usage table
-    // prices the call on its own row; this is what ties the two together, so a
-    // request that reached an expensive model can be explained after the fact.
-    decision: base.decision || undefined,
-    // The state the decision model was shown. Only the decision rows carry one;
-    // it is what lets a low confidence be traced to the input instead of guessed at.
-    decisionState: base.decisionState || undefined,
-    // Marks this row as a decision call. The observability repo sizes the request
-    // field by it: decision questions are bounded, chat bodies are not.
-    endpoint: base.endpoint || undefined,
     status: base.status || "success",
     ...overrides
   };

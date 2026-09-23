@@ -17,17 +17,6 @@ import { getTransform as getPxpipeTransform } from "@/lib/pxpipe/loader.js";
 import { appendPxpipeEvent } from "@/lib/pxpipe/events.js";
 import { createErrorContext, errorResponse, responseFromRoutingCandidate, withRequestId } from "open-sse/utils/error.js";
 import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "open-sse/services/combo.js";
-import {
-  normalizeDecisionConfig,
-  resolveDecisionTarget,
-  decideComboModel,
-  rankPool,
-  availableDecisionPool,
-  decideTool as decideToolCore,
-  readPreviousVerdict,
-  rememberVerdict,
-} from "../services/decisionRouter.js";
-import { extractTools, supportsToolChoice, UNSUPPORTED_EXECUTORS } from "open-sse/decision/tools.js";
 import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
@@ -45,36 +34,12 @@ import { hasWebSearchServerTool, emulateWebSearch } from "../services/webSearchE
 // position) of the combo-wide cap and that candidate's own per-model cap;
 // either may be absent. A level absent from THINKING_ORDER is ignored, same
 // as applyThinking's own unknown-cap handling.
-/**
- * The tightest of any number of caps. Every input is a ceiling, never a floor, so
- * adding the per-turn one can only ever lower the budget — it never overrides what
- * the client asked for upward.
- */
-/**
- * A mechanical turn does not need a large reasoning budget. Measured on Bedrock
- * Sonnet 4.6: budget 1024 produced 223 chars of thinking against 4,460 at 24576,
- * with 28% fewer output tokens and 28% less latency. Only the bottom of the range
- * is capped — a hard turn is left alone so the client's own request stands.
- */
-export function effortCeilingForDeliberation(deliberation) {
-  if (typeof deliberation !== "number") return null;
-  if (deliberation < 0.3) return "low";
-  if (deliberation < 0.7) return "medium";
-  return null;
-}
-
-export function resolveMaxThinkingLevel(...levels) {
-  let tightest = null;
-  let tightestIdx = Infinity;
-  for (const level of levels) {
-    const idx = level ? THINKING_ORDER.indexOf(level) : -1;
-    if (idx === -1) continue;
-    if (idx < tightestIdx) {
-      tightestIdx = idx;
-      tightest = level;
-    }
-  }
-  return tightest;
+export function resolveMaxThinkingLevel(comboMaxThinking, perModelMaxThinking) {
+  const comboIdx = comboMaxThinking ? THINKING_ORDER.indexOf(comboMaxThinking) : -1;
+  const perModelIdx = perModelMaxThinking ? THINKING_ORDER.indexOf(perModelMaxThinking) : -1;
+  if (comboIdx === -1) return perModelIdx === -1 ? null : perModelMaxThinking;
+  if (perModelIdx === -1) return comboMaxThinking;
+  return perModelIdx <= comboIdx ? perModelMaxThinking : comboMaxThinking;
 }
 
 /**
@@ -177,143 +142,6 @@ export async function handleChat(request, clientRawRequest = null, options = {})
   return route(request.signal);
 }
 
-/**
- * Auto-combo ordering: which model of the pool serves this turn.
- *
- * Resolved here, before handleComboChat, and not inside it — the conversation has
- * to be read from the RAW client body, and once the body is translated to a
- * provider's format the target is fixed and the model can no longer change.
- * handleComboChat already walks whatever order it is given and falls back through
- * the rest, so the whole feature is a reorder before that call.
- *
- * Fails open at every step: an off mode, a missing credential or an unreachable
- * jev all return the pool untouched.
- */
-async function orderComboModels({ body, models, comboName, strategy, settings, apiKey, log, comboOwner, allowedConnectionIds }) {
-  const unchanged = { models, deliberation: null };
-  if (strategy !== "auto" || models.length < 2) return unchanged;
-  const config = normalizeDecisionConfig(settings.decisionRouter);
-  if (config.mode === "off") return unchanged;
-
-  const target = await resolveDecisionTarget(config, { apiKey, log });
-  if (!target) return unchanged;
-
-  // A combo-of-combos lists tiers. Their names carry no price — PATTERN_PRICING
-  // would give "claude-auto" a $3 that means nothing — so each tier is priced by
-  // the model it would actually serve. Resolved here because only this layer can
-  // read a combo's members.
-  let result;
-  try {
-    const ranked = await rankPool(models, (name) => getComboModels(name, comboOwner));
-    const { pool, costOf } = await availableDecisionPool(ranked, { apiKey, settings, comboOwner, allowedConnectionIds });
-    if (!pool.length) return unchanged;
-    const fallback = ranked.filter(name => !pool.includes(name));
-    if (pool.length === 1) return config.mode === "shadow" ? unchanged : {
-      models: [...pool, ...fallback], deliberation: null,
-    };
-    result = await decideComboModel({
-      body,
-      models,
-      ranked: pool,
-      costOf,
-      fallback,
-      comboName,
-      config,
-      target,
-      log,
-      previousVerdict: readPreviousVerdict(comboName),
-    });
-  } catch (error) {
-    log.warn("DECISION", `model decision failed, pool order unchanged: ${error.message}`);
-    return unchanged;
-  }
-  rememberVerdict(comboName, result.decision);
-  const deliberation = result.decision?.deliberation ?? null;
-
-  if (config.mode === "shadow") {
-    // Baseline: the call happened and was priced, the answer is only logged.
-    log.info("DECISION", `shadow: "${comboName}" would use ${result.decision?.model || "(unchanged)"}`);
-    return unchanged;
-  }
-  return { models: result.models, deliberation, decision: result.decision || null };
-}
-
-/**
- * Builds the tool-decider the core calls, once per request.
- *
- * The memo is the reason this is a closure and not a bare function: one request
- * can reach the decision point more than once — every account retry re-runs the
- * core, and web-search emulation iterates up to 8 times. jev bills input, and 9
- * serial calls would add ~3s of latency, well past the 1500ms stream grace.
- *
- * Keyed by a signature of the conversation, not by model alone, so a retry of the
- * same body reuses the decision while an appended tool result (a genuinely
- * different question) gets its own.
- */
-function createToolDecider({ settings, apiKey, log }) {
-  const config = normalizeDecisionConfig(settings.decisionRouter);
-  if (config.mode === "off") return null;
-  // toolMode "off" means tool routing is not wanted, so the call is not made at
-  // all: model routing still runs, and no tokens are spent on a verdict that
-  // would only be discarded.
-  if (config.toolMode === "off") return null;
-
-  let credentialPromise = null;
-  const memo = new Map();
-
-  return async ({ body, format, provider, model }) => {
-    if (UNSUPPORTED_EXECUTORS.has(provider) || !supportsToolChoice(format)) {
-      return { mode: "passthrough", reason: "executor_unsupported" };
-    }
-    const tools = extractTools(body, format);
-    if (tools.length === 0) return { mode: "passthrough", reason: "no_tools" };
-
-    const signature = decisionSignature(body, tools);
-    const memoKey = `${provider}/${model}|${signature}`;
-    if (memo.has(memoKey)) return memo.get(memoKey);
-
-    credentialPromise ||= resolveDecisionTarget(config, { apiKey, log });
-    const target = await credentialPromise;
-    if (!target) {
-      const skipped = { mode: "passthrough", reason: "no_credential" };
-      memo.set(memoKey, skipped);
-      return skipped;
-    }
-
-    let result = null;
-    try {
-      result = await decideToolCore({ body, tools, plans: tools, config, target, log });
-    } catch (error) {
-      log.warn("DECISION", `tool decision failed: ${error.message}`);
-    }
-
-    // Shadow mode decided, logged and priced above — it just must not be applied.
-    const decision =
-      config.mode === "shadow" && result && result.mode !== "passthrough"
-        ? { mode: "passthrough", reason: "shadow", wouldBe: `${result.mode}:${result.tool || "-"}`, confidence: result.confidence }
-        : result || { mode: "passthrough", reason: "no_answer" };
-
-    memo.set(memoKey, decision);
-    return decision;
-  };
-}
-
-/** Conversation shape fingerprint: same body reuses a decision, a grown one does not. */
-function decisionSignature(body, tools) {
-  const turns = body?.messages || body?.input || body?.contents || [];
-  const last = turns.length ? JSON.stringify(turns[turns.length - 1]).length : 0;
-  return `${turns.length}:${last}:${tools.length}`;
-}
-
-/** The decider is request-scoped, so it lives on the routing context every
- *  candidate in the fallback loop already shares. */
-function getToolDecider(routingContext, { settings, apiKey, log }) {
-  if (routingContext.toolDecider === undefined) {
-    routingContext.toolDecider = createToolDecider({ settings, apiKey, log });
-  }
-  return routingContext.toolDecider;
-}
-
 async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, clientRawRequest, request, apiKey, errorContext, signal, entryPhases }) {
   // Reuse request-scoped reads across model/account fallback. In distributed mode
   // these are Postgres round trips; re-reading the same settings/owner for every
@@ -356,21 +184,12 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
     }
 
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
-    const ordered = await orderComboModels({
-      body, models: augmentedModels, comboName: modelStr, strategy: comboStrategy, settings, apiKey, log,
-      comboOwner, allowedConnectionIds: apiKeyContext?.allowedConnectionIds,
-    });
-    routingContext.deliberation = ordered.deliberation;
-    routingContext.decision = ordered.decision;
-    const preferSubscription = comboStrategy === "auto" && settings.decisionRouter?.mode === "enforce";
-    const comboRoutingContext = { ...routingContext, preferSubscription };
-    const orderedModels = ordered.models;
-    log.info("CHAT", `Combo "${modelStr}" with ${orderedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
+    log.info("CHAT", `Combo "${modelStr}" with ${augmentedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
-      models: orderedModels,
+      models: augmentedModels,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, comboRoutingContext, comboModelOptions),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext, comboModelOptions),
         adapterAdded
       ),
       log,
@@ -451,22 +270,12 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       }
 
       const comboStickyLimit = chatSettings.comboStickyRoundRobinLimit;
-      const ordered = await orderComboModels({
-        body, models: augmentedModels, comboName: modelStr, strategy: comboStrategy,
-        settings: chatSettings, apiKey, log, comboOwner,
-        allowedConnectionIds: routingContext.apiKeyContext?.allowedConnectionIds,
-      });
-      routingContext.deliberation = ordered.deliberation;
-      routingContext.decision = ordered.decision;
-      const preferSubscription = comboStrategy === "auto" && chatSettings.decisionRouter?.mode === "enforce";
-      const comboRoutingContext = { ...routingContext, preferSubscription };
-      const orderedModels = ordered.models;
-      log.info("CHAT", `Combo "${modelStr}" with ${orderedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
+      log.info("CHAT", `Combo "${modelStr}" with ${augmentedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
       return handleComboChat({
         body,
-        models: orderedModels,
+        models: augmentedModels,
         handleSingleModel: withCapacityAdapterStripping(
-          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, comboRoutingContext, nestedModelOptions),
+          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, errorContext, signal, routingContext, nestedModelOptions),
           adapterAdded
         ),
         log,
@@ -502,7 +311,6 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       settings: chatSettings,
       keyOwner: comboOwner === undefined ? null : comboOwner,
       allowedConnectionIds: routingContext.apiKeyContext?.allowedConnectionIds ?? null,
-      preferSubscription: routingContext.preferSubscription === true,
     });
 
     if (credentials?.noActiveCredentials) {
@@ -533,13 +341,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     // Use shared chatCore
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
-    const perTurnEffort = chatSettings.decisionRouter?.effort
-      ? effortCeilingForDeliberation(routingContext.deliberation)
-      : null;
     const maxThinkingLevel = resolveMaxThinkingLevel(
       comboModelOptions?.maxThinking ?? null,
-      comboModelOptions?.modelOptions?.[modelStr]?.maxThinking ?? null,
-      perTurnEffort
+      comboModelOptions?.modelOptions?.[modelStr]?.maxThinking ?? null
     );
     // Detect source format by endpoint + body
     const clientFormat = request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null;
@@ -568,14 +372,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       pxpipeTimeoutMs: chatSettings.pxpipeTimeoutMs,
       // Lazily warms the in-process module on first use; null when not installed (fail-open)
       pxpipeTransform: chatSettings.pxpipeEnabled ? await getPxpipeTransform() : null,
-      // System One tool routing. Injected rather than imported by the core:
-      // open-sse cannot reach settings or provider connections. Null when the
-      // mode is off, which is what switches the hook off.
-      decideTool: getToolDecider(routingContext, { settings: chatSettings, apiKey, log }),
       onPxpipeEvent: appendPxpipeEvent,
       providerThinking,
       maxThinkingLevel,
-      decision: routingContext.decision || null,
       errorContext,
       entryPhases,
       comboName: routingContext.comboName,

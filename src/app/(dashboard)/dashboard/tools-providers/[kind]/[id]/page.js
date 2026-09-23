@@ -165,9 +165,8 @@ export default function MediaProviderDetailPage() {
       )}
       {id === "searxng" && <SearxngInstanceCard onUrlChange={setSearxngUrl} />}
 
-      {/* Models - hidden for tts/webSearch/webFetch (provider IS the model) and for
-          decision (jev carries no `models` on purpose); custom uses prefix as alias */}
-      {kind !== "tts" && kind !== "webSearch" && kind !== "webFetch" && kind !== "systemone" && (
+      {/* Models - hidden for tts/webSearch/webFetch (provider IS the model); custom uses prefix as alias */}
+      {kind !== "tts" && kind !== "webSearch" && kind !== "webFetch" && (
         <ModelsCard
           providerId={id}
           kindFilter={kind}
@@ -176,13 +175,12 @@ export default function MediaProviderDetailPage() {
       )}
 
       {/* Provider Info — config-driven, supports searchConfig, fetchConfig, ttsConfig, embeddingConfig, systemoneConfig, searchViaChat */}
-      {!isCustom && (provider.searchConfig || provider.fetchConfig || provider.ttsConfig || provider.sttConfig || provider.embeddingConfig || provider.systemoneConfig || provider.searchViaChat ) && (
+      {!isCustom && (provider.searchConfig || provider.fetchConfig || provider.ttsConfig || provider.sttConfig || provider.embeddingConfig || provider.systemoneConfig || provider.searchViaChat) && (
         <ProviderInfoCard
           config={
             kind === "webFetch" ? provider.fetchConfig
               : kind === "tts" ? provider.ttsConfig
               : kind === "stt" ? provider.sttConfig
-              : kind === "systemone" ? provider.systemoneConfig
               : kind === "embedding" ? provider.embeddingConfig
               : kind === "systemone" ? provider.systemoneConfig
               : id === "searxng" && searxngUrl ? { ...provider.searchConfig, baseUrl: `${searxngUrl.replace(/\/+$/, "")}/search` }

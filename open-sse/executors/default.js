@@ -6,8 +6,6 @@ import { resolveOpenAICompatibleApiType } from "../services/provider.js";
 import { OAUTH_ENDPOINTS, buildKimiHeaders } from "../config/appConstants.js";
 import { buildClineHeaders } from "../shared/clineAuth.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
-import REGISTRY from "../providers/registry/index.js";
-import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { detectClientTool } from "../utils/clientDetector.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
@@ -201,47 +199,7 @@ export class DefaultExecutor extends BaseExecutor {
     return { ...body, messages, response_format: { type: "json_object" } };
   }
 
-  /**
-   * Registry entries carry `systemoneConfig.baseUrl` for providers that also serve
-   * evaluation models. A model marked with the `evaluation` capability is not a
-   * language model: the chat endpoint refuses it ("is an evaluation model, not a
-   * language model"), so it goes to that route instead.
-   *
-   * One field for every consumer — this executor, the decision router and the
-   * /v1/systemone endpoint all resolve the same `systemoneConfig`. The hosts differ
-   * (Vercel at `/typesafe/v1/systemone`, OpenCode Zen and OpenRouter at their own),
-   * so it is read from the entry, never assumed. A relative value resolves against
-   * that provider's own chat origin.
-   */
-  evaluationUrl(model, credentials = null) {
-    const entry = REGISTRY.find((e) => e.id === this.provider || e.alias === this.provider);
-    const raw = entry?.systemoneConfig?.baseUrl;
-    const base = credentials?.runtimeTransport?.baseUrl || entry?.transport?.baseUrl || this.config?.baseUrl;
-    if (!raw) return null;
-    try {
-      return new URL(raw, base).toString();
-    } catch {
-      return null;
-    }
-  }
-
-  isEvaluationModel(model) {
-    const id = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
-    if (getCapabilitiesForModel(this.provider, id)?.evaluation === true) return true;
-    // The provider declares the evaluation model it ships (systemoneConfig.defaultModel),
-    // which is what routes TypeSafe's jev today. A model the operator flags by hand in
-    // the Add-custom-model dialog carries its capability in the custom-model table,
-    // which this layer cannot read — wiring that through is the follow-up.
-    const entry = REGISTRY.find((e) => e.id === this.provider || e.alias === this.provider);
-    const declared = entry?.systemoneConfig?.defaultModel;
-    return !!declared && declared === id;
-  }
-
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
-    if (this.isEvaluationModel(model)) {
-      const url = this.evaluationUrl(model, credentials);
-      if (url) return url;
-    }
     // Runtime transport (multi-endpoint providers): use the sourceFormat-matched endpoint
     const rt = credentials?.runtimeTransport;
     if (rt?.baseUrl) {

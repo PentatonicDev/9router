@@ -79,40 +79,6 @@ const DEFAULT_SETTINGS = {
   webSearchEmulation: true,
   // Admin-configured SearXNG base URL. Empty = SEARXNG_URL env / registry default.
   searxngUrl: "",
-  // System One decision routing. `mode` is one field with three states rather
-  // than an `enabled` flag plus a mode string: "off" never asks, "shadow" asks
-  // and logs but applies nothing (the baseline needed to measure before
-  // trusting), "enforce" applies. Which combos it routes is not configured here:
-  // a combo opts in with its own "auto" strategy, the only thing the runtime
-  // reads (chat.js: `strategy !== "auto"` returns the pool untouched).
-  decisionRouter: {
-    mode: "off",
-    // The gateway that serves the decision model. It IS the provider — a decision
-    // route borrows that gateway's credential, so there is no separate provider
-    // identity to configure, and swapping to a better System-1 model is editing
-    // `model` and nothing else.
-    provider: "vercel-ai-gateway",
-    model: "typesafe-ai/jev",
-    // Cap the reasoning budget per turn from the same verdict that picks the model:
-    // a mechanical turn gets a low ceiling, a hard one is left alone. Separate from
-    // `mode` because the two levers carry different evidence — model routing is
-    // proven across three pool orders, this one is measured at 20x on Bedrock with
-    // few samples.
-    effort: false,
-    toolMode: "hint",
-    // Winner strength for the model decision, confidence for the tool decision (see
-    // decide.js). jev scales its confidence by the option count, so the model gate
-    // cannot read it; a tool roster is a Choice too and this one is still measured
-    // there.
-    minStrength: 0.35,
-    switchStrength: 0.6,
-    minConfidence: 0.7,
-    switchConfidence: 0.85,
-    // Matches STREAM_STATUS_GRACE_MS: within it the request is answered before the
-    // SSE has to open, so a slow decision costs latency but not a broken stream.
-    // The steady state is ~350ms; the tail is what this budget is for.
-    timeoutMs: 1500,
-  },
 };
 
 async function readRaw() {
@@ -124,15 +90,6 @@ async function readRaw() {
 // Merge raw settings with defaults; backward-compat for missing keys
 export function mergeWithDefaults(raw) {
   const merged = { ...DEFAULT_SETTINGS, ...(raw || {}) };
-  // `updateSettings` spreads the incoming body shallowly, so a client that PATCHes
-  // one field of a nested object replaces the whole object. The runtime normalizes
-  // on read and silently carries on with defaults while the API and the dashboard
-  // render the partial object — measured as the decision panel showing
-  // "no connection yet" and linking to /dashboard/providers/undefined on a live
-  // gateway. Filling the missing sub-keys here keeps every reader on the same shape.
-  if (merged.decisionRouter && typeof merged.decisionRouter === "object" && !Array.isArray(merged.decisionRouter)) {
-    merged.decisionRouter = { ...DEFAULT_SETTINGS.decisionRouter, ...merged.decisionRouter };
-  }
   for (const [key, defVal] of Object.entries(DEFAULT_SETTINGS)) {
     if (merged[key] === undefined) {
       if (

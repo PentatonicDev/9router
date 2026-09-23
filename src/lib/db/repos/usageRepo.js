@@ -315,9 +315,7 @@ export async function saveRequestUsage(entry) {
         connectionId: entry.connectionId || null, apiKey: entry.apiKey || null,
         endpoint: entry.endpoint || null, promptTokens, completionTokens,
         cost: entry.cost || 0, status: entry.status || "ok",
-        // `meta` is where a row explains itself — a decision row names what it
-        // decided, not just what it spent. Was written as a fixed {}.
-        tokens: stringifyJson(tokens), meta: stringifyJson(entry.meta || {}),
+        tokens: stringifyJson(tokens), meta: stringifyJson({}),
       }).execute();
 
       const dateKey = getLocalDateKey(entry.timestamp);
@@ -372,7 +370,7 @@ export async function saveRequestUsage(entry) {
 export async function getUsageHistory(filter = {}) {
   const db = await getDb();
   let q = db.selectFrom("usageHistory")
-    .select(["timestamp", "provider", "model", "connectionId", "apiKey", "endpoint", "cost", "status", "tokens", "meta"]);
+    .select(["timestamp", "provider", "model", "connectionId", "apiKey", "endpoint", "cost", "status", "tokens"]);
 
   if (filter.provider) q = q.where("provider", "=", filter.provider);
   if (filter.model) q = q.where("model", "=", filter.model);
@@ -385,8 +383,6 @@ export async function getUsageHistory(filter = {}) {
     timestamp: r.timestamp, provider: r.provider, model: r.model,
     connectionId: r.connectionId, apiKeyMasked: maskApiKey(r.apiKey), endpoint: r.endpoint,
     cost: r.cost, status: r.status, tokens: parseJson(r.tokens, {}),
-    // Undefined when the row carries none, so a caller can tell "no meta" from "{}".
-    ...(Object.keys(parseJson(r.meta, {})).length ? { meta: parseJson(r.meta, {}) } : {}),
   }));
 }
 

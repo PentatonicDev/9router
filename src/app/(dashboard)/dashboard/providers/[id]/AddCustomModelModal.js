@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import { Button, Modal, Toggle } from "@/shared/components";
-import { CAPACITY_META, EXCLUSIVE_CAPACITIES } from "@/shared/constants/models";
+import { CAPACITY_META } from "@/shared/constants/models";
 
 const defaultCaps = () => Object.fromEntries(Object.keys(CAPACITY_META).map((key) => [key, false]));
 
@@ -31,20 +31,6 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
     setTestStatus("testing");
     setTestError("");
     try {
-      // Evaluation models use the decision endpoint, not /v1/chat/completions.
-      // The generic ping sends a chat body that the evaluation API rejects with
-      // "state: Invalid input". Use the provider validate route instead.
-      if (caps.evaluation) {
-        const res = await fetch("/api/providers/validate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider: providerAlias }),
-        });
-        const data = await res.json();
-        setTestStatus(data.valid ? "ok" : "error");
-        setTestError(data.valid ? "" : (data.error || "Evaluation endpoint not reachable"));
-        return;
-      }
       const res = await fetch("/api/models/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -111,18 +97,7 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
               <Toggle
                 key={key}
                 checked={!!caps[key]}
-                // Disabled while an exclusive capability is on, so the two cannot be
-                // combined in the first place.
-                disabled={EXCLUSIVE_CAPACITIES.some((k) => k !== key && caps[k])}
-                onChange={(v) => setCaps((prev) => {
-                  // An exclusive capability describes what the model IS, so it cannot
-                  // coexist with the others — turning it on turns them off, disabling
-                  // their toggles until it goes off again.
-                  if (v && EXCLUSIVE_CAPACITIES.includes(key)) {
-                    return { ...defaultCaps(), [key]: true };
-                  }
-                  return { ...prev, [key]: v };
-                })}
+                onChange={(v) => setCaps((prev) => ({ ...prev, [key]: v }))}
                 label={meta.label}
                 description={meta.desc}
                 size="sm"

@@ -42,7 +42,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
   const providerId = resolveProviderId(provider);
   const strategyHint = (options.settings?.providerStrategies?.[providerId] || {}).fallbackStrategy
     || options.settings?.fallbackStrategy;
-  const needsSelectionLock = !options.inspectOnly && (strategyHint === undefined || strategyHint === "round-robin");
+  const needsSelectionLock = strategyHint === undefined || strategyHint === "round-robin";
   const currentMutex = needsSelectionLock
     ? selectionMutexes.get(providerId) || Promise.resolve()
     : Promise.resolve();
@@ -57,7 +57,6 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
 
     // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings)
     if (FREE_PROVIDERS[providerId]?.noAuth) {
-      if (options.inspectOnly) return { available: true, subscription: false, free: true };
       const settings = options.settings || await getSettings();
       const override = (settings.providerStrategies || {})[providerId] || {};
       const strategy = override.rotateStrategy || "none";
@@ -194,13 +193,6 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       }
     });
 
-    if (options.inspectOnly) {
-      return {
-        available: availableConnections.length > 0,
-        subscription: availableConnections.some(c => c.authType === "oauth" || c.authType === "access_token"),
-      };
-    }
-
     if (availableConnections.length === 0) {
       const nowMs = Date.now();
       let bestCandidate = null;
@@ -283,16 +275,13 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         log.info("AUTH", `${provider} | pinned to ${connection.id?.slice(0, 8)} (${connection.name || connection.email || "unnamed"})`);
       }
     }
-    const subscriptionConnections = options.preferSubscription
-      ? availableConnections.filter(c => c.authType === "oauth" || c.authType === "access_token") : [];
-    const selectionConnections = subscriptionConnections.length ? subscriptionConnections : availableConnections;
     if (connection) {
       // skip strategy
     } else if (strategy === "round-robin") {
       const stickyLimit = providerOverride.stickyRoundRobinLimit || selectionSettings.stickyRoundRobinLimit || 3;
 
       // Sort by lastUsed (most recent first) to find current candidate
-      const byRecency = [...selectionConnections].sort((a, b) => {
+      const byRecency = [...availableConnections].sort((a, b) => {
         if (!a.lastUsedAt && !b.lastUsedAt) return (a.priority || 999) - (b.priority || 999);
         if (!a.lastUsedAt) return 1;
         if (!b.lastUsedAt) return -1;
@@ -312,7 +301,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         });
       } else {
         // Pick the least recently used (excluding current if possible)
-        const sortedByOldest = [...selectionConnections].sort((a, b) => {
+        const sortedByOldest = [...availableConnections].sort((a, b) => {
           if (!a.lastUsedAt && !b.lastUsedAt) return (a.priority || 999) - (b.priority || 999);
           if (!a.lastUsedAt) return -1;
           if (!b.lastUsedAt) return 1;
@@ -329,7 +318,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       }
     } else {
       // Default: fill-first (already sorted by priority in getProviderConnections)
-      connection = selectionConnections[0];
+      connection = availableConnections[0];
     }
 
     const resolvedProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});

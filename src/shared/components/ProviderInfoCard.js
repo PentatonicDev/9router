@@ -15,11 +15,6 @@ const FIELD_SCHEMA = {
   formats:          { label: "Formats",    format: (v) => v.join(", ") },
   maxMaxResults:    { label: "Max results", format: (v) => v },
   maxCharacters:    { label: "Max chars",  format: (v) => v.toLocaleString() },
-  // systemoneConfig is the gateway's System One route: scalars only, and the model
-  // is already covered by `defaultModel` above.
-  path:             { label: "Decision path", format: (v) => v, mono: true },
-  modelType:        { label: "Model type", format: (v) => v, mono: true },
-  timeoutMs:        { label: "Timeout",    format: (v) => `${v} ms` },
 };
 
 export default function ProviderInfoCard({ config, provider, title = "Provider Info" }) {

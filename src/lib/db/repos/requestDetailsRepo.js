@@ -94,7 +94,6 @@ async function flushToDatabase() {
           if (!item.id) item.id = generateDetailId(item.model);
           if (!item.timestamp) item.timestamp = new Date().toISOString();
           if (item.request?.headers) item.request.headers = sanitizeHeaders(item.request.headers);
-          const isDecision = item.endpoint === "decision";
 
           const record = {
             id: item.id,
@@ -112,22 +111,11 @@ async function flushToDatabase() {
             comboName: item.comboName || undefined,
             upstream: item.upstream || undefined,
             tokens: item.tokens || {},
-            // A decision's request carries only the questions sent (bounded by
-            // QUESTION_CHAR_BUDGET), so it skips the cap that exists for chat bodies
-            // — those are unbounded (1.5MB measured) and would otherwise fill storage.
-            request: isDecision ? (item.request || null) : truncateField(item.request, config.maxJsonSize),
+            request: truncateField(item.request, config.maxJsonSize),
             providerRequest: truncateField(item.providerRequest, config.maxJsonSize),
             providerResponse: truncateField(item.providerResponse, config.maxJsonSize),
             response: truncateField(item.response, config.maxJsonSize),
             pxpipe: item.pxpipe || undefined,
-            // What the decision provider chose and why. Built by buildRequestDetail
-            // but dropped here until now, which left every decision row showing
-            // "Decision: null" and the apply rate unmeasurable.
-            decision: item.decision || undefined,
-            // The `state` the decision model was shown — the input that produced the
-            // reported confidence. Bounded by maxStateChars upstream, so it skips
-            // truncateField: a preview of a system prompt carries no signal.
-            decisionState: item.decisionState || undefined,
           };
 
           const values = {

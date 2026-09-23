@@ -170,21 +170,6 @@ export const MODEL_PRICING = {
  * Keyed by provider alias (cc, cx, gc, gh, ...) or provider id (openai, anthropic, ...).
  */
 export const PROVIDER_PRICING = {
-  // TypeSafe System One (jev) — input-only, output free. Without an entry here
-  // calculateCost returns 0 and every decision provider call looks free in the
-  // usage dashboard, which would make the savings maths meaningless.
-  // Rate from https://docs.typesafe.ai/models ($42 per 1B = $0.042 per 1M).
-  typesafe: {
-    jev: { input: 0.042, output: 0, cached: 0.042, reasoning: 0 },
-    "jev-latest": { input: 0.042, output: 0, cached: 0.042, reasoning: 0 },
-    "jev-1.13.0": { input: 0.042, output: 0, cached: 0.042, reasoning: 0 },
-    "typesafe-ai/jev": { input: 0.042, output: 0, cached: 0.042, reasoning: 0 },
-    "typesafe/jev-1.13": { input: 0.042, output: 0, cached: 0.042, reasoning: 0 },
-  },
-  // GitHub Copilot (gh) — explicit override, matches canonical gpt-5.3-codex rate
-  gh: {
-    "gpt-5.3-codex": { input: 1.75, output: 14.00, cached: 0.175, reasoning: 14.00, cache_creation: 1.75 },
-  },
   // Amazon Bedrock — generated from models.dev (bedrock-pricing skill),
   // keyed by the exact Bedrock id because regional profiles cost more than the
   // bare/global id. See bedrockPricing.js.
