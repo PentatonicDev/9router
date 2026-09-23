@@ -37,9 +37,15 @@ if (!MODEL || !OUT) {
   process.exit(2);
 }
 
-const manifest = JSON.parse(fs.readFileSync("docs/swebench-subset.json", "utf8"));
-let instances = manifest[SPLIT === "dev" ? "dev" : "held_out"];
-if (!instances) { console.error(`unknown split ${SPLIT}`); process.exit(2); }
+// --manifest lets a difficulty screen run over its own candidate pool; the frozen
+// subset stays the default so an experiment arm cannot silently drift off it.
+const MANIFEST = arg("manifest", "docs/swebench-subset.json");
+const manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
+let instances = manifest[SPLIT] ?? manifest[SPLIT === "dev" ? "dev" : "held_out"];
+if (!instances) {
+  console.error(`manifest ${MANIFEST} has no split ${SPLIT} (has: ${Object.keys(manifest).filter((k) => Array.isArray(manifest[k])).join(", ")})`);
+  process.exit(2);
+}
 if (LIMIT > 0) instances = instances.slice(0, LIMIT);
 
 fs.mkdirSync(OUT, { recursive: true });
@@ -116,7 +122,7 @@ const runs = [];
 const predictions = [];
 
 console.log(`swebench-arm → ${BASE} · split=${SPLIT} (${instances.length}) · model="${MODEL}"`);
-console.log(`fingerprint=${manifest.fingerprint}\n`);
+console.log(`manifest=${MANIFEST} fingerprint=${manifest.fingerprint ?? "(none — screening pool, not a frozen set)"}\n`);
 console.log(`${pad("instance", 34)} ${pad("agent", 7)} ${pad("s", 5)} ${pad("patch", 7)} note`);
 
 for (const inst of instances) {

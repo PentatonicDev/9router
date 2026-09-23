@@ -53,6 +53,7 @@ docs/*
 !docs/ARCHITECTURE.md
 !docs/DECISION-ROUTING.md
 !docs/swebench-subset.json
+!docs/swebench-screen-pool.json
 test/*
 open-sse/test/*
 RM.vn.md

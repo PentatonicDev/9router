@@ -1,0 +1,218 @@
+{
+  "dataset": "SWE-bench/SWE-bench_Verified",
+  "split": "test",
+  "purpose": "difficulty screen: keep only instances fixed haiku FAILS",
+  "selection": "statement>=2500 chars, excludes the 24 already used + django-10880, round-robin by repo",
+  "candidates": [
+    {
+      "instance_id": "astropy__astropy-13453",
+      "repo": "astropy/astropy",
+      "version": "5.0",
+      "base_commit": "19cc80471739bcb67b7e8099246b391c355023ee",
+      "image": "swebench/sweb.eval.x86_64.astropy_1776_astropy-13453:latest"
+    },
+    {
+      "instance_id": "django__django-11087",
+      "repo": "django/django",
+      "version": "3.0",
+      "base_commit": "8180ffba21bf10f4be905cb0d4890dc2bcff2788",
+      "image": "swebench/sweb.eval.x86_64.django_1776_django-11087:latest"
+    },
+    {
+      "instance_id": "matplotlib__matplotlib-22719",
+      "repo": "matplotlib/matplotlib",
+      "version": "3.5",
+      "base_commit": "a2a1b0a11b993fe5f8fab64b6161e99243a6393c",
+      "image": "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-22719:latest"
+    },
+    {
+      "instance_id": "psf__requests-1724",
+      "repo": "psf/requests",
+      "version": "2.0",
+      "base_commit": "1ba83c47ce7b177efe90d5f51f7760680f72eda0",
+      "image": "swebench/sweb.eval.x86_64.psf_1776_requests-1724:latest"
+    },
+    {
+      "instance_id": "pydata__xarray-6721",
+      "repo": "pydata/xarray",
+      "version": "2022.06",
+      "base_commit": "cc183652bf6e1273e985e1c4b3cba79c896c1193",
+      "image": "swebench/sweb.eval.x86_64.pydata_1776_xarray-6721:latest"
+    },
+    {
+      "instance_id": "pylint-dev__pylint-7080",
+      "repo": "pylint-dev/pylint",
+      "version": "2.15",
+      "base_commit": "3c5eca2ded3dd2b59ebaf23eb289453b5d2930f0",
+      "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-7080:latest"
+    },
+    {
+      "instance_id": "pytest-dev__pytest-7490",
+      "repo": "pytest-dev/pytest",
+      "version": "6.0",
+      "base_commit": "7f7a36478abe7dd1fa993b115d22606aa0e35e88",
+      "image": "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7490:latest"
+    },
+    {
+      "instance_id": "scikit-learn__scikit-learn-11578",
+      "repo": "scikit-learn/scikit-learn",
+      "version": "0.20",
+      "base_commit": "dd69361a0d9c6ccde0d2353b00b86e0e7541a3e3",
+      "image": "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-11578:latest"
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-11510",
+      "repo": "sphinx-doc/sphinx",
+      "version": "7.2",
+      "base_commit": "6cb783c0024a873722952a67ebb9f41771c8eb6d",
+      "image": "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-11510:latest"
+    },
+    {
+      "instance_id": "sympy__sympy-13877",
+      "repo": "sympy/sympy",
+      "version": "1.1",
+      "base_commit": "1659712001810f5fc563a443949f8e3bb38af4bd",
+      "image": "swebench/sweb.eval.x86_64.sympy_1776_sympy-13877:latest"
+    },
+    {
+      "instance_id": "astropy__astropy-13398",
+      "repo": "astropy/astropy",
+      "version": "5.0",
+      "base_commit": "6500928dc0e57be8f06d1162eacc3ba5e2eff692",
+      "image": "swebench/sweb.eval.x86_64.astropy_1776_astropy-13398:latest"
+    },
+    {
+      "instance_id": "django__django-14351",
+      "repo": "django/django",
+      "version": "4.0",
+      "base_commit": "06fd4df41afb5aa1d681b853c3c08d8c688ca3a5",
+      "image": "swebench/sweb.eval.x86_64.django_1776_django-14351:latest"
+    },
+    {
+      "instance_id": "matplotlib__matplotlib-26113",
+      "repo": "matplotlib/matplotlib",
+      "version": "3.7",
+      "base_commit": "5ca694b38d861c0e24cd8743753427dda839b90b",
+      "image": "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-26113:latest"
+    },
+    {
+      "instance_id": "pydata__xarray-4966",
+      "repo": "pydata/xarray",
+      "version": "0.12",
+      "base_commit": "37522e991a32ee3c0ad1a5ff8afe8e3eb1885550",
+      "image": "swebench/sweb.eval.x86_64.pydata_1776_xarray-4966:latest"
+    },
+    {
+      "instance_id": "pylint-dev__pylint-8898",
+      "repo": "pylint-dev/pylint",
+      "version": "3.0",
+      "base_commit": "1f8c4d9eb185c16a2c1d881c054f015e1c2eb334",
+      "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-8898:latest"
+    },
+    {
+      "instance_id": "pytest-dev__pytest-10356",
+      "repo": "pytest-dev/pytest",
+      "version": "7.2",
+      "base_commit": "3c1534944cbd34e8a41bc9e76818018fadefc9a1",
+      "image": "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-10356:latest"
+    },
+    {
+      "instance_id": "scikit-learn__scikit-learn-14710",
+      "repo": "scikit-learn/scikit-learn",
+      "version": "0.22",
+      "base_commit": "4b6273b87442a4437d8b3873ea3022ae163f4fdf",
+      "image": "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-14710:latest"
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-10449",
+      "repo": "sphinx-doc/sphinx",
+      "version": "5.1",
+      "base_commit": "36367765fe780f962bba861bf368a765380bbc68",
+      "image": "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-10449:latest"
+    },
+    {
+      "instance_id": "sympy__sympy-20428",
+      "repo": "sympy/sympy",
+      "version": "1.8",
+      "base_commit": "c0e85160406f9bf2bcaa2992138587668a1cd0bc",
+      "image": "swebench/sweb.eval.x86_64.sympy_1776_sympy-20428:latest"
+    },
+    {
+      "instance_id": "astropy__astropy-14309",
+      "repo": "astropy/astropy",
+      "version": "5.1",
+      "base_commit": "cdb66059a2feb44ee49021874605ba90801f9986",
+      "image": "swebench/sweb.eval.x86_64.astropy_1776_astropy-14309:latest"
+    },
+    {
+      "instance_id": "django__django-14672",
+      "repo": "django/django",
+      "version": "4.0",
+      "base_commit": "00ea883ef56fb5e092cbe4a6f7ff2e7470886ac4",
+      "image": "swebench/sweb.eval.x86_64.django_1776_django-14672:latest"
+    },
+    {
+      "instance_id": "matplotlib__matplotlib-25479",
+      "repo": "matplotlib/matplotlib",
+      "version": "3.7",
+      "base_commit": "7fdf772201e4c9bafbc16dfac23b5472d6a53fa2",
+      "image": "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-25479:latest"
+    },
+    {
+      "instance_id": "pydata__xarray-6599",
+      "repo": "pydata/xarray",
+      "version": "2022.03",
+      "base_commit": "6bb2b855498b5c68d7cca8cceb710365d58e6048",
+      "image": "swebench/sweb.eval.x86_64.pydata_1776_xarray-6599:latest"
+    },
+    {
+      "instance_id": "pylint-dev__pylint-6903",
+      "repo": "pylint-dev/pylint",
+      "version": "2.15",
+      "base_commit": "ca80f03a43bc39e4cc2c67dc99817b3c9f13b8a6",
+      "image": "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-6903:latest"
+    },
+    {
+      "instance_id": "pytest-dev__pytest-5262",
+      "repo": "pytest-dev/pytest",
+      "version": "4.5",
+      "base_commit": "58e6a09db49f34886ff13f3b7520dd0bcd7063cd",
+      "image": "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-5262:latest"
+    },
+    {
+      "instance_id": "scikit-learn__scikit-learn-25747",
+      "repo": "scikit-learn/scikit-learn",
+      "version": "1.3",
+      "base_commit": "2c867b8f822eb7a684f0d5c4359e4426e1c9cfe0",
+      "image": "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-25747:latest"
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-9229",
+      "repo": "sphinx-doc/sphinx",
+      "version": "4.1",
+      "base_commit": "876fa81e0a038cda466925b85ccf6c5452e0f685",
+      "image": "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-9229:latest"
+    },
+    {
+      "instance_id": "sympy__sympy-17630",
+      "repo": "sympy/sympy",
+      "version": "1.5",
+      "base_commit": "58e78209c8577b9890e957b624466e5beed7eb08",
+      "image": "swebench/sweb.eval.x86_64.sympy_1776_sympy-17630:latest"
+    },
+    {
+      "instance_id": "astropy__astropy-13579",
+      "repo": "astropy/astropy",
+      "version": "5.0",
+      "base_commit": "0df94ff7097961e92fd7812036a24b145bc13ca8",
+      "image": "swebench/sweb.eval.x86_64.astropy_1776_astropy-13579:latest"
+    },
+    {
+      "instance_id": "django__django-13449",
+      "repo": "django/django",
+      "version": "3.2",
+      "base_commit": "2a55431a5678af52f669ffe7dff3dd0bd21727f8",
+      "image": "swebench/sweb.eval.x86_64.django_1776_django-13449:latest"
+    }
+  ]
+}
