@@ -380,6 +380,40 @@ arm, and the 0.5 threshold was chosen after seeing the failure (see the threats
 above). It shows the policy can close the gap on a task where the gap is real; a
 held-out set of discriminating tasks is what would turn that into a rate.
 
+### 8.3 Candidate search without a held-out win
+
+To test whether the `0.5` defer threshold generalizes, we drafted six additional
+standalone tasks across range merging, keyed single-flight, safe redirects, quoted
+configuration parsing, stable topological order, and cancellation of queued work.
+The first three were all solved by haiku in every fixed-model run, so they could
+not test whether routing would protect quality. The next three outcomes were:
+
+| candidate | haiku | sonnet | assessment |
+|---|---|---|---|
+| quoted config parser | 2/2 | 1/1 | too easy |
+| stable topological order | 2/2 | 1/1 | too easy |
+| abortable work queue | 1/2 | 1/1 | unstable, not reliable discrimination |
+
+These are exploratory screens, **not** held-out policy evaluations. No task was
+added to the benchmark or routed after seeing these results. The queue check
+initially required the worker to start synchronously even though its contract did
+not; it was corrected, then a known-good asynchronous implementation passed and
+an implementation that ignored abort failed. A deadlocked pending promise exits
+Node with an unsettled-top-level-await warning, which was the observed haiku
+failure; one repeat passed. We cannot call this task a stable separator.
+
+Before the next screen, the harness was hardened: a nonzero or timed-out Claude
+Code process cannot count as PASS even if it left changed files behind, and any
+change to `check.js` or `package.json` invalidates the run. Both guards were
+exercised independently with stub CLI mutations. They prevent counting agent
+failures or modified checks as model quality.
+
+**Status of the central question:** one in-sample task showed the router recover
+quality for less money. Six new candidate screens did not yield an independently
+validated discriminating task. The threshold remains unvalidated out of sample;
+stop tuning it against these attempts, collect real diverse coding tasks, and
+freeze a separate held-out set before reporting a rate.
+
 ## 9. Design implications
 
 1. **Fix the option set before tuning the gate.** A gate is only meaningful
