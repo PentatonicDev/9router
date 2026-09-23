@@ -83,7 +83,10 @@ async function issueText(instanceId) {
 function runAgent(dir, statement) {
   const env = { ...process.env, ANTHROPIC_BASE_URL: BASE, ANTHROPIC_AUTH_TOKEN: KEY };
   for (const key of ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ATTENDED"]) delete env[key];
-  env.CLAUDE_CONFIG_DIR = path.join(dir, ".claude-config");
+  // Outside the checkout on purpose: inside it, `git add -A` sweeps the agent's own
+  // config and session log into the graded patch (measured — six .claude-config
+  // files rode along in a dev-screening prediction).
+  env.CLAUDE_CONFIG_DIR = path.join(WORK, ".claude-config", path.basename(dir));
   const prompt = `${statement}\n\nCorrija esta issue no checkout atual. Nao faca commit. Nao crie nem edite testes. Modifique so o codigo necessario.`;
   const started = Date.now();
   const res = spawnSync("claude", ["-p", prompt, "--model", MODEL, "--permission-mode", "acceptEdits", "--output-format", "text"],
@@ -97,7 +100,10 @@ function patchOf(dir) {
   run("git", ["-C", dir, "add", "-A"]);
   const tracked = run("git", ["-C", dir, "diff", "--cached", "--name-only"]).stdout.split("\n").filter(Boolean);
   const testFiles = tracked.filter((f) => /(^|\/)tests?(\/|$)|(^|\/)testing\//.test(f) || /test_[^/]*\.py$|_test\.py$|conftest\.py$/.test(f));
-  const codeFiles = tracked.filter((f) => !testFiles.includes(f));
+  // Belt and braces for the config dir now living outside the checkout: anything
+  // the agent writes about itself is not part of the fix.
+  const agentFiles = tracked.filter((f) => f.startsWith(".claude-config/") || f.startsWith(".claude/"));
+  const codeFiles = tracked.filter((f) => !testFiles.includes(f) && !agentFiles.includes(f));
   const diff = codeFiles.length
     ? run("git", ["-C", dir, "diff", "--cached", "--binary", "--", ...codeFiles]).stdout
     : "";
