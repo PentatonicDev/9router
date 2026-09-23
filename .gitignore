@@ -52,6 +52,7 @@ source/*
 docs/*
 !docs/ARCHITECTURE.md
 !docs/DECISION-ROUTING.md
+!docs/swebench-subset.json
 test/*
 open-sse/test/*
 RM.vn.md
