@@ -33,6 +33,8 @@ const KEY = arg("key", process.env.NINEROUTER_KEY || "local-only");
 const REPEAT = Number(arg("repeat", "1"));
 const KEEP = process.argv.includes("--keep");
 const REPORT = arg("report", null);
+// Comma-separated task ids, so a discrimination screen can run one task per model.
+const ONLY = arg("only", null)?.split(",") ?? null;
 
 if (!MODEL) {
   console.error("--model is required (the combo name the harness should ask for)");
@@ -63,6 +65,19 @@ const TASKS = [
     files: {
       "slug.js": "// slugify(text): minusculas, espacos viram '-', remove tudo que nao for [a-z0-9-]\nexport function slugify(text) {\n  throw new Error(\"nao implementado\");\n}\n",
       "check.js": 'import { slugify } from "./slug.js";\nconst cases = [["Hello World", "hello-world"], ["  A  B  ", "a-b"], ["Caf\\u00e9 & Bar!", "caf-bar"], ["", ""]];\nfor (const [input, want] of cases) {\n  let got;\n  try { got = slugify(input); } catch (e) { console.log(`FAIL: slugify(${JSON.stringify(input)}) lancou: ${e.message}`); process.exit(1); }\n  if (got !== want) { console.log(`FAIL: slugify(${JSON.stringify(input)}) = ${JSON.stringify(got)}, esperado ${JSON.stringify(want)}`); process.exit(1); }\n}\nconsole.log("OK");\n',
+      "package.json": '{"type":"module"}\n',
+    },
+    check: ["node", "check.js"],
+  },
+  {
+    // Candidate discriminating task: right-associative ** and unary minus binding
+    // looser than ** are the rules a quick parser gets wrong. Only counts as a
+    // quality probe once fixed-model runs show haiku failing and sonnet passing.
+    id: "t4-expr",
+    prompt: "Implemente a funcao evaluate em expr.js: um avaliador de expressoes aritmeticas. Leia check.js para o comportamento exato e rode 'node check.js' ate passar. Nao execute codigo dinamicamente.",
+    files: {
+      "expr.js": "// evaluate(src): avalia uma expressao aritmetica e devolve um number.\n// Operadores: + - * / % ** e parenteses. Menos unario permitido.\nexport function evaluate(src) {\n  throw new Error(\"nao implementado\");\n}\n",
+      "check.js": 'import fs from "node:fs";\nimport { evaluate } from "./expr.js";\nconst cases = [["1+2*3", 7], ["(1+2)*3", 9], ["2**3**2", 512], ["-2**2", -4], ["10%4", 2], ["8/2/2", 2], ["2*-3", -6], ["-(3+4)", -7], ["2**-1", 0.5], ["1-2-3", -4]];\nfor (const [src, want] of cases) {\n  let got;\n  try { got = evaluate(src); } catch (e) { console.log(`FAIL: evaluate(${JSON.stringify(src)}) lancou: ${e.message}`); process.exit(1); }\n  if (got !== want) { console.log(`FAIL: evaluate(${JSON.stringify(src)}) = ${got}, esperado ${want}`); process.exit(1); }\n}\nconst code = fs.readFileSync("expr.js", "utf8").replace(/\\/\\*[\\s\\S]*?\\*\\//g, "").replace(/\\/\\/.*$/gm, "");\nif (/\\beval\\s*\\(|\\bFunction\\s*\\(/.test(code)) { console.log("FAIL: executou codigo dinamicamente"); process.exit(1); }\nconsole.log("OK");\n',
       "package.json": '{"type":"module"}\n',
     },
     check: ["node", "check.js"],
@@ -102,7 +117,7 @@ const runs = [];
 console.log(`bench-harness → ${BASE} · harness asks for "${MODEL}" · ${REPEAT}x per task\n`);
 console.log(`${pad("task", 12)} ${pad("run", 4)} ${pad("check", 6)} ${pad("ms", 8)} note`);
 
-for (const task of TASKS) {
+for (const task of TASKS.filter((t) => !ONLY || ONLY.includes(t.id))) {
   for (let i = 1; i <= REPEAT; i++) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `bench-${task.id}-`));
     materialize(task, dir);
