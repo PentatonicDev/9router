@@ -21,6 +21,9 @@ import {
   normalizeDecisionConfig,
   resolveDecisionTarget,
   decideComboModel,
+  sessionKey,
+  readHeld,
+  rememberServed,
   rankPool,
   availableDecisionPool,
   decideTool as decideToolCore,
@@ -203,6 +206,7 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
   // the model it would actually serve. Resolved here because only this layer can
   // read a combo's members.
   let result;
+  const session = sessionKey(comboName, body);
   try {
     const ranked = await rankPool(models, (name) => getComboModels(name, comboOwner));
     const { pool, costOf } = await availableDecisionPool(ranked, { apiKey, settings, comboOwner, allowedConnectionIds });
@@ -222,6 +226,7 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
       target,
       log,
       previousVerdict: readPreviousVerdict(comboName),
+      held: readHeld(session),
     });
   } catch (error) {
     log.warn("DECISION", `model decision failed, pool order unchanged: ${error.message}`);
@@ -235,6 +240,7 @@ async function orderComboModels({ body, models, comboName, strategy, settings, a
     log.info("DECISION", `shadow: "${comboName}" would use ${result.decision?.model || "(unchanged)"}`);
     return unchanged;
   }
+  rememberServed(session, result.models[0]);
   return { models: result.models, deliberation, decision: result.decision || null };
 }
 

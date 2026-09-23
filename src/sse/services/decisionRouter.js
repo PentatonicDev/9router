@@ -5,6 +5,7 @@
 //
 // The pure parts live in open-sse/decision/ and import nothing from src/.
 
+import { createHash } from "node:crypto";
 import REGISTRY from "open-sse/providers/registry/index.js";
 import { getProviderCredentials } from "./auth.js";
 import { askJev, decisionUrlFor } from "open-sse/decision/jev.js";
@@ -181,10 +182,24 @@ export const DEFER_DELIBERATION = 0.5;
  * the cheapest is the next tier up. Null when the verdict was not usable at all or
  * the step reads as mechanical — then the pool order stands.
  */
+const DOUBT = ["no_favourite", "awaiting_confirmation", "signals_disagree"];
+
 export function deferUpOnDoubt(decision, candidates) {
-  if (!["no_favourite", "awaiting_confirmation", "signals_disagree"].includes(decision?.reason)) return null;
+  if (!DOUBT.includes(decision?.reason)) return null;
   if (!(decision.deliberation >= DEFER_DELIBERATION)) return null;
   return candidates[1] || null;
+}
+
+/**
+ * A session already escalated keeps its tier through a turn jev cannot call. Mid-session
+ * states read as tool traffic and jev abstains on most of them; dropping to the pool
+ * head there sent hard tasks back to the cheapest model (measured: s o o o s o s s h h
+ * on a task the escalated turns were solving) and rewrote the prompt cache each time.
+ * A clear verdict still moves the session either way — only doubt holds.
+ */
+export function holdOnDoubt(decision, held, candidates) {
+  if (!DOUBT.includes(decision?.reason)) return null;
+  return held && held !== candidates[0] && candidates.includes(held) ? held : null;
 }
 
 export function decisionCandidates(pool) {
@@ -220,7 +235,7 @@ const ask = (target, config, state, questions, log) =>
  * unapplied decision is not an error: the caller's fallback loop walks the rest of
  * the list, so a wrong pick costs one attempt rather than a failure.
  */
-export async function decideComboModel({ body, models, comboName, config, target, log, previousVerdict = null, ranked = null, costOf = priceOf, fallback = null }) {
+export async function decideComboModel({ body, models, comboName, config, target, log, previousVerdict = null, held = null, ranked = null, costOf = priceOf, fallback = null }) {
   // Cheapest first, and the list both the question and the verdict are served from.
   // The question MUST be built over this pool: for a combo-of-combos `models` holds
   // tier names, so asking with those and validating against the expanded pool has
@@ -253,13 +268,17 @@ export async function decideComboModel({ body, models, comboName, config, target
   await recordUsage({ response, log, target, verdict: verdictMeta(decision, { kind: "model", comboName }) });
 
   if (!decision.apply) {
+    const tier = (model) => candidates.indexOf(model);
     const deferred = deferUpOnDoubt(decision, candidates);
-    if (deferred) {
-      log?.info?.("DECISION", `model: ${deferred} for "${comboName}" (deferred up: ${decision.reason}, deliberar ${fmt(decision.deliberation)}, ${response.latencyMs}ms)`);
+    const kept = holdOnDoubt(decision, held, candidates);
+    const up = kept && (!deferred || tier(kept) > tier(deferred)) ? kept : deferred;
+    if (up) {
+      const reason = up === kept ? "held" : "deferred_up";
+      log?.info?.("DECISION", `model: ${up} for "${comboName}" (${reason}: ${decision.reason}, deliberar ${fmt(decision.deliberation)}, ${response.latencyMs}ms)`);
       return {
-        models: [deferred, ...pool.filter((m) => m !== deferred), ...(fallback || [])],
-        decision: { ...decision, deferredTo: deferred },
-        reason: "deferred_up",
+        models: [up, ...pool.filter((m) => m !== up), ...(fallback || [])],
+        decision: { ...decision, deferredTo: up },
+        reason,
       };
     }
     log?.info?.("DECISION", `model: no change (${decision.reason}, strength ${fmt(decision.strength)}, ${response.latencyMs}ms)`);
@@ -386,8 +405,36 @@ export function rememberVerdict(key, decision) {
   else lastVerdicts.delete(key);
 }
 
+/** The model each session was last served, keyed by combo + the session's first user
+ *  turn — the only turn that stays the same while a session runs. Keyed by combo alone,
+ *  two concurrent sessions would hold each other's tier.
+ *  ponytail: in-process and capped at MAX_SESSIONS, oldest evicted; same ceiling as
+ *  lastVerdicts. */
+const servedBySession = new Map();
+const MAX_SESSIONS = 1000;
+
+export function sessionKey(comboName, body) {
+  const turns = body?.messages || body?.input || body?.contents || [];
+  const anchor = turns.find((msg) => msg?.role === "user");
+  if (!comboName || !anchor) return null;
+  const text = JSON.stringify(anchor.content ?? anchor.parts ?? "");
+  return `${comboName}:${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
+}
+
+export function readHeld(key) {
+  return (key && servedBySession.get(key)) || null;
+}
+
+export function rememberServed(key, model) {
+  if (!key || !model) return;
+  servedBySession.delete(key);
+  servedBySession.set(key, model);
+  if (servedBySession.size > MAX_SESSIONS) servedBySession.delete(servedBySession.keys().next().value);
+}
+
 export function resetVerdicts() {
   lastVerdicts.clear();
+  servedBySession.clear();
 }
 
 /**

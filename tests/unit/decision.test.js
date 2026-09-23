@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decideStrength,
   winnerStrength,
@@ -14,7 +14,7 @@ import { buildState, hasCacheBreakpoint } from "../../open-sse/decision/state.js
 import { buildModelQuestions, buildShortlistQuestions, buildToolQuestions, readShortlist, shortlistTools, SHORTLIST_MAX } from "../../open-sse/decision/questions.js";
 import { injectHint, hintText } from "../../open-sse/decision/injectHint.js";
 import { extractTools, applyToolChoice, supportsToolChoice, UNSUPPORTED_EXECUTORS } from "../../open-sse/decision/tools.js";
-import { rankPool, priceOf, decisionCandidates, normalizeDecisionConfig, deferUpOnDoubt } from "../../src/sse/services/decisionRouter.js";
+import { rankPool, priceOf, decisionCandidates, normalizeDecisionConfig, deferUpOnDoubt, holdOnDoubt, sessionKey, readHeld, rememberServed, resetVerdicts } from "../../src/sse/services/decisionRouter.js";
 import { DECISION_PRESETS } from "../../open-sse/decision/presets.js";
 
 const choice = (pick, confidence, probabilities) => ({
@@ -745,6 +745,46 @@ const target = { url: "https://gw.test/systemone", apiKey: "vk", provider: "verc
 vi.mock("@/lib/db/index.js", () => ({ saveRequestUsage: async () => {} }));
 vi.mock("@/lib/usageDb.js", () => ({ saveRequestDetail: async () => {} }));
 
+describe("holdOnDoubt keeps an escalated session on its tier", () => {
+  const candidates = ["kr/claude-haiku-4.5", "kr/claude-sonnet-5", "kr/claude-opus-5"];
+
+  it("holds the tier a session was served when jev cannot call the turn", () => {
+    for (const reason of ["no_favourite", "awaiting_confirmation", "signals_disagree"]) {
+      expect(holdOnDoubt({ reason, deliberation: 0.1 }, "kr/claude-opus-5", candidates)).toBe("kr/claude-opus-5");
+    }
+  });
+
+  it("has nothing to hold for a session on the cheapest tier, or none yet", () => {
+    expect(holdOnDoubt({ reason: "no_favourite" }, "kr/claude-haiku-4.5", candidates)).toBeNull();
+    expect(holdOnDoubt({ reason: "no_favourite" }, null, candidates)).toBeNull();
+  });
+
+  it("never holds a model the pool no longer offers, nor overrides an unusable verdict", () => {
+    expect(holdOnDoubt({ reason: "no_favourite" }, "kr/claude-fable-5", candidates)).toBeNull();
+    expect(holdOnDoubt({ reason: "no_usable_pick" }, "kr/claude-opus-5", candidates)).toBeNull();
+  });
+});
+
+describe("sessionKey", () => {
+  afterEach(() => resetVerdicts());
+  const body = (task, extra = []) => ({ messages: [{ role: "user", content: task }, ...extra] });
+
+  it("stays the same while a session appends turns, and differs between sessions", () => {
+    const a = sessionKey("coding", body("fix the parser"));
+    expect(sessionKey("coding", body("fix the parser", [{ role: "assistant", content: "ok" }, { role: "user", content: "go" }]))).toBe(a);
+    expect(sessionKey("coding", body("fix the cache"))).not.toBe(a);
+    expect(sessionKey("other", body("fix the parser"))).not.toBe(a);
+  });
+
+  it("remembers per session, so two concurrent sessions do not share a tier", () => {
+    const a = sessionKey("coding", body("hard task"));
+    const b = sessionKey("coding", body("easy task"));
+    rememberServed(a, "kr/claude-opus-5");
+    expect(readHeld(a)).toBe("kr/claude-opus-5");
+    expect(readHeld(b)).toBeNull();
+  });
+});
+
 describe("decideComboModel asks over the pool it validates against", () => {
   it("offers the expanded models as the Choice options, not the nested combo names", async () => {
     const { decideComboModel } = await import("../../src/sse/services/decisionRouter.js");
@@ -868,5 +908,56 @@ describe("decideComboModel asks over the pool it validates against", () => {
     expect(out.decision.reason).not.toBe("no_usable_pick");
     expect(out.models[0]).toBe("cc/claude-opus-5");
     vi.unstubAllGlobals();
+  });
+});
+
+describe("decideComboModel holds an escalated session through doubt", () => {
+  const pool = ["kr/claude-haiku-4.5", "kr/claude-sonnet-5", "kr/claude-opus-5"];
+  const answer = (probabilities, noul) => new Response(JSON.stringify({
+    model: "typesafe-ai/jev",
+    answers: {
+      model: { type: "choice", choice: Object.entries(probabilities).sort((x, y) => y[1] - x[1])[0][0], probabilities },
+      needs_reasoning: { type: "noul", noul },
+    },
+    usage: { input_tokens: 10, output_tokens: 5 },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  const run = async (probabilities, noul, held) => {
+    const { decideComboModel } = await import("../../src/sse/services/decisionRouter.js");
+    vi.stubGlobal("fetch", vi.fn(async () => answer(probabilities, noul)));
+    try {
+      return await decideComboModel({
+        body: { messages: [{ role: "user", content: "fix it" }] },
+        models: pool, ranked: pool, comboName: "coding",
+        config: normalizeDecisionConfig({ mode: "enforce" }), target, log: {}, held,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  };
+  // The logged shape: a near-uniform answer on a tool-traffic turn, deliberation low.
+  const vague = { "kr/claude-haiku-4.5": 0.39, "kr/claude-sonnet-5": 0.34, "kr/claude-opus-5": 0.27 };
+
+  it("stays on opus instead of dropping to the cheapest model", async () => {
+    const out = await run(vague, 0.44, "kr/claude-opus-5");
+    expect(out.models[0]).toBe("kr/claude-opus-5");
+    expect(out.reason).toBe("held");
+  });
+
+  it("without a held tier the same answer still serves the pool head", async () => {
+    const out = await run(vague, 0.44, null);
+    expect(out.models[0]).toBe("kr/claude-haiku-4.5");
+  });
+
+  it("takes the higher of held and deferred", async () => {
+    expect((await run(vague, 0.9, "kr/claude-opus-5")).models[0]).toBe("kr/claude-opus-5");
+    const up = await run(vague, 0.9, null);
+    expect(up.models[0]).toBe("kr/claude-sonnet-5");
+    expect(up.reason).toBe("deferred_up");
+  });
+
+  it("lets a clear verdict move the session down", async () => {
+    const out = await run({ "kr/claude-haiku-4.5": 0.95, "kr/claude-sonnet-5": 0.04, "kr/claude-opus-5": 0.01 }, 0.1, "kr/claude-opus-5");
+    expect(out.models[0]).toBe("kr/claude-haiku-4.5");
+    expect(out.decision.apply).toBe(true);
   });
 });
