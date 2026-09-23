@@ -51,6 +51,17 @@
 - **Usage**: the Request Details drawer shows the stored request/provider bodies to admin sessions (password login or `ssoAdminEmails`); other sessions and anonymous access with `requireLogin` off keep them redacted.
 - **Observability**: streamed request details record an upstream terminal summary (terminal event, response status, incomplete reason, error, per-event counts) so an empty-output turn shows why it ended; the stored status also flips to `error` when the upstream terminal was a failure.
 
+# v0.5.86 (2026-09-23)
+
+## Features
+- **Xiaomi MiMo**: server-assisted desktop login for headless/Docker deployments, five account clusters (cn/sgp/ams/ru/in), and v2.6 pro/flash/pro-ultraspeed models with dual-route (account service vs. cloud API)
+- **Claude**: add Claude Opus 5.5 support
+- **i18n**: translate React text rewrites via characterData mutation observer
+
+## Fixes
+- **Proxy Pools**: keep request headers intact through Vercel/Cloudflare/Deno relays (spreading a `Headers` instance yielded `{}`, dropping auth and content-type)
+- **Xiaomi MiMo login**: keep the session in the httpOnly cookie only, require dashboard auth on the proxy branch, and stop forwarding authorization headers upstream
+
 # v0.5.85 (2026-09-22)
 
 ## Features
