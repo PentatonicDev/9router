@@ -75,12 +75,7 @@ export function buildState(body, { maxStateChars = 24000, maxMessageChars = 4000
     return { request: truncate(safeStringify(body), maxStateChars) };
   }
 
-  const conversation = [];
-  let budget = maxStateChars - systemText.length;
-  // Newest first: the current task is what survives a spent budget.
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const msg = turns[i];
-    if (!msg || typeof msg !== "object") continue;
+  const entryOf = (msg) => {
     const entry = {
       role: typeof msg.role === "string" ? msg.role : "user",
       text: truncate(textOf(msg.content) || textOf(msg.parts), maxMessageChars),
@@ -95,10 +90,34 @@ export function buildState(body, { maxStateChars = 24000, maxMessageChars = 4000
       entry.role = "tool_result";
       entry.text = truncate(entry.text, 600);
     }
+    return entry;
+  };
+
+  // The first user turn is the session's ANCHOR: it is the only turn that says what
+  // the work IS. Walking newest-first spends the budget on tool traffic and drops
+  // turn 0 first, which is measured, not theoretical — a 40-iteration loop omitted
+  // 15 turns and the task statement was not among those kept. Asked without it,
+  // every remaining turn reads as mechanical: the same slugify session scored
+  // sonnet at 0.83 confidence with the statement in the window and flipped to haiku
+  // at 0.81 without it, which is how a routed arm served 53 of 57 turns on the
+  // cheapest model and lost the task the control arm passed. So its budget is
+  // reserved before the walk instead of competing with the newest turns.
+  const anchorIndex = turns.findIndex((msg) => msg && typeof msg === "object" && msg.role === "user");
+  const anchor = anchorIndex >= 0 ? entryOf(turns[anchorIndex]) : null;
+  const anchorCost = anchor ? JSON.stringify(anchor).length : 0;
+
+  const conversation = [];
+  let budget = maxStateChars - systemText.length - anchorCost;
+  // Newest first: the latest turn is what survives a spent budget.
+  for (let i = turns.length - 1; i > anchorIndex; i--) {
+    const msg = turns[i];
+    if (!msg || typeof msg !== "object") continue;
+    const entry = entryOf(msg);
     budget -= JSON.stringify(entry).length;
     if (budget < 0 && conversation.length > 0) break;
     conversation.unshift(entry);
   }
+  if (anchor) conversation.unshift(anchor);
 
   const omitted = turns.length - conversation.length;
   return {

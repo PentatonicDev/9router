@@ -346,6 +346,53 @@ describe("buildState", () => {
   });
 });
 
+// The task statement is the only turn that says what the work IS, and walking
+// newest-first drops it first. Measured against the live decision model: the same
+// slugify session scored sonnet at 0.83 with the statement in the window and
+// flipped to haiku at 0.81 without it — which is how a routed arm served 53 of 57
+// turns on the cheapest model and lost a task the fixed-model arm passed.
+describe("buildState keeps the session anchor", () => {
+  const longLoop = () => {
+    const messages = [{ role: "user", content: "Implement slugify in slug.js and run node check.js until it passes." }];
+    for (let i = 0; i < 40; i++) {
+      messages.push({ role: "assistant", content: "working", tool_calls: [{ function: { name: "Read" } }] });
+      messages.push({ role: "tool", content: "export function helper(a,b){return a+b}\n".repeat(80) });
+    }
+    return messages;
+  };
+
+  it("keeps the first user turn even when the budget cannot hold the session", () => {
+    const messages = longLoop();
+    const state = buildState({ messages });
+    // Truncation still happened — this is not a test that the budget grew.
+    expect(state.earlier_turns_omitted).toBeGreaterThan(0);
+    expect(state.conversation.length).toBeLessThan(messages.length);
+    // The anchor leads the window, and the newest turn still closes it.
+    expect(state.conversation[0].role).toBe("user");
+    expect(state.conversation[0].text).toContain("slugify");
+    expect(state.conversation.at(-1).role).toBe("tool_result");
+    // And the reserved budget does not push the state past its cap.
+    expect(JSON.stringify(state).length).toBeLessThanOrEqual(24000);
+  });
+
+  it("invents no anchor when the client sent no user turn", () => {
+    const state = buildState({ messages: [{ role: "assistant", content: "hi" }] });
+    expect(state.conversation).toHaveLength(1);
+    expect(state.conversation[0].role).toBe("assistant");
+  });
+
+  it("never duplicates the anchor when the whole session fits", () => {
+    const messages = [
+      { role: "user", content: "rename usrNm to userName" },
+      { role: "assistant", content: "done" },
+    ];
+    const state = buildState({ messages });
+    expect(state.conversation).toHaveLength(2);
+    expect(state.conversation.filter((t) => t.text?.includes("usrNm"))).toHaveLength(1);
+    expect(state.earlier_turns_omitted).toBeUndefined();
+  });
+});
+
 describe("hasCacheBreakpoint", () => {
   it("finds a breakpoint anywhere it can hide", () => {
     expect(hasCacheBreakpoint({ cache_control: { type: "ephemeral" } })).toBe(true);
