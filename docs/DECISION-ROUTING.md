@@ -1,9 +1,15 @@
 # Small-model routing for coding agents: the option set and the premise decide, not the gate
 
-Two findings, both arrived at by raising N until a comfortable result broke:
-the pool must not contain near-duplicates (§2), and the state the router is asked
-over must keep the turn that says what the work *is* (§2.1). Neither is a threshold
-you can tune, and neither is visible in a confidence score.
+Three findings, each arrived at by a measurement that broke a comfortable result:
+the pool must not contain near-duplicates (§2); the state the router is asked over
+must keep the turn that says what the work *is* (§2.1); and when the router
+abstains on a step that needs thought, the fallback must not be the cheapest model
+(§8.2). None is a threshold you can tune, and none is visible in a confidence score.
+
+On the one task where the cheap model measurably fails (§8.2), the routed combo
+matched the fixed strong model at 3/3 for 64% less. That is n=3 on one task: it
+shows the policy *can* preserve quality where it matters, not that it does in
+general.
 
 A System One model (jev, ~3k input tokens per call, $0.042/M) decides which model
 of a pool serves each turn of a real coding agent, how far a tool verdict may go,
@@ -12,8 +18,8 @@ was measured, how, and which claims the measurements do *not* support.
 
 Measurements below combine live provider calls with explicitly labelled
 synthetic conversation probes and local regression tests, all run on 2026-09-23.
-Only the Claude Code A/B used real agent trajectories; no production decision
-state was captured for the 43 routed turns.
+Only the Claude Code A/B runs used real agent trajectories; no full decision state
+was captured for the 43 routed turns of §1, though §8.2's verdicts were recorded.
 
 ## 1. The result, and the bug that raising N exposed
 
@@ -271,10 +277,14 @@ and can run back to back with no settings flip between them.
 **Threats to validity.**
 - *n=9 per arm, and the intervals still overlap* (56–98% vs 45–94%). No quality
   claim is supported in either direction; the report prints that caveat.
-- *No validated discrimination.* Every routed turn used haiku. None of the tasks
-  was established by repeated fixed-model runs to separate haiku from sonnet;
-  this harness cannot estimate whether routing protects quality on hard tasks.
-- *Three tasks, one repo shape.* Small and self-contained; they do not exercise long
+- *One discriminating task, n=3.* §8.2 adds a task where fixed-model runs separate
+  haiku (1/3) from sonnet (3/3). That is one task, three repeats per arm; it shows
+  the router *can* preserve quality there, not a general rate.
+- *The threshold was set after seeing the failure.* `DEFER_DELIBERATION = 0.5`
+  sits just under the lowest deliberation observed on the failing task (0.50).
+  The rule was re-checked on the three earlier tasks for regressions, but it has
+  not been validated on a held-out task.
+- *Four tasks, one repo shape.* Small and self-contained; they do not exercise long
   multi-file sessions where cache behaviour dominates.
 - *One provider account.* Rate-limit state and prefill latency are Kiro-specific.
 - *Cost is list-price arithmetic*, not an invoice: a flat-plan account is scored at
@@ -312,9 +322,63 @@ comes from the direct probe, not from this harness: a 40-iteration session whose
 turn 0 asks for multi-tenant isolation across auth, DB scoping, cache keys and rate
 limits returned `kr/claude-opus-5` at strength 0.91 and deliberation 0.73 through
 the live router after the fix. No pre-fix request with that exact state was run,
-so this is evidence of escalation, not evidence that the fix caused it. Closing
-the quality-evaluation gap needs a task set with at least one item a cheap model
-reliably fails; none has been validated yet.
+so this is evidence of escalation, not evidence that the fix caused it. §8.2 closes
+part of this gap with a task where a cheap model measurably fails.
+
+## 8.2 A task where the cheap model fails, and a third defect
+
+**The task.** Implement an arithmetic evaluator without dynamic execution, pinned by
+a check whose ten cases include `2**3**2 = 512` (right-associative power),
+`-2**2 = -4` (unary minus binds looser than power) and `2**-1 = 0.5`. Before any
+model ran, the checker itself was validated: a correct recursive-descent parser
+passes; the same parser with left-associative power fails; and a lookup table that
+answers every case — so arithmetic cannot fail — is rejected when it calls `eval`
+or `Function` in any of the tested spellings, while a mention only in a comment and
+an identifier named `evaluator` are both accepted.
+
+**Screening with fixed models**, three repeats each, same harness:
+
+| model | pass | failures |
+|---|---|---|
+| haiku-4.5 | 1/3 | `-2**2` returned 4; `2**-1` returned 0 |
+| sonnet-5 | 3/3 | — |
+
+The first attempt at this screen is excluded: the Kiro key had stopped
+authenticating mid-run, so five of six trials exited in under a second with the
+stub untouched. Those were infrastructure failures, not model results.
+
+**Routed, before any change: 0/3.** Every turn went to haiku. The recorded verdicts
+explain why: 19 of 19 abstained — 16 `no_favourite` (strength 0.23–0.34), 3
+`awaiting_confirmation` (0.38–0.51) — while rating deliberation 0.50–0.71. The
+decision model was saying *this needs thought, and I cannot tell which model*, and
+an abstention left the pool in cost order, so the answer defaulted to the cheapest.
+The router was least helpful exactly where it was most needed.
+
+**The fix.** An abstention on a step whose deliberation is at least 0.5 now defers
+to the next candidate up the cost-ordered pool instead of leaving the cheapest in
+front. A verdict that was not usable at all, and a mechanical step, keep the pool
+order. Three mutations cover it.
+
+**Routed, after the change**, on the same live router:
+
+| arm | pass | chat | decision | total | served by |
+|---|---|---|---|---|---|
+| sonnet-5 fixed | 3/3 | $1.90640 | — | $1.90640 | 14 sonnet |
+| routed, before | 0/3 | $0.23850 | $0.00262 | $0.24112 | 19 haiku |
+| routed, after | **3/3** | $0.67999 | $0.00183 | $0.68181 | 8 haiku, 6 sonnet |
+
+**3/3 at −64.2% against the fixed strong model.** The mix is the point: the router
+did not escalate the whole session, only the turns it doubted, and mechanical
+turns stayed on haiku.
+
+**Regression check on the earlier tasks.** The same rule re-run on the three easy
+tasks: 7/9 at −86.5% against fixed sonnet, with 3 of 44 calls moved to sonnet. The
+rule does not tax the mechanical work it should leave alone.
+
+**What this does and does not establish.** It is one discriminating task at n=3 per
+arm, and the 0.5 threshold was chosen after seeing the failure (see the threats
+above). It shows the policy can close the gap on a task where the gap is real; a
+held-out set of discriminating tasks is what would turn that into a rate.
 
 ## 9. Design implications
 
@@ -343,11 +407,20 @@ reliably fails; none has been validated yet.
    capture enough state to attribute that difference to it.
 10. **A benchmark without validated discrimination cannot test quality preservation.**
     Include tasks where repeated fixed-model runs establish a quality gap between
-    cheap and strong models before evaluating whether routing closes it.
+    cheap and strong models before evaluating whether routing closes it. Here, the
+    first such task was also the one that exposed the next defect.
+11. **Abstention is doubt, not a verdict for cheap.** When the gate abstains on a
+    step the decision model itself rates as needing thought, defer up a tier. A
+    cost-ordered fallback silently turns "I don't know" into "use the weakest".
 
 ## 10. Reproducing
 
 ```bash
+# both arms, report files for the join
+# screen a task first: it only tests quality if the fixed models disagree
+node scripts/bench-harness.mjs --model kr/claude-haiku-4.5 --only t4-expr --repeat 3 --report /tmp/cheap.json
+node scripts/bench-harness.mjs --model kr/claude-sonnet-5  --only t4-expr --repeat 3 --report /tmp/strong.json
+
 # both arms, report files for the join
 node scripts/bench-harness.mjs --model kr/claude-sonnet-5 --repeat 3 --report /tmp/control.json
 node scripts/bench-harness.mjs --model coding-auto       --repeat 3 --report /tmp/routed.json
