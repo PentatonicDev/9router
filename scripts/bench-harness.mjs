@@ -17,6 +17,7 @@
 // client cannot see what the router spent on its behalf.
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -103,7 +104,7 @@ function runHarness(dir, prompt) {
   const started = Date.now();
   const res = spawnSync("claude", ["-p", prompt, "--model", MODEL, "--permission-mode", "acceptEdits", "--output-format", "text"],
     { cwd: dir, env, timeout: 300000, encoding: "utf8" });
-  return { ms: Date.now() - started, out: `${res.stdout || ""}${res.stderr || ""}` };
+  return { ms: Date.now() - started, status: res.status, error: res.error?.message || null, out: `${res.stdout || ""}${res.stderr || ""}` };
 }
 
 const pad = (v, n) => String(v ?? "").padEnd(n).slice(0, n);
@@ -127,20 +128,28 @@ for (const task of TASKS.filter((t) => !ONLY || ONLY.includes(t.id))) {
       fs.rmSync(dir, { recursive: true, force: true });
       continue;
     }
+    const checks = ["check.js", "package.json"].filter((name) => Object.hasOwn(task.files, name));
+    const digest = (name) => {
+      try { return createHash("sha256").update(fs.readFileSync(path.join(dir, name))).digest("hex"); }
+      catch { return null; }
+    };
+    const originalChecks = checks.map(digest);
     const startedAt = new Date().toISOString();
-    const { ms, out } = runHarness(dir, task.prompt);
+    const { ms, out, status, error } = runHarness(dir, task.prompt);
     const endedAt = new Date().toISOString();
-    const after = spawnSync(task.check[0], task.check.slice(1), { cwd: dir, encoding: "utf8" });
-    const ok = after.status === 0;
+    const checkIntact = checks.every((name, index) => digest(name) === originalChecks[index]);
+    const after = checkIntact ? spawnSync(task.check[0], task.check.slice(1), { cwd: dir, encoding: "utf8" }) : null;
+    const ok = status === 0 && !error && checkIntact && after?.status === 0;
+    const failure = error || (status !== 0 ? `claude exit ${status}` : !checkIntact ? "check altered" : (after?.stdout || after?.stderr || out).split("\n")[0]?.slice(0, 60) || "check failed");
     total++;
     if (ok) passed++;
-    runs.push({ task: task.id, run: i, model: MODEL, ok, ms, startedAt, endedAt });
-    console.log(`${pad(task.id, 12)} ${pad(i, 4)} ${pad(ok ? "PASS" : "FAIL", 6)} ${pad(ms, 8)} ${ok ? "" : (after.stdout || after.stderr || out).split("\n")[0]?.slice(0, 60) || ""}`);
+    runs.push({ task: task.id, run: i, model: MODEL, ok, ms, startedAt, endedAt, status, error, checkIntact });
+    console.log(`${pad(task.id, 12)} ${pad(i, 4)} ${pad(ok ? "PASS" : "FAIL", 6)} ${pad(ms, 8)} ${ok ? "" : failure}`);
     if (!KEEP) fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-console.log(`\n${passed}/${total} passed across ${TASKS.length} tasks.`);
+console.log(`\n${passed}/${total} passed across ${ONLY ? TASKS.filter((task) => ONLY.includes(task.id)).length : TASKS.length} tasks.`);
 if (REPORT) {
   fs.writeFileSync(REPORT, JSON.stringify({ model: MODEL, base: BASE, passed, total, runs }, null, 2));
   console.log(`report → ${REPORT}`);
