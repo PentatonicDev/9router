@@ -271,9 +271,9 @@ and can run back to back with no settings flip between them.
 **Threats to validity.**
 - *n=9 per arm, and the intervals still overlap* (56–98% vs 45–94%). No quality
   claim is supported in either direction; the report prints that caveat.
-- *The task set cannot fall.* Every turn routed to haiku and haiku is adequate for
-  all three tasks, so the pass rate has no headroom to show a router protecting
-  quality. This is the binding limitation, not N (see 8.1).
+- *No validated discrimination.* Every routed turn used haiku. None of the tasks
+  was established by repeated fixed-model runs to separate haiku from sonnet;
+  this harness cannot estimate whether routing protects quality on hard tasks.
 - *Three tasks, one repo shape.* Small and self-contained; they do not exercise long
   multi-file sessions where cache behaviour dominates.
 - *One provider account.* Rate-limit state and prefill latency are Kiro-specific.
@@ -301,19 +301,20 @@ that difference is **not** evidence the fix caused a successful solve. Cost is
 verdicts applied.
 
 **This harness still cannot demonstrate routing quality, and it is important to say
-why.** All 40 turns were served by haiku, and for these three tasks that is
-defensible: a rename, a one-line arithmetic fix and a small pure function are
-mechanical, and the surviving failure is a spec subtlety (`Café` → `caf`, not
-`cafe`) that both arms hit, so it measures the task and not the route. A pass rate
-that cannot fall cannot show a router protecting quality.
+why.** All 40 turns were served by haiku. These tasks are a rename, an arithmetic
+fix, and a small pure function; none was pre-validated as a task that haiku fails
+reliably while sonnet passes. Both arms sometimes miss the accented-character
+requirement (`Café` → `caf`, not `cafe`). The results measure solve rates on these
+three tasks, not whether routing protects quality on hard tasks.
 
 The evidence that the anchored state routes *up* when a task warrants it therefore
 comes from the direct probe, not from this harness: a 40-iteration session whose
 turn 0 asks for multi-tenant isolation across auth, DB scoping, cache keys and rate
-limits returns `kr/claude-opus-5` at strength 0.91 and deliberation 0.73 through the
-live router — the same shape that returned haiku before the fix. Closing this gap
-needs a task set with at least one item a cheap model reliably fails, which is the
-single most valuable addition to this methodology and is not yet done.
+limits returned `kr/claude-opus-5` at strength 0.91 and deliberation 0.73 through
+the live router after the fix. No pre-fix request with that exact state was run,
+so this is evidence of escalation, not evidence that the fix caused it. Closing
+the quality-evaluation gap needs a task set with at least one item a cheap model
+reliably fails; none has been validated yet.
 
 ## 9. Design implications
 
@@ -340,9 +341,9 @@ single most valuable addition to this methodology and is not yet done.
    at n=9 they differed by two successes and the intervals still overlapped.
    Truncation was a real defect found during investigation, but the run did not
    capture enough state to attribute that difference to it.
-10. **A benchmark whose pass rate cannot fall cannot validate a router.** Include at
-    least one task a cheap model reliably fails, or the quality axis is untested no
-    matter how many repeats are run.
+10. **A benchmark without validated discrimination cannot test quality preservation.**
+    Include tasks where repeated fixed-model runs establish a quality gap between
+    cheap and strong models before evaluating whether routing closes it.
 
 ## 10. Reproducing
 
