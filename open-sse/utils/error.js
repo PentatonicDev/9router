@@ -1,5 +1,6 @@
 import { ERROR_TYPES, DEFAULT_ERROR_MESSAGES } from "../config/errorConfig.js";
 import { FORMATS } from "../translator/formats.js";
+import { upstreamResponseHeaders } from "./upstreamHeaders.js";
 
 const EXPOSED_HEADERS = [
   "Retry-After",
@@ -136,12 +137,18 @@ export function serializeErrorDescriptor(descriptor, format = FORMATS.OPENAI) {
   };
 }
 
-function responseHeaders(descriptor, format) {
+function responseHeaders(descriptor, format, upstreamHeaders = null) {
   const headers = new Headers({
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Expose-Headers": EXPOSED_HEADERS,
   });
+  const allowedUpstreamHeaders = upstreamResponseHeaders(upstreamHeaders instanceof Headers ? upstreamHeaders : new Headers(upstreamHeaders || {}));
+  for (const [name, value] of Object.entries(allowedUpstreamHeaders)) headers.set(name, value);
+  // A forwarded header a browser client cannot read is a header it does not have:
+  // the expose list has to name every one actually set, not just the static set.
+  const exposed = Object.keys(allowedUpstreamHeaders).filter((name) => !EXPOSED_HEADERS.toLowerCase().includes(name));
+  if (exposed.length) headers.set("Access-Control-Expose-Headers", [EXPOSED_HEADERS, ...exposed].join(", "));
   headers.set(format === FORMATS.CLAUDE ? "request-id" : "X-Request-Id", descriptor.request_id);
   const routing = descriptor.routing;
   if (routing.retryAfter !== undefined) headers.set("Retry-After", String(routing.retryAfter));
@@ -152,10 +159,10 @@ function responseHeaders(descriptor, format) {
   return headers;
 }
 
-export function responseFromErrorDescriptor(descriptor, format = FORMATS.OPENAI) {
+export function responseFromErrorDescriptor(descriptor, format = FORMATS.OPENAI, upstreamHeaders = null) {
   return new Response(JSON.stringify(serializeErrorDescriptor(descriptor, format)), {
     status: descriptor.status,
-    headers: responseHeaders(descriptor, format),
+    headers: responseHeaders(descriptor, format, upstreamHeaders),
   });
 }
 
@@ -170,7 +177,7 @@ export function responseFromRoutingCandidate(candidate, options = {}) {
       retryAtMs: candidate.retryAtMs,
     },
   });
-  return responseFromErrorDescriptor(descriptor, options.errorFormat || FORMATS.OPENAI);
+  return responseFromErrorDescriptor(descriptor, options.errorFormat || FORMATS.OPENAI, options.upstreamHeaders);
 }
 
 export function withRequestId(response, context) {
@@ -181,11 +188,6 @@ export function withRequestId(response, context) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-/**
- * Error payload for a stream that already answered HTTP 200 and failed mid-flight,
- * shaped for the client format so formatSSE frames it as that format's error event.
- * Defaults to 502 because a mid-stream failure carries no status of its own.
- */
 export function errorStreamChunk(format, message, statusCode = 502) {
   const body = serializeErrorDescriptor(createErrorDescriptor(statusCode, message), format);
   if (format === FORMATS.CLAUDE) return { type: "error", error: body.error };
@@ -195,7 +197,7 @@ export function errorStreamChunk(format, message, statusCode = 502) {
 
 export function errorResponse(statusCode, message, options = {}) {
   const descriptor = options.descriptor || createErrorDescriptor(statusCode, message, options);
-  return responseFromErrorDescriptor(descriptor, options.errorFormat || FORMATS.OPENAI);
+  return responseFromErrorDescriptor(descriptor, options.errorFormat || FORMATS.OPENAI, options.upstreamHeaders);
 }
 
 export function resetsAtFromHeaders(response) {
@@ -244,22 +246,20 @@ export async function parseUpstreamError(response, executor = null) {
     message = json?.error?.message ?? json?.message;
   } catch {}
 
-  return {
-    statusCode: response.status,
-    message: sanitizePublicMessage(message, DEFAULT_ERROR_MESSAGES[response.status] || `Upstream error: ${response.status}`),
-    resetsAtMs: headerResetsAtMs,
-  };
+  const messageStr = typeof message === "string" ? message : JSON.stringify(message);
+  const finalMessage = sanitizePublicMessage(messageStr, DEFAULT_ERROR_MESSAGES[response.status] || `Upstream error: ${response.status}`);
+  return { statusCode: response.status, message: finalMessage, resetsAtMs: headerResetsAtMs };
 }
 
 export function createErrorResult(statusCode, message, resetsAtMs, options = {}) {
   const descriptor = createErrorDescriptor(statusCode, message, { ...options, retryAtMs: resetsAtMs });
   return {
     success: false,
-    status: statusCode,
+    status: descriptor.status,
     error: descriptor.error.message,
     resetsAtMs,
     descriptor,
-    response: responseFromErrorDescriptor(descriptor, options.errorFormat || FORMATS.OPENAI),
+    response: responseFromErrorDescriptor(descriptor, options.errorFormat || FORMATS.OPENAI, options.upstreamHeaders || options),
   };
 }
 
@@ -270,7 +270,7 @@ export function unavailableResponse(statusCode, message, retryAfter, retryAfterH
     retryAtMs,
     routing: { ...(options.routing || {}), retryAtMs },
   });
-  return responseFromErrorDescriptor(descriptor, options.errorFormat || FORMATS.OPENAI);
+  return responseFromErrorDescriptor(descriptor, options.errorFormat || FORMATS.OPENAI, options.upstreamHeaders || options);
 }
 
 export function formatProviderError(error, provider, model, statusCode) {

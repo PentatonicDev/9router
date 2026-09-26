@@ -2,15 +2,14 @@
 //
 // Fallback order (first match wins):
 //   1. PROVIDER_PRICING[provider][model]  — provider-specific override
-//   2. Catalog pricing (synced from models.dev every 3h)
-//   3. MODEL_PRICING[model]               — canonical model price (provider-agnostic)
-//   4. PATTERN_PRICING                    — glob pattern match (e.g. "codex-*")
+//   2. FREE_MODEL_NAMESPACES               — upstream bills these at $0
+//   3. Catalog pricing (synced from models.dev every 3h)
+//   4. MODEL_PRICING[model]               — canonical model price (provider-agnostic)
+//   5. PATTERN_PRICING                    — glob pattern match (e.g. "codex-*")
 import { stripBedrockGeoPrefix, bedrockCanonicalModelName } from "./bedrockGeoPrefix.js";
 import { BEDROCK_PRICING } from "./bedrockPricing.js";
 import { resolveProviderAlias } from "../services/model.js";
 
-// Catalog pricing, installed by the server at startup (same globalThis pattern
-// as capabilities.js — each Next.js chunk gets its own module state).
 let pricingCatalogSource = null;
 
 export function setPricingCatalogSource(source) {
@@ -22,6 +21,18 @@ function getPricingCatalogSource() {
   if (pricingCatalogSource) return pricingCatalogSource;
   if (typeof globalThis === "undefined") return null;
   return (pricingCatalogSource = globalThis.__9rPricingCatalogSource || null);
+}
+
+export const FREE_MODEL_NAMESPACES = ["cline-free/"];
+
+export const ZERO_PRICING = {
+  input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0,
+};
+
+export function isFreeModel(model) {
+  if (!model) return false;
+  const lower = String(model).toLowerCase();
+  return FREE_MODEL_NAMESPACES.some((ns) => lower.startsWith(ns));
 }
 
 /**
@@ -383,7 +394,7 @@ export function matchPattern(pattern, model) {
 }
 
 /**
- * Resolve provider override, catalog price, then model/pattern fallback.
+ * Resolve provider override, free namespace, catalog price, then model/pattern fallback.
  *
  * @param {string} provider
  * @param {string} model
@@ -412,7 +423,9 @@ export function getPricingForModel(provider, model) {
     return PROVIDER_PRICING[provider][model];
   }
 
-  // 2. Catalog pricing (synced from models.dev)
+  // Free namespaces must not inherit a paid catalog or canonical model rate.
+  if (isFreeModel(model)) return ZERO_PRICING;
+
   const baseModel = model.includes("/") ? model.split("/").pop() : model;
   const catalogFn = getPricingCatalogSource();
   if (catalogFn) {

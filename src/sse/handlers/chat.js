@@ -16,6 +16,7 @@ import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
 import { getTransform as getPxpipeTransform } from "@/lib/pxpipe/loader.js";
 import { appendPxpipeEvent } from "@/lib/pxpipe/events.js";
 import { createErrorContext, errorResponse, responseFromRoutingCandidate, withRequestId } from "open-sse/utils/error.js";
+import { upstreamResponseHeaders } from "open-sse/utils/upstreamHeaders.js";
 import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "open-sse/services/combo.js";
 import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
@@ -304,6 +305,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
   // Try with available accounts (fallback on errors)
   const excludeConnectionIds = new Set();
+  let lastError = null;
+  let lastStatus = null;
+  let lastHeaders = null;
 
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, {
@@ -315,15 +319,15 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     if (credentials?.noActiveCredentials) {
       log.warn("AUTH", credentials.candidate.message);
-      return responseFromRoutingCandidate(credentials.candidate, errorContext);
+      return responseFromRoutingCandidate(credentials.candidate, { ...errorContext, upstreamHeaders: lastHeaders });
     }
     if (credentials?.allRateLimited) {
       log.warn("CHAT", `[${provider}/${model}] ${credentials.candidate.message} (${credentials.retryAfterHuman})`);
-      return responseFromRoutingCandidate(credentials.candidate, errorContext);
+      return responseFromRoutingCandidate(credentials.candidate, { ...errorContext, upstreamHeaders: lastHeaders });
     }
     if (credentials?.spendCapExceeded) {
       log.warn("AUTH", credentials.candidate.message);
-      return responseFromRoutingCandidate(credentials.candidate, errorContext);
+      return responseFromRoutingCandidate(credentials.candidate, { ...errorContext, upstreamHeaders: lastHeaders });
     }
 
     // Account selection shown in the unified "▶" line (acc:...)
@@ -443,6 +447,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     if (shouldFallback) {
       log.warn("FALLBACK", `⇄ ACC:${credentials.connectionName} UNAVAILABLE (${result.status}) → NEXT ACCOUNT`);
       excludeConnectionIds.add(credentials.connectionId);
+      lastError = result.error;
+      lastStatus = result.status;
+      lastHeaders = upstreamResponseHeaders(result.response?.headers);
       continue;
     }
 

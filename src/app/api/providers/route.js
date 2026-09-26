@@ -209,6 +209,7 @@ export async function POST(request) {
       isActive: true,
       testStatus: testStatus || "unknown",
       owner: await ownerForCreate(body.owner),
+      allowOverwrite: body.id ? true : (body.allowOverwrite === true || body.overwrite === true),
     });
 
     // Hide sensitive fields
@@ -217,6 +218,12 @@ export async function POST(request) {
 
     return NextResponse.json({ connection: result }, { status: 201 });
   } catch (error) {
+    if (error?.code === "PROVIDER_NAME_CONFLICT") {
+      return NextResponse.json(
+        { error: error.message, code: error.code, existingId: error.existingId, existingName: error.existingName },
+        { status: 409 }
+      );
+    }
     console.log("Error creating provider:", error);
     return NextResponse.json({ error: "Failed to create provider" }, { status: 500 });
   }

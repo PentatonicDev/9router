@@ -111,7 +111,7 @@ export async function getProviderConnectionById(id) {
   return rowToConn(row);
 }
 
-// Internal reorder — must be called INSIDE a transaction
+// Internal reorder — must be called inside a transaction.
 async function reorderInTx(db, providerId) {
   const list = (await db.selectFrom("providerConnections").selectAll()
     .where("provider", "=", providerId).execute()).map(rowToConn);
@@ -121,7 +121,10 @@ async function reorderInTx(db, providerId) {
     return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
   });
   for (const [i, c] of list.entries()) {
-    await db.updateTable("providerConnections").set({ priority: i + 1 }).where("id", "=", c.id).execute();
+    const priority = i + 1;
+    if ((c.priority || 0) !== priority) {
+      await db.updateTable("providerConnections").set({ priority }).where("id", "=", c.id).execute();
+    }
   }
 }
 
@@ -134,15 +137,18 @@ export async function createProviderConnection(data) {
   let result;
 
   await db.transaction().execute(async (trx) => {
-    const all = (await trx.selectFrom("providerConnections").selectAll()
-      .where("provider", "=", data.provider).execute()).map(rowToConn);
+    const isApikey = data.authType === "apikey" && !!data.name;
+    let query = trx.selectFrom("providerConnections").selectAll().where("provider", "=", data.provider);
+    if (isApikey) query = query.where("authType", "=", "apikey").where("name", "=", data.name);
+    const all = (await query.execute()).map(rowToConn);
+    const poolSize = all.length;
 
     let existing = null;
     if (data.authType === "oauth" && data.email) {
       const incomingUsername = data.providerSpecificData?.username;
       const incomingWs = data.providerSpecificData?.chatgptAccountId;
       existing = all.find(c => {
-        if (c.authType !== "oauth" || c.email !== data.email) return false;
+        if (c.authType !== "oauth" || c.email !== data.email || (c.owner ?? null) !== owner) return false;
 
         // Codex/OpenAI can issue multiple OAuth grants for the same email.
         // Refresh tokens are rotated single-use; collapsing a new login onto an
@@ -172,11 +178,26 @@ export async function createProviderConnection(data) {
         return true;
       });
     } else if (data.authType === "apikey" && data.name) {
-      existing = all.find(c => c.authType === "apikey" && c.name === data.name);
+      existing = all.find(c => c.authType === "apikey" && c.name === data.name && (c.owner ?? null) === owner);
     }
     // access_token: never dedup — user manages duplicates manually
 
     if (existing) {
+      // Name collision on an apikey connection used to silently replace the
+      // stored apiKey, so a script that reused names ("Key 1", "Key 2", …)
+      // destroyed existing pool entries with no 409 and no warning. Callers that
+      // genuinely mean "update this one" pass allowOverwrite; everyone else gets
+      // a typed error naming the row that would have been replaced. #4311
+      if (data.allowOverwrite === false) {
+        const err = new Error(
+          `A connection named "${existing.name}" already exists for provider "${data.provider}". ` +
+          `Pass allowOverwrite: true to replace it.`
+        );
+        err.code = "PROVIDER_NAME_CONFLICT";
+        err.existingId = existing.id;
+        err.existingName = existing.name;
+        throw err;
+      }
       const normalized = resetHealthStateOnActivation(existing, data);
       // Re-login / re-import must not silently reassign an existing account.
       const merged = { ...existing, ...normalized, owner: existing.owner ?? null, updatedAt: now };
@@ -187,11 +208,14 @@ export async function createProviderConnection(data) {
 
     let connectionName = data.name || null;
     if (!connectionName && (data.authType === "oauth" || data.authType === "access_token")) {
-      connectionName = deriveConnectionName(data, data.email || `Account ${all.length + 1}`);
+      connectionName = deriveConnectionName(data, data.email || `Account ${poolSize + 1}`);
     }
     let connectionPriority = data.priority;
     if (!connectionPriority) {
-      connectionPriority = all.reduce((m, c) => Math.max(m, c.priority || 0), 0) + 1;
+      const maxRow = await trx.selectFrom("providerConnections")
+        .select((eb) => eb.fn.max("priority").as("m"))
+        .where("provider", "=", data.provider).executeTakeFirst();
+      connectionPriority = Number(maxRow?.m || 0) + 1;
     }
 
     const conn = {
@@ -214,7 +238,6 @@ export async function createProviderConnection(data) {
     if (data.email !== undefined) conn.email = data.email;
 
     await upsert(trx, conn);
-    await reorderInTx(trx, data.provider);
     result = conn;
   });
 

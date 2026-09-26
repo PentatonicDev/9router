@@ -37,13 +37,15 @@ afterEach(() => {
   else process.env.DATA_DIR = originalDataDir;
 });
 
+let connectionSequence = 0;
+
 function iamRequest(providerSpecificData, extra = {}) {
   return new Request("https://9router.local/api/providers", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       provider: "bedrock",
-      name: "Bedrock IAM",
+      name: `Bedrock IAM ${++connectionSequence}`,
       defaultModel: "anthropic.claude-sonnet-4-5-20250929-v1:0",
       providerSpecificData: { authMethod: "iam", region: "us-east-1", ...providerSpecificData },
       ...extra,

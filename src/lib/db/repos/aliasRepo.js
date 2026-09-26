@@ -30,8 +30,8 @@ export async function getCustomModels() {
 }
 
 // Atomic upsert inside transaction to prevent duplicate races.
-// Re-adding an existing model updates caps/name without resetting omitted fields.
-export async function addCustomModel({ providerAlias, id, type = "llm", name, caps }) {
+// Re-adding an existing model updates caps/name/transport without resetting omitted fields.
+export async function addCustomModel({ providerAlias, id, type = "llm", name, caps, transport }) {
   const k = customKey(providerAlias, id, type);
   const db = await getDb();
   let added = false;
@@ -40,12 +40,12 @@ export async function addCustomModel({ providerAlias, id, type = "llm", name, ca
       .where("scope", "=", "customModels").where("key", "=", k).executeTakeFirst();
     if (row) {
       const prev = parseJson(row.value) || {};
-      const next = { ...prev, ...(name ? { name } : {}), ...(caps ? { caps } : {}) };
+      const next = { ...prev, ...(name ? { name } : {}), ...(caps ? { caps } : {}), ...(transport ? { transport } : {}) };
       await trx.updateTable("kv").set({ value: stringifyJson(next) })
         .where("scope", "=", "customModels").where("key", "=", k).execute();
       return;
     }
-    const value = stringifyJson({ providerAlias, id, type, name: name || id, ...(caps ? { caps } : {}) });
+    const value = stringifyJson({ providerAlias, id, type, name: name || id, ...(caps ? { caps } : {}), ...(transport ? { transport } : {}) });
     await trx.insertInto("kv").values({ scope: "customModels", key: k, value }).execute();
     added = true;
   });
