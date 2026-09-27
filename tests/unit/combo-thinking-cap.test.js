@@ -9,6 +9,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import { applyThinking } from "../../open-sse/translator/concerns/thinkingUnified.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
+import { stripUnsupportedModalities } from "../../open-sse/translator/concerns/modality.js";
+import { extractRequestConfig } from "../../open-sse/handlers/chatCore/requestDetail.js";
 
 // --- Mocks (must live at module top level — vi.mock/vi.hoisted are hoisted
 // above all imports regardless of where they're written, and a module can
@@ -359,6 +361,33 @@ describe("chat.js: comboModelOptions resolution (F3 — nested combo never inher
     // must read "high" (outer's own map), never "low" leaked from the nested
     // resolution that ran first in the same fallback loop.
     expect(maxLevels).toEqual(["low", "high"]);
+  });
+
+  it("keeps the received body intact when a fallback candidate strips media", async () => {
+    const { handleChat } = await import("../../src/sse/handlers/chat.js");
+    mocks.handleComboChat.mockImplementationOnce(async ({ body, handleSingleModel }) => {
+      await handleSingleModel(body, "openai/gpt-5");
+      return handleSingleModel(body, "openai/gpt-5");
+    });
+    const seen = [];
+    mocks.handleChatCore.mockImplementation(async ({ body, clientRawRequest }) => {
+      seen.push({ raw: clientRawRequest.body, workingContent: body.messages[0].content });
+      if (seen.length === 1) {
+        stripUnsupportedModalities(body, FORMATS.OPENAI, { vision: false, audioInput: true, pdf: true });
+      }
+      return { success: true, response: new Response("ok") };
+    });
+    const image = { type: "image_url", image_url: { url: "https://example.com/image.png" } };
+    const req = new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "combo-wide-cap", messages: [{ role: "user", content: [{ type: "text", text: "look" }, image] }] }),
+    });
+    await handleChat(req);
+
+    expect(seen).toHaveLength(2);
+    expect(extractRequestConfig(seen[0].raw, false).messages[0].content).toContainEqual(image);
+    expect(seen[1].raw.messages[0].content).toContainEqual(image);
+    expect(seen[1].workingContent).toContainEqual(image);
   });
 
   it("combo-wide cap alone clamps every model in the combo to the same level", async () => {

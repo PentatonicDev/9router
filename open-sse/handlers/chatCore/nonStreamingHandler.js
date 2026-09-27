@@ -214,7 +214,7 @@ function toOpenAICompletion(responseBody, targetFormat) {
 /**
  * Handle non-streaming response from provider.
  */
-export async function handleNonStreamingResponse({ providerResponse, provider, errorContext, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log, phases: entryPhases }) {
+export async function handleNonStreamingResponse({ providerResponse, provider, errorContext, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log, phases: entryPhases, session }) {
   trackDone();
   const contentType = providerResponse.headers.get("content-type") || "";
   let responseBody;
@@ -317,14 +317,14 @@ export async function handleNonStreamingResponse({ providerResponse, provider, e
   const phases = { ...(entryPhases || {}) };
   phases.client_complete_ms = Date.now() - (phases.t0 || requestStartTime);
   saveRequestDetail(buildRequestDetail({
-    provider, model, connectionId, apiKey,
+    provider, model, connectionId, apiKey, session,
     // No streaming happened, so there is no first-token time to report. Writing
     // total here made a non-streamed call look like an instant TTFT.
     latency: { ttft: null, total: totalLatency },
     phases,
     upstream: upstreamSummary,
     tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
-    request: extractRequestConfig(body, stream),
+    request: extractRequestConfig(clientRawRequest?.body ?? body, stream),
     providerRequest: finalBody || translatedBody || null,
     providerResponse: responseBody || null,
     response: {

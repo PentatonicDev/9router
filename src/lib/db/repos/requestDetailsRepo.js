@@ -71,11 +71,31 @@ function generateDetailId(model) {
 }
 
 function truncateField(obj, maxSize) {
-  const str = JSON.stringify(obj || {});
+  if (obj == null) return null;
+  const str = JSON.stringify(obj);
   if (str.length > maxSize) {
     return { _truncated: true, _originalSize: str.length, _preview: str.substring(0, 200) };
   }
-  return obj || {};
+  return obj;
+}
+
+function truncateResponse(response, maxSize) {
+  const stored = truncateField(response, maxSize);
+  if (!stored?._truncated || typeof response?.content !== "string") return stored;
+  const { content, thinking, ...rest } = response;
+  const preview = {
+    ...rest, content: content.slice(0, Math.floor(maxSize / 2)),
+    thinking: typeof thinking === "string" ? thinking.slice(0, Math.floor(maxSize / 4)) : thinking,
+    truncated: true,
+  };
+  while (JSON.stringify(preview).length > maxSize) {
+    if (preview.content.length >= (preview.thinking?.length || 0) && preview.content.length) {
+      preview.content = preview.content.slice(0, Math.floor(preview.content.length / 2));
+    } else if (typeof preview.thinking === "string" && preview.thinking.length) {
+      preview.thinking = preview.thinking.slice(0, Math.floor(preview.thinking.length / 2));
+    } else return stored;
+  }
+  return preview;
 }
 
 async function flushToDatabase() {
@@ -110,24 +130,26 @@ async function flushToDatabase() {
             phases: item.phases || undefined,
             comboName: item.comboName || undefined,
             upstream: item.upstream || undefined,
+            session: item.session || undefined,
             tokens: item.tokens || {},
             request: truncateField(item.request, config.maxJsonSize),
             providerRequest: truncateField(item.providerRequest, config.maxJsonSize),
             providerResponse: truncateField(item.providerResponse, config.maxJsonSize),
-            response: truncateField(item.response, config.maxJsonSize),
+            response: truncateResponse(item.response, config.maxJsonSize),
             pxpipe: item.pxpipe || undefined,
           };
 
           const values = {
             id: record.id, timestamp: record.timestamp, provider: record.provider,
             model: record.model, connectionId: record.connectionId,
-            apiKey: item.apiKey || null, status: record.status, data: stringifyJson(record),
+            apiKey: item.apiKey || null, sessionId: record.session?.id || null,
+            status: record.status, data: stringifyJson(record),
           };
           await trx.insertInto("requestDetails").values(values)
             .onConflict((oc) => oc.column("id").doUpdateSet({
               timestamp: values.timestamp, provider: values.provider, model: values.model,
               connectionId: values.connectionId, apiKey: values.apiKey,
-              status: values.status, data: values.data,
+              sessionId: values.sessionId, status: values.status, data: values.data,
             }))
             .execute();
         }
@@ -180,17 +202,22 @@ export async function getRequestDetails(filter = {}) {
     if (filter.provider) q = q.where("provider", "=", filter.provider);
     if (filter.model) q = q.where("model", "=", filter.model);
     if (filter.connectionId) q = q.where("connectionId", "=", filter.connectionId);
+    if (filter.sessionId) q = q.where("sessionId", "=", filter.sessionId);
     if (filter.apiKey) q = q.where("apiKey", "=", filter.apiKey);
     // Visibility scoping (owner-restricted callers): both forms coexist, the
     // single-value ones above stay for the dashboard route's explicit query params.
     // NULL apiKey/connectionId means unattributed/local traffic, which
     // canSeeUsageRow() treats as visible to everyone — so NULL rows must pass
     // this filter too, not just rows matching the visible id list.
-    if (filter.apiKeys?.length) {
-      q = q.where((eb) => eb.or([eb("apiKey", "is", null), eb("apiKey", "in", filter.apiKeys)]));
+    if (filter.apiKeys) {
+      q = filter.apiKeys.length
+        ? q.where((eb) => eb.or([eb("apiKey", "is", null), eb("apiKey", "in", filter.apiKeys)]))
+        : q.where("apiKey", "is", null);
     }
-    if (filter.connectionIds?.length) {
-      q = q.where((eb) => eb.or([eb("connectionId", "is", null), eb("connectionId", "in", filter.connectionIds)]));
+    if (filter.connectionIds) {
+      q = filter.connectionIds.length
+        ? q.where((eb) => eb.or([eb("connectionId", "is", null), eb("connectionId", "in", filter.connectionIds)]))
+        : q.where("connectionId", "is", null);
     }
     if (filter.status) q = q.where("status", "=", filter.status);
     if (filter.startDate) q = q.where("timestamp", ">=", new Date(filter.startDate).toISOString());

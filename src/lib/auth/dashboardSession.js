@@ -23,6 +23,10 @@ function loadJwtSecret() {
 
 const SECRET = new TextEncoder().encode(loadJwtSecret());
 
+export function hashDetailSessionId(parts) {
+  return crypto.createHmac("sha256", SECRET).update(JSON.stringify(parts)).digest("hex");
+}
+
 export function shouldUseSecureCookie(request) {
   const forceSecureCookie = process.env.AUTH_COOKIE_SECURE === "true";
   const forwardedProto = request?.headers?.get?.("x-forwarded-proto");

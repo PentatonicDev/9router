@@ -220,6 +220,17 @@ export function resolveSessionIdentity({ headers, body, connectionId, workspaceI
     return { sessionId: deriveSessionId(connectionId), ephemeral: false };
 }
 
+export function resolveDetailSession({ headers, body, apiKey, client, hashSessionId } = {}) {
+    const claude = extractClaudeCodeSession(body?.metadata?.user_id) || headerValue(headers, CLAUDE_CODE_SESSION_HEADER);
+    const id = claude || extractAntigravitySession(body)
+        || SESSION_HEADER_KEYS.map((key) => headerValue(headers, key)).find(Boolean)
+        || normalizeSessionId(body?.session_id)
+        || normalizeSessionId(body?.conversation_id);
+    if (!id) return undefined;
+    const label = claude ? "claude" : client || "unknown";
+    return { id: hashSessionId([apiKey || "local", label, id]), client: label };
+}
+
 export function resolveSessionId(opts = {}) {
     return resolveSessionIdentity(opts).sessionId;
 }

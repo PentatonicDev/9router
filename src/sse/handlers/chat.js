@@ -74,7 +74,7 @@ export async function handleChat(request, clientRawRequest = null, options = {})
   // no combo, alias or provider/model pair, so it must not reach resolution.
   // The capability travels in the anthropic-beta header, forwarded as-is.
   const { model: modelStr, contextMarker } = stripModelContextMarker(body.model);
-  if (contextMarker) body.model = modelStr;
+  if (contextMarker) body = { ...body, model: modelStr };
 
   // Request summary is emitted as the unified "▶" line in chatCore (has fmt/thinking/account)
 
@@ -397,7 +397,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         clearAntigravityStrikes(credentials.connectionId, model);
       }
     };
-    const coreBody = { ...body, model: `${provider}/${model}` };
+    const coreBody = { ...structuredClone(body), model: `${provider}/${model}` };
     // Bedrock and every non-native-Anthropic provider can't run Anthropic's
     // server-side web_search tool — the translator turns it into an inert
     // client tool otherwise. Native Anthropic (provider === "claude") always

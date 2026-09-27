@@ -13,6 +13,7 @@ import { upstreamResponseHeaders } from "../utils/upstreamHeaders.js";
 import { HTTP_STATUS, TOKEN_SAVER_HEADER } from "../config/runtimeConfig.js";
 import { handleBypassRequest } from "../utils/bypassHandler.js";
 import { trackPendingRequest, appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
+import { hashDetailSessionId } from "@/lib/auth/dashboardSession.js";
 import { getExecutor } from "../executors/index.js";
 import { supportsGrokCliReasoningEffort } from "../config/grokCli.js";
 import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDetail.js";
@@ -31,7 +32,7 @@ import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType, shouldDefaultClaudeToolType } from "../translator/concerns/toolCall.js";
-import { resolveSessionId } from "../utils/sessionManager.js";
+import { resolveSessionId, resolveDetailSession } from "../utils/sessionManager.js";
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -66,7 +67,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
   // Phases measured before this point (handler entry, auth, routing) plus the ones
   // collected here, carried to saveRequestDetail. Missing key = step did not run.
   const phases = { ...(entryPhases || {}), t0: (entryPhases && entryPhases.t0) || requestStartTime };
-  // Stable per-session color so all lines of one CLI conversation share a tag
   const sessionSeed = (() => {
     try {
       return resolveSessionId({ headers: clientRawRequest?.headers, body, connectionId, scope: provider });
@@ -163,6 +163,11 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
   // Skip all translation/normalization — only model and Bearer are swapped
   const clientTool = detectClientTool(clientRawRequest?.headers || {}, body);
   const passthrough = isNativePassthrough(clientTool, provider);
+
+  const session = resolveDetailSession({
+    headers: clientRawRequest?.headers, body: clientRawRequest?.body ?? body, apiKey,
+    client: clientTool, hashSessionId: hashDetailSessionId
+  });
 
   // Expose raw client headers to translators/executors for session-id resolution
   if (credentials) credentials.rawHeaders = clientRawRequest?.headers || {};
@@ -328,9 +333,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
 
   if (xf.length && log?.line) log.line(reqTag, "⚙", xf.join(" · "));
 
-  // Pin cache breakpoints to the final body — every saver above can reshape
-  // system/tools/messages, and a stale anchor costs a full prefix rewrite.
-  if (passthrough && clientTool === "claude") anchorClaudeCache(translatedBody);
+  // Pin cache breakpoints after savers, unless PXPIPE owns their placement.
+  if (finalFormat === FORMATS.CLAUDE && !pxpipeSummary?.cacheOwnsControl) anchorClaudeCache(translatedBody);
 
   const executor = getExecutor(provider);
   trackPendingRequest(model, provider, connectionId, true);
@@ -419,10 +423,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     trackPendingRequest(model, provider, connectionId, false, true);
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${error.name === "AbortError" ? 499 : HTTP_STATUS.BAD_GATEWAY}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
-      provider, model, connectionId, apiKey,
+      provider, model, connectionId, apiKey, session,
       latency: { ttft: 0, total: Date.now() - requestStartTime },
       tokens: { prompt_tokens: 0, completion_tokens: 0 },
-      request: extractRequestConfig(body, stream),
+      request: extractRequestConfig(clientRawRequest?.body ?? body, stream),
       providerRequest: translatedBody || null,
       response: { error: error.message || String(error), status: error.name === "AbortError" ? 499 : 502, thinking: null },
       pxpipe: pxpipeSummary,
@@ -494,10 +498,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     const { statusCode, message, resetsAtMs } = await parseUpstreamError(providerResponse, executor);
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${statusCode}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
-      provider, model, connectionId, apiKey,
+      provider, model, connectionId, apiKey, session,
       latency: { ttft: 0, total: Date.now() - requestStartTime },
       tokens: { prompt_tokens: 0, completion_tokens: 0 },
-      request: extractRequestConfig(body, stream),
+      request: extractRequestConfig(clientRawRequest?.body ?? body, stream),
       providerRequest: finalBody || translatedBody || null,
       response: { error: message, status: statusCode, thinking: null },
       pxpipe: pxpipeSummary,
@@ -519,7 +523,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
   }
 
   // Usage and details record the id the executor actually invoked when it says so (Bedrock prefixes).
-  const sharedCtx = { provider, model: upstreamModelId || model, body, stream, errorContext, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log, phases, comboName };
+  const sharedCtx = { provider, model: upstreamModelId || model, body, stream, errorContext, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log, phases, comboName, session };
   const appendLog = (extra) => appendRequestLog({ model, provider, connectionId, ...extra }).catch(() => { });
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);
 

@@ -6,6 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 
+const authContext = vi.hoisted(() => ({ token: null }));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => authContext.token ? { value: authContext.token } : undefined }),
+  headers: async () => ({ get: () => null }),
+}));
+
 const originalDataDir = process.env.DATA_DIR;
 let tempDir;
 let db;
@@ -97,6 +103,15 @@ describe("request details — tab crash-risk cases", () => {
     expect(got.request._truncated).toBe(true);
   });
 
+  it("keeps readable streamed text and tool metadata when response exceeds storage cap", async () => {
+    await saveDetail({ id: "stream-large", provider: "anthropic", model: "claude", status: "ok",
+      response: { content: "x".repeat(12 * 1024), thinking: "reason", toolCalls: 2 } });
+    const got = await db.getRequestDetailById("stream-large");
+    expect(got.response.content).toMatch(/^x{1000}/);
+    expect(got.response.content.length).toBeLessThan(12 * 1024);
+    expect(got.response).toMatchObject({ thinking: "reason", toolCalls: 2, truncated: true });
+  });
+
   it("missing tokens/timestamp on row → getInputTokens-style access safe", async () => {
     adapter.run(
       `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, status, data) VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -122,6 +137,36 @@ function getInputTokens(tokens) {
   const cache = getCachedTokens(tokens);
   return prompt < cache ? cache : prompt;
 }
+
+describe("session detail persistence", () => {
+  const sessionId = "a".repeat(64);
+  const otherSessionId = "b".repeat(64);
+
+  it("creates the session column and index on a fresh SQLite database", () => {
+    expect(adapter.all("PRAGMA table_info(requestDetails)").map((c) => c.name)).toContain("sessionId");
+    expect(adapter.all("PRAGMA index_list(requestDetails)").map((i) => i.name)).toContain("idx_rd_session");
+  });
+
+  it("persists and paginates a session across providers and keys", async () => {
+    for (const [i, provider, apiKey] of [[1, "anthropic", "key-a"], [2, "openai", "key-a"], [3, "openai", "key-b"]]) {
+      await saveDetail({ id: `session-${i}`, provider, model: "m", apiKey,
+        session: { id: sessionId, client: "claude" }, providerResponse: null,
+        request: { content: "client" }, response: { content: "answer" } });
+    }
+    await saveDetail({ id: "other-session", provider: "openai", model: "m", apiKey: "key-a",
+      session: { id: otherSessionId, client: "codex" }, response: { content: "other" } });
+
+    expect(adapter.get("SELECT sessionId AS id FROM requestDetails WHERE id = ?", ["session-1"]).id).toBe(sessionId);
+    expect((await db.getRequestDetailById("session-1")).providerResponse).toBeNull();
+    const first = await db.getRequestDetails({ sessionId, pageSize: 2, page: 1 });
+    const second = await db.getRequestDetails({ sessionId, pageSize: 2, page: 2 });
+    expect(first.pagination).toMatchObject({ totalItems: 3, totalPages: 2, hasNext: true });
+    expect(second.pagination).toMatchObject({ totalItems: 3, hasNext: false });
+    expect([...first.details, ...second.details].map((d) => d.id).sort()).toEqual(["session-1", "session-2", "session-3"]);
+    expect((await db.getRequestDetails({ sessionId, apiKey: "key-a" })).pagination.totalItems).toBe(2);
+    expect((await db.getRequestDetails({ sessionId, apiKeys: [], connectionIds: [] })).pagination.totalItems).toBe(0);
+  });
+});
 
 describe("backupDbLite — excludes requestDetails, keeps critical data", () => {
   it("backup file omits requestDetails rows but keeps other tables", async () => {
@@ -212,6 +257,47 @@ beforeAll(async () => {
 });
 
 describe("API route contract — validation boundary", () => {
+  it("rejects malformed session IDs", async () => {
+    expect((await GET(makeReq("sessionId=not-a-hash"))).status).toBe(400);
+  });
+
+  it("filters full session history and redacts prompts and upstream errors for non-admins", async () => {
+    const sessionId = "a".repeat(64);
+    const detail = await db.getRequestDetailById("session-1");
+    await saveDetail({ ...detail, upstream: { error: "prompt leaked here", terminal_event: "error" }, pxpipe: { detail: "secret in transform error", reason: "transform_error" } });
+    const res = await GET(makeReq(`sessionId=${sessionId}&pageSize=2&page=2`));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.pagination).toMatchObject({ totalItems: 3, totalPages: 2 });
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0].request).toEqual({ redacted: true });
+    expect(body.details[0].response).toEqual({ redacted: true });
+    expect(JSON.stringify(body)).not.toContain("prompt leaked here");
+    expect(JSON.stringify(body)).not.toContain("secret in transform error");
+
+    const all = await (await GET(makeReq(`sessionId=${sessionId}&pageSize=3`))).json();
+    expect(all.details.find((d) => d.id === "session-1").upstream).toMatchObject({
+      error: "[redacted]", terminal_event: "error",
+    });
+    expect(all.details.find((d) => d.id === "session-1").pxpipe).toMatchObject({
+      detail: "[redacted]", reason: "transform_error",
+    });
+  });
+
+  it("shows original bodies to authenticated dashboard admins", async () => {
+    const { createDashboardAuthToken } = await import("@/lib/auth/dashboardSession.js");
+    authContext.token = await createDashboardAuthToken();
+    try {
+      const res = await GET(makeReq(`sessionId=${"a".repeat(64)}`));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      const row = body.details.find((d) => d.id === "session-1");
+      expect(row.request).toEqual({ content: "client" });
+      expect(row.upstream.error).toBe("prompt leaked here");
+    } finally {
+      authContext.token = null;
+    }
+  });
 
   it("page=0 → 400 (guard now reachable after NaN-check fix)", async () => {
     const res = await GET(makeReq("page=0"));

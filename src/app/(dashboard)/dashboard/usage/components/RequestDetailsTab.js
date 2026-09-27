@@ -29,10 +29,29 @@ function fmtMs(v) {
   return v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${Math.round(v)}ms`;
 }
 
+function sessionLabel(session) {
+  if (!session?.id) return null;
+  return { client: session.client || "client", short: `…${session.id.slice(-8)}` };
+}
+
 function safeText(v) {
   if (v == null) return null;
   if (typeof v === "string") return v;
   try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+
+// A missing body has three different causes and only one of them is "the model said
+// nothing": the API redacts payloads for non-admins, and requestDetailsRepo replaces a
+// body over observabilityMaxJsonSize with a preview. Reporting all three as
+// "[No content]" sent people hunting a bug in the router.
+function contentText(response) {
+  if (response?.redacted) return "[Redacted — admin session required to view payloads]";
+  if (response?._truncated) {
+    const kb = Math.round((response._originalSize || 0) / 1024);
+    return `[Truncated — ${kb} KiB body exceeded the stored size cap]\n\n${response._preview || ""}`;
+  }
+  const content = safeText(response?.content) || "[No content]";
+  return response?.truncated ? `[Truncated — showing stored preview]\n\n${content}` : content;
 }
 
 function phaseSegments(phases) {
@@ -190,6 +209,7 @@ export default function RequestDetailsTab() {
   });
   const [loading, setLoading] = useState(false);
   const [selectedDetail, setSelectedDetail] = useState(null);
+  const [sessionFilter, setSessionFilter] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [providers, setProviders] = useState([]);
   const [apiKeys, setApiKeys] = useState([]);
@@ -220,7 +240,7 @@ export default function RequestDetailsTab() {
     }
   }, []);
 
-  const fetchDetails = useCallback(async () => {
+  const fetchDetails = useCallback(async (signal) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -231,25 +251,30 @@ export default function RequestDetailsTab() {
       if (filters.apiKeyId) params.append("apiKeyId", filters.apiKeyId);
       if (filters.startDate) params.append("startDate", filters.startDate);
       if (filters.endDate) params.append("endDate", filters.endDate);
+      if (sessionFilter) params.append("sessionId", sessionFilter);
 
-      const res = await fetch(`/api/usage/request-details?${params}`);
+      const res = await fetch(`/api/usage/request-details?${params}`, { signal });
+      if (!res.ok) throw new Error(`Request details: HTTP ${res.status}`);
       const data = await res.json();
-
+      if (signal.aborted) return;
       setDetails(data.details || []);
       setPagination(prev => ({ ...prev, ...data.pagination }));
     } catch (error) {
-      console.error("Failed to fetch request details:", error);
+      if (!signal.aborted) console.error("Failed to fetch request details:", error);
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
-  }, [pagination.page, pagination.pageSize, filters]);
+  }, [pagination.page, pagination.pageSize, filters, sessionFilter]);
 
   useEffect(() => {
-    fetchProviders();
+    const timer = setTimeout(fetchProviders, 0);
+    return () => clearTimeout(timer);
   }, [fetchProviders]);
 
   useEffect(() => {
-    fetchDetails();
+    const controller = new AbortController();
+    const timer = setTimeout(() => fetchDetails(controller.signal), 0);
+    return () => { clearTimeout(timer); controller.abort(); };
   }, [fetchDetails]);
 
   const handleViewDetail = (detail) => {
@@ -265,8 +290,14 @@ export default function RequestDetailsTab() {
     setPagination(prev => ({ ...prev, pageSize: newPageSize, page: 1 }));
   };
 
+  const groupSession = (id) => {
+    setPagination(prev => ({ ...prev, page: 1 }));
+    setSessionFilter(id);
+  };
+
   const handleClearFilters = () => {
     setFilters({ provider: "", apiKeyId: "", startDate: "", endDate: "" });
+    groupSession(null);
   };
 
   return (
@@ -350,13 +381,21 @@ export default function RequestDetailsTab() {
             <Button 
               variant="ghost" 
               onClick={handleClearFilters}
-              disabled={!filters.provider && !filters.apiKeyId && !filters.startDate && !filters.endDate}
+              disabled={!filters.provider && !filters.apiKeyId && !filters.startDate && !filters.endDate && !sessionFilter}
               className="w-full"
             >
               Clear Filters
             </Button>
           </div>
         </div>
+        {sessionFilter && (
+          <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg bg-primary/5 px-3 py-2 text-sm">
+            <span className="text-text-muted">Session</span>
+            <span className="break-all font-mono text-text-main">{sessionFilter}</span>
+            <span className="text-text-muted">· {pagination.totalItems} request{pagination.totalItems === 1 ? "" : "s"}</span>
+            <Button variant="ghost" size="sm" onClick={() => groupSession(null)}>Show all</Button>
+          </div>
+        )}
       </Card>
 
       <Card padding="none">
@@ -365,6 +404,7 @@ export default function RequestDetailsTab() {
             <thead>
               <tr className="border-b border-black/5 dark:border-white/5">
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Timestamp</th>
+                <th className="text-left p-4 text-sm font-semibold text-text-main">Session</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Model</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Provider</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">API Key</th>
@@ -379,7 +419,7 @@ export default function RequestDetailsTab() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="10" className="p-8 text-center text-text-muted">
+                  <td colSpan="11" className="p-8 text-center text-text-muted">
                     <div className="flex items-center justify-center gap-2">
                       <span className="material-symbols-outlined animate-spin text-[20px]">progress_activity</span>
                       Loading...
@@ -388,7 +428,7 @@ export default function RequestDetailsTab() {
                 </tr>
               ) : details.length === 0 ? (
                 <tr>
-                  <td colSpan="10" className="p-8 text-center text-text-muted">
+                  <td colSpan="11" className="p-8 text-center text-text-muted">
                     No request details found
                   </td>
                 </tr>
@@ -400,6 +440,21 @@ export default function RequestDetailsTab() {
                   >
                     <td className="whitespace-nowrap p-4 text-sm text-text-main">
                       {new Date(detail.timestamp).toLocaleString()}
+                    </td>
+                    <td className="max-w-[170px] p-4 text-sm">
+                      {sessionLabel(detail.session) ? (
+                        <button
+                          type="button"
+                          onClick={() => groupSession(detail.session.id)}
+                          title={`Group by session ${detail.session.id}`}
+                          className="flex max-w-full flex-col items-start truncate rounded px-1 text-left hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                        >
+                          <span className="truncate text-text-main">{sessionLabel(detail.session).client}</span>
+                          <span className="truncate font-mono text-xs text-text-muted">{sessionLabel(detail.session).short}</span>
+                        </button>
+                      ) : (
+                        <span className="text-text-muted">—</span>
+                      )}
                     </td>
                     <td className="max-w-[260px] truncate p-4 font-mono text-sm text-text-main">
                       {detail.model}
@@ -476,6 +531,20 @@ export default function RequestDetailsTab() {
                 <span className="text-text-muted">Timestamp:</span>{" "}
                 <span className="text-text-main">{new Date(selectedDetail.timestamp).toLocaleString()}</span>
               </div>
+              {selectedDetail.session?.id && (
+                <div className="sm:col-span-2">
+                  <span className="text-text-muted">Session:</span>{" "}
+                  <span className="break-all font-mono text-text-main">{selectedDetail.session.id}</span>{" "}
+                  <span className="text-text-muted">({selectedDetail.session.client || "client"})</span>{" "}
+                  <button
+                    type="button"
+                    onClick={() => { groupSession(selectedDetail.session.id); setIsDrawerOpen(false); }}
+                    className="text-primary underline"
+                  >
+                    group
+                  </button>
+                </div>
+              )}
               <div>
                  <span className="text-text-muted">Provider:</span>{" "}
                  <span className="text-text-main font-medium">{getProviderName(selectedDetail.provider, providerNameCache)}</span>
@@ -632,7 +701,7 @@ export default function RequestDetailsTab() {
                   Content
                 </h4>
                 <pre className="max-h-[300px] max-w-full overflow-auto rounded-lg border border-black/5 bg-black/5 p-3 font-mono text-xs text-text-main dark:border-white/5 dark:bg-white/5 sm:p-4">
-                  {safeText(selectedDetail.response?.content) || "[No content]"}
+                  {contentText(selectedDetail.response)}
                 </pre>
               </CollapsibleSection>
             </div>

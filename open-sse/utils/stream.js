@@ -62,6 +62,8 @@ const STREAM_MODE = {
   PASSTHROUGH: "passthrough" // No translation, normalize output, extract usage
 };
 
+const MAX_ACCUMULATED_CHARS = 64 * 1024;
+
 /**
  * Create unified SSE transform stream
  * @param {object} options
@@ -112,6 +114,66 @@ export function createSSEStream(options = {}) {
   let totalContentLength = 0;
   let accumulatedContent = "";
   let accumulatedThinking = "";
+  // Non-text output (tool_use / tool_calls / function_call). A turn with zero text
+  // but a tool call is a normal turn, not an empty response — the stored detail
+  // needs the difference to avoid labelling it "[Empty streaming response]".
+  let accumulatedToolCalls = 0;
+  const seenOpenAIToolCalls = new Set();
+  const countOpenAIToolCalls = (choices) => {
+    for (const choice of choices || []) {
+      for (const call of choice.delta?.tool_calls || []) {
+        const key = `${choice.index ?? 0}:${call.index ?? call.id}`;
+        if (key.endsWith(":undefined") || seenOpenAIToolCalls.has(key)) continue;
+        seenOpenAIToolCalls.add(key);
+        accumulatedToolCalls++;
+      }
+    }
+  };
+  // ponytail: accumulation is only for the stored request detail, so it is capped
+  // instead of mirroring an unbounded stream in memory. Raising the cap costs RAM
+  // per in-flight stream; full fidelity lives in the reqLogger debug files.
+  let accumulationTruncated = false;
+  const appendContent = (text) => {
+    totalContentLength += text.length;
+    const room = MAX_ACCUMULATED_CHARS - accumulatedContent.length;
+    if (room <= 0) { accumulationTruncated = true; return; }
+    accumulatedContent += text.length > room ? text.slice(0, room) : text;
+    if (text.length > room) accumulationTruncated = true;
+  };
+  const appendThinking = (text) => {
+    totalContentLength += text.length;
+    const room = MAX_ACCUMULATED_CHARS - accumulatedThinking.length;
+    if (room <= 0) { accumulationTruncated = true; return; }
+    accumulatedThinking += text.length > room ? text.slice(0, room) : text;
+    if (text.length > room) accumulationTruncated = true;
+  };
+  const accumulateOutput = (parsed) => {
+    const priorLength = totalContentLength;
+    const priorTools = accumulatedToolCalls;
+    if (typeof parsed.delta?.text === "string") appendContent(parsed.delta.text);
+    if (typeof parsed.delta?.thinking === "string") appendThinking(parsed.delta.thinking);
+    if (typeof parsed.contentBlockDelta?.delta?.text === "string") appendContent(parsed.contentBlockDelta.delta.text);
+    if (typeof parsed.contentBlockDelta?.delta?.reasoningContent?.text === "string") appendThinking(parsed.contentBlockDelta.delta.reasoningContent.text);
+    if (parsed.contentBlockStart?.start?.toolUse) accumulatedToolCalls++;
+    if (typeof parsed.message?.content === "string") appendContent(parsed.message.content);
+    if (typeof parsed.message?.thinking === "string") appendThinking(parsed.message.thinking);
+    if (Array.isArray(parsed.message?.tool_calls)) accumulatedToolCalls += parsed.message.tool_calls.length;
+    if (parsed.type === "content_block_start" && parsed.content_block?.type === "tool_use") accumulatedToolCalls++;
+    if (parsed.type === "response.output_text.delta" && typeof parsed.delta === "string") appendContent(parsed.delta);
+    if (parsed.type === "response.reasoning_summary_text.delta" && typeof parsed.delta === "string") appendThinking(parsed.delta);
+    if (parsed.type === "response.output_item.added" && ["function_call", "custom_tool_call"].includes(parsed.item?.type)) accumulatedToolCalls++;
+    if (typeof parsed.choices?.[0]?.delta?.content === "string") appendContent(parsed.choices[0].delta.content);
+    if (typeof parsed.choices?.[0]?.delta?.reasoning_content === "string") appendThinking(parsed.choices[0].delta.reasoning_content);
+    countOpenAIToolCalls(parsed.choices);
+    for (const part of (parsed.candidates || parsed.response?.candidates)?.[0]?.content?.parts || []) {
+      if (typeof part.text === "string") {
+        if (part.thought === true) appendThinking(part.text);
+        else appendContent(part.text);
+      }
+      if (part.functionCall) accumulatedToolCalls++;
+    }
+    if (!firstContentAt && (totalContentLength > priorLength || accumulatedToolCalls > priorTools)) firstContentAt = Date.now();
+  };
   let ttftAt = null;
   // First chunk carrying real output, as opposed to the first chunk at all: the
   // opener (response.created / role-only delta) proves nothing about model latency.
@@ -183,7 +245,9 @@ export function createSSEStream(options = {}) {
     if (onStreamComplete) {
       onStreamComplete({
         content: accumulatedContent,
-        thinking: accumulatedThinking
+        thinking: accumulatedThinking,
+        toolCalls: accumulatedToolCalls,
+        truncated: accumulationTruncated
       }, finalUsage, ttftAt, firstContentAt, buildUpstreamSummary());
     }
   };
@@ -259,24 +323,8 @@ export function createSSEStream(options = {}) {
 
               if (extractStreamError(parsed)) streamErrored = true;
 
-              // Claude-native passthrough never reaches the OpenAI delta accumulation below.
-              if (!firstContentAt && parsed.type === "content_block_delta" && parsed.delta) firstContentAt = Date.now();
-
-              if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
-                continue;
-              }
-
-              const delta = parsed.choices?.[0]?.delta;
-              const content = delta?.content;
-              const reasoning = delta?.reasoning_content;
-              if (content && typeof content === "string") {
-                totalContentLength += content.length;
-                accumulatedContent += content;
-              }
-              if (reasoning && typeof reasoning === "string") {
-                totalContentLength += reasoning.length;
-                accumulatedThinking += reasoning;
-              }
+              accumulateOutput(parsed);
+              if (!hasValuableContent(parsed, FORMATS.OPENAI)) continue;
 
               const extracted = extractUsage(parsed);
               if (extracted) {
@@ -384,42 +432,7 @@ export function createSSEStream(options = {}) {
           continue;
         }
 
-        // Claude format - content
-        if (parsed.delta?.text) {
-          totalContentLength += parsed.delta.text.length;
-          accumulatedContent += parsed.delta.text;
-        }
-        // Claude format - thinking
-        if (parsed.delta?.thinking) {
-          totalContentLength += parsed.delta.thinking.length;
-          accumulatedThinking += parsed.delta.thinking;
-        }
-        
-        // OpenAI format - content
-        if (parsed.choices?.[0]?.delta?.content) {
-          totalContentLength += parsed.choices[0].delta.content.length;
-          accumulatedContent += parsed.choices[0].delta.content;
-        }
-        // OpenAI format - reasoning
-        if (parsed.choices?.[0]?.delta?.reasoning_content) {
-          totalContentLength += parsed.choices[0].delta.reasoning_content.length;
-          accumulatedThinking += parsed.choices[0].delta.reasoning_content;
-        }
-        
-        // Gemini format
-        if (parsed.candidates?.[0]?.content?.parts) {
-          for (const part of parsed.candidates[0].content.parts) {
-            if (part.text && typeof part.text === "string") {
-              totalContentLength += part.text.length;
-              // Check if this is thinking content
-              if (part.thought === true) {
-                accumulatedThinking += part.text;
-              } else {
-                accumulatedContent += part.text;
-              }
-            }
-          }
-        }
+        accumulateOutput(parsed);
 
         // Extract usage
         const extracted = extractUsage(parsed);
@@ -538,12 +551,22 @@ export function createSSEStream(options = {}) {
           if (streamErrored) { finalizeStream(); return; }
 
           if (buffer) {
-            let output = buffer;
-            if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
-              output = "data: " + buffer.slice(5);
+            const tail = buffer.trim();
+            accumulateEventTypeCount(tail, eventTypeCounts);
+            let parsed = null;
+            if (tail.startsWith("data:") && tail.slice(5).trim() !== "[DONE]") {
+              try { parsed = JSON.parse(tail.slice(5).trim()); } catch {}
             }
+            if (parsed) {
+              accumulateOutput(parsed);
+              const extracted = extractUsage(parsed);
+              if (extracted) usage = mergeUsage(usage, extracted);
+            }
+            const output = `${buffer.startsWith("data:") && !buffer.startsWith("data: ") ? "data: " + buffer.slice(5) : buffer}\n\n`;
             reqLogger?.appendConvertedChunk?.(output);
             controller.enqueue(sharedEncoder.encode(output));
+            if (tail === "data: [DONE]") streamDoneSent = true;
+            if (isOpenAIResponsesTerminalEvent(null, parsed)) finalizeStream();
           }
 
           // IMPORTANT: In passthrough mode we still must terminate the SSE stream.
@@ -565,9 +588,7 @@ export function createSSEStream(options = {}) {
         if (streamErrored) { finalizeStream(); return; }
 
         if (buffer.trim()) {
-          // Same parse as the transform loop: without targetFormat this only
-          // accepts "data: " lines, so an NDJSON provider (Ollama) lost whatever
-          // arrived without its closing newline.
+          accumulateEventTypeCount(buffer.trim(), eventTypeCounts);
           const parsed = parseSSELine(buffer.trim(), targetFormat);
           // parseSSELine turns the SSE sentinel "data: [DONE]" into { done: true },
           // which must not be translated. An Ollama chunk also carries done:true,
@@ -575,12 +596,22 @@ export function createSSEStream(options = {}) {
           // counts — so it has to go through.
           const isDoneSentinel = parsed?.done && targetFormat !== FORMATS.OLLAMA;
           if (parsed && !isDoneSentinel) {
-            // Same accumulation the transform loop does, so finalizeStream() can
-            // log a tail chunk's tokens instead of falling back to null.
+            accumulateOutput(parsed);
             const extracted = extractUsage(parsed);
             if (extracted) state.usage = mergeUsage(state.usage, extracted);
+            if (targetFormat === FORMATS.OPENAI_RESPONSES) {
+              const eventName = getOpenAIResponsesEventName(currentOpenAIResponsesEvent, parsed);
+              if (parsed.response?.status) upstreamResponseStatus = parsed.response.status;
+              if (isOpenAIResponsesTerminalEvent(eventName, parsed)) {
+                openAIResponsesTerminalSeen = true;
+                upstreamTerminalEvent = eventName;
+              }
+            }
 
-            const translated = translateResponse(targetFormat, sourceFormat, parsed, state);
+            const keepsResponsesFormat = targetFormat === FORMATS.OPENAI_RESPONSES && sourceFormat === FORMATS.OPENAI_RESPONSES;
+            const translated = keepsResponsesFormat
+              ? [{ event: getOpenAIResponsesEventName(currentOpenAIResponsesEvent, parsed), data: parsed }]
+              : translateResponse(targetFormat, sourceFormat, parsed, state);
 
             if (translated?._openaiIntermediate) {
               for (const item of translated._openaiIntermediate) {
@@ -596,6 +627,13 @@ export function createSSEStream(options = {}) {
                 reqLogger?.appendConvertedChunk?.(output);
                 controller.enqueue(sharedEncoder.encode(output));
               }
+            }
+            if (targetFormat === FORMATS.OPENAI_RESPONSES && sourceFormat === FORMATS.OPENAI
+              && openAIResponsesTerminalSeen && !streamDoneSent) {
+              const doneOutput = "data: [DONE]\n\n";
+              reqLogger?.appendConvertedChunk?.(doneOutput);
+              controller.enqueue(sharedEncoder.encode(doneOutput));
+              streamDoneSent = true;
             }
           }
         }

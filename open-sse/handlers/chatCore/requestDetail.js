@@ -10,11 +10,19 @@ const OPTIONAL_PARAMS = [
   "seed", "stop", "tools", "tool_choice",
   "response_format", "prediction", "store", "metadata",
   "n", "logprobs", "top_logprobs", "logit_bias",
-  "user", "parallel_tool_calls"
+  "user", "parallel_tool_calls",
+  // Requested effort. Claude/Kiro clients send output_config.effort, OpenAI-ish
+  // clients reasoning_effort — without both, the stored detail cannot say which
+  // effort the caller asked for.
+  "reasoning_effort", "output_config"
 ];
 
 export function extractRequestConfig(body, stream) {
-  const config = { messages: body.messages || [], model: body.model, stream };
+  const config = { model: body.model, stream };
+  if (body.messages !== undefined) config.messages = body.messages;
+  else if (body.input !== undefined) config.input = body.input;
+  else config.messages = [];
+  if (body.instructions !== undefined) config.instructions = body.instructions;
   for (const param of OPTIONAL_PARAMS) {
     if (body[param] !== undefined) config[param] = body[param];
   }
@@ -71,6 +79,7 @@ export function buildRequestDetail(base, overrides = {}) {
     connectionId: base.connectionId || undefined,
     apiKey: base.apiKey || undefined,
     comboName: base.comboName || undefined,
+    session: base.session || undefined,
     timestamp: new Date().toISOString(),
     latency: base.latency || { ttft: 0, total: 0 },
     // Per-stage timings in ms from t0 (epoch). An absent key means the stage did not

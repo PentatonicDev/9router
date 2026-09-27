@@ -46,7 +46,7 @@ function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent,
 /**
  * Handle streaming response — pipe provider SSE through transform stream to client.
  */
-export async function handleStreamingResponse({ providerResponse, provider, model, errorContext, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, pxpipe, reqTag, log, credentials }) {
+export async function handleStreamingResponse({ providerResponse, provider, model, errorContext, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, pxpipe, reqTag, log, credentials, session }) {
   // When upstream returns HTML/text instead of SSE (e.g. Cloudflare 5xx error
   // page), piping it through the SSE transform stream causes Next.js
   // "failed to pipe response" and crashes the chat router. Read the body,
@@ -108,12 +108,12 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
   const transformedBody = pipeWithDisconnect(streamSource, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
 
   saveRequestDetail(buildRequestDetail({
-    provider, model, connectionId, apiKey,
+    provider, model, connectionId, apiKey, session,
     latency: { ttft: 0, total: Date.now() - requestStartTime },
     tokens: { prompt_tokens: 0, completion_tokens: 0 },
-    request: extractRequestConfig(body, stream),
+    request: extractRequestConfig(clientRawRequest?.body ?? body, stream),
     providerRequest: finalBody || translatedBody || null,
-    providerResponse: "[Streaming - raw response not captured]",
+    providerResponse: null,
     response: { content: "[Streaming in progress...]", thinking: null, type: "streaming" },
     pxpipe,
     status: "success"
@@ -130,7 +130,7 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
 /**
  * Build onStreamComplete callback for streaming usage tracking.
  */
-export function buildOnStreamComplete({ provider, model, connectionId, apiKey, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest, pxpipe, reqTag, log, phases: entryPhases, comboName }) {
+export function buildOnStreamComplete({ provider, model, connectionId, apiKey, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest, pxpipe, reqTag, log, phases: entryPhases, comboName, session }) {
   const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
   const onStreamComplete = (contentObj, usage, ttftAt, firstContentAt, upstream) => {
@@ -145,7 +145,12 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
     if (ttftAt) phases.ttfb_client_ms = ttftAt - (phases.t0 || requestStartTime);
     if (firstContentAt) phases.ttft_content_ms = firstContentAt - (phases.t0 || requestStartTime);
     phases.client_complete_ms = now - (phases.t0 || requestStartTime);
-    const safeContent = contentObj?.content || "[Empty streaming response]";
+    const streamedText = contentObj?.content || "";
+    const toolCalls = contentObj?.toolCalls || 0;
+    // Tool and thinking-only turns are output, not empty responses.
+    const safeContent = streamedText
+      || (toolCalls ? `[No text output - ${toolCalls} tool call${toolCalls > 1 ? "s" : ""}]`
+        : contentObj?.thinking ? "[No text output - thinking only]" : "[Empty streaming response]");
     const safeThinking = contentObj?.thinking || null;
 
     // A turn that never produced output still needs to say why: an upstream
@@ -156,15 +161,18 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
       || upstream?.terminal_event === "error";
 
     saveRequestDetail(buildRequestDetail({
-      provider, model, connectionId, apiKey,
+      provider, model, connectionId, apiKey, session,
       latency,
       phases,
       comboName,
       tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
-      request: extractRequestConfig(body, stream),
+      request: extractRequestConfig(clientRawRequest?.body ?? body, stream),
       providerRequest: finalBody || translatedBody || null,
-      providerResponse: safeContent,
-      response: { content: safeContent, thinking: safeThinking, type: "streaming" },
+      // ponytail: raw upstream bytes for a stream only reach the reqLogger debug files
+      // (ENABLE_REQUEST_LOGS). Storing the aggregated text here duplicated `response`
+      // under a "Raw" label, so it stays null until real byte capture is wired up.
+      providerResponse: null,
+      response: { content: safeContent, thinking: safeThinking, type: "streaming", toolCalls: toolCalls || undefined, truncated: contentObj?.truncated || undefined },
       pxpipe,
       upstream,
       status: upstreamFailed ? "error" : "success"

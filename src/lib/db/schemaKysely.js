@@ -88,7 +88,8 @@ export async function syncColumns(db) {
     let existing;
     try {
       existing = new Set(await listColumns(db, name, pg));
-    } catch {
+    } catch (e) {
+      if (name === "requestDetails") throw e;
       continue; // table not there yet; createSchema handles it
     }
     for (const [col, colDef] of Object.entries(def.columns)) {
@@ -102,9 +103,14 @@ export async function syncColumns(db) {
           .execute();
         console.log(`[DB][schema] +column ${name}.${col}`);
       } catch (e) {
+        if (name === "requestDetails" && col === "sessionId") throw e;
         console.warn(`[DB][schema] add column ${name}.${col} failed: ${e.message}`);
       }
     }
+  }
+  await createIndexes(db, pg);
+  if (!(await listColumns(db, "requestDetails", pg)).includes("sessionId")) {
+    throw new Error("requestDetails.sessionId missing after schema sync");
   }
 }
 

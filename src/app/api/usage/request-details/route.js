@@ -20,6 +20,7 @@ export async function GET(request) {
     const provider = searchParams.get("provider");
     const model = searchParams.get("model");
     const connectionId = searchParams.get("connectionId");
+    const sessionId = searchParams.get("sessionId");
     const apiKeyId = searchParams.get("apiKeyId");
     const status = searchParams.get("status");
     const startDate = searchParams.get("startDate");
@@ -65,6 +66,12 @@ export async function GET(request) {
       }
       filter.apiKey = selectedKey.key;
     }
+    if (sessionId !== null) {
+      if (!/^[a-f0-9]{64}$/.test(sessionId)) {
+        return NextResponse.json({ error: "Invalid session ID" }, { status: 400 });
+      }
+      filter.sessionId = sessionId;
+    }
     if (status) filter.status = status;
     if (startDate) filter.startDate = startDate;
     if (endDate) filter.endDate = endDate;
@@ -97,6 +104,15 @@ export async function GET(request) {
         if (!isAdmin && redacted[key] !== undefined) {
           redacted[key] = { redacted: true };
         }
+      }
+      // upstream lives outside that loop (small, flat diagnostics) but its `error` is
+      // the provider's message, which often quotes a slice of the prompt that was
+      // sent. Non-admins keep the diagnostics without the payload echo.
+      if (!isAdmin && redacted.upstream?.error !== undefined) {
+        redacted.upstream = { ...redacted.upstream, error: "[redacted]" };
+      }
+      if (!isAdmin && redacted.pxpipe?.detail !== undefined) {
+        redacted.pxpipe = { ...redacted.pxpipe, detail: "[redacted]" };
       }
       redacted.apiKeyName = d.apiKeyMasked
         ? (keyNameByMasked.get(d.apiKeyMasked) || d.apiKeyMasked)
