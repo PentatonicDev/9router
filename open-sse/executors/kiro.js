@@ -849,26 +849,32 @@ export class KiroExecutor extends BaseExecutor {
         const values = Array.isArray(event.payload) ? event.payload : [event.payload];
         if (!values[0]) throw new Error("Kiro toolUseEvent is empty");
         for (const value of values) {
-          const name = typeof value?.name === "string" ? value.name.trim() : "";
-          if (!name) throw new Error("Kiro toolUseEvent is missing a tool name");
-          let id;
-          if (value.toolUseId == null) {
-            id = `call_${created}_${state.tools.size + 1}`;
-          } else if (typeof value.toolUseId !== "string" || !value.toolUseId.trim()) {
-            throw new Error("Kiro toolUseEvent has an invalid toolUseId");
-          } else {
-            id = value.toolUseId;
+          try {
+            const name = typeof value?.name === "string" ? value.name.trim() : "";
+            if (!name) throw new Error("Kiro toolUseEvent is missing a tool name");
+            let id;
+            if (value.toolUseId == null) {
+              id = `call_${created}_${state.tools.size + 1}`;
+            } else if (typeof value.toolUseId !== "string" || !value.toolUseId.trim()) {
+              throw new Error("Kiro toolUseEvent has an invalid toolUseId");
+            } else {
+              id = value.toolUseId;
+            }
+            let tool = state.tools.get(id);
+            if (!tool) {
+              tool = { id, name };
+              state.tools.set(id, tool);
+              state.bufferedToolBytes += encoder.encode(id).byteLength + encoder.encode(name).byteLength + 32;
+              assertToolBufferBound();
+            } else if (tool.name !== name) {
+              throw new Error("Kiro tool name changed between fragments");
+            }
+            appendToolInput(tool, value.input);
+          } catch (error) {
+            if (error.code === "KIRO_BUFFER_EXCEEDED") throw error;
+            state.toolValidationError ||= error.message;
+            console.error(`[Kiro] tool fragment rejected: ${error.message}`);
           }
-          let tool = state.tools.get(id);
-          if (!tool) {
-            tool = { id, name };
-            state.tools.set(id, tool);
-            state.bufferedToolBytes += encoder.encode(id).byteLength + encoder.encode(name).byteLength + 32;
-            assertToolBufferBound();
-          } else if (tool.name !== name) {
-            throw new Error("Kiro tool name changed between fragments");
-          }
-          appendToolInput(tool, value.input);
         }
       } else if (eventType === "messageStopEvent") {
         state.explicitStop = true;

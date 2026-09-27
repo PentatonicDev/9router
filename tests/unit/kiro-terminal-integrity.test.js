@@ -6,6 +6,8 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
 }));
 
 const { KiroExecutor } = await import("../../open-sse/executors/kiro.js");
+const { createSSETransformStreamWithLogger } = await import("../../open-sse/utils/stream.js");
+const { FORMATS } = await import("../../open-sse/translator/formats.js");
 
 const encoder = new TextEncoder();
 const credentials = {
@@ -292,6 +294,120 @@ describe("Kiro terminal integrity recovery", () => {
     expect(body).toContain('"name":"tool_call"');
     expect(body).toContain('\\"name\\":\\"mcp_search\\"');
     expect(body).not.toContain('"id":"bad"');
+  });
+
+  it.each(["invalid first", "invalid last"])("keeps valid tool in an array with %s", async (order) => {
+    const valid = { toolUseId: "good", name: "read_file", input: { path: "safe.txt" } };
+    const invalid = { toolUseId: 123, name: "read_file", input: { path: "bad.txt" } };
+    const tools = order === "invalid first" ? [invalid, valid] : [valid, invalid];
+    fetchMock
+      .mockResolvedValueOnce(response([
+        frame("toolUseEvent", tools),
+        frame("metadataEvent", { stopReason: "tool_use" })
+      ]))
+      .mockResolvedValueOnce(response([
+        frame("metadataEvent", { stopReason: "tool_use" })
+      ]));
+
+    const body = await (await execute()).response.text();
+    const chunks = body.split("\n").filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+      .map(line => JSON.parse(line.slice(6)));
+    const calls = chunks.flatMap(chunk => chunk.choices?.[0]?.delta?.tool_calls || []);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(calls.filter(call => call.id)).toEqual([{ index: 0, id: "good", type: "function", function: { name: "read_file", arguments: "" } }]);
+    expect(calls.find(call => call.function?.arguments)?.function.arguments).toBe('{"path":"safe.txt"}');
+    expect(chunks.at(-1).choices[0].finish_reason).toBe("tool_calls");
+    expect(body).not.toContain("bad.txt");
+    expect(body).not.toContain("\"error\"");
+  });
+
+  it("delivers a complete tool call through the Claude SSE translator", async () => {
+    fetchMock.mockResolvedValueOnce(response([
+      frame("toolUseEvent", [
+        { toolUseId: 123, name: "read_file", input: { path: "bad.txt" } },
+        { toolUseId: "good", name: "read_file", input: { path: "safe.txt" } }
+      ]),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]));
+
+    const result = await execute();
+    const body = await text(result.response.body.pipeThrough(
+      createSSETransformStreamWithLogger(FORMATS.KIRO, FORMATS.CLAUDE, "kiro")
+    ));
+    const events = body.split("\n\n").filter(line => line.startsWith("event: "))
+      .map(line => JSON.parse(line.split("\ndata: ")[1]));
+
+    expect(result.response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.map(event => event.type)).toEqual([
+      "message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"
+    ]);
+    expect(events[1].content_block).toMatchObject({ type: "tool_use", id: "good", name: "read_file" });
+    expect(JSON.parse(events[2].delta.partial_json)).toEqual({ path: "safe.txt" });
+    expect(events[4].delta.stop_reason).toBe("tool_use");
+    expect(body).not.toContain("bad.txt");
+  });
+
+  it("delivers a Claude SSE error when no valid tool remains after retry", async () => {
+    const stop = frame("metadataEvent", { stopReason: "tool_use" });
+    fetchMock.mockResolvedValueOnce(response([stop])).mockResolvedValueOnce(response([stop]));
+
+    const result = await execute();
+    const body = await text(result.response.body.pipeThrough(
+      createSSETransformStreamWithLogger(FORMATS.KIRO, FORMATS.CLAUDE, "kiro")
+    ));
+
+    expect(result.response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body).toContain("event: error\n");
+    expect(body).toContain("Kiro tool_use stop reason did not include a complete tool call");
+    expect(body).not.toContain("event: message_stop\n");
+    expect(body).not.toContain('"stop_reason":"tool_use"');
+  });
+
+  it("combines JSON fragments for the same tool before emitting it", async () => {
+    fetchMock.mockResolvedValueOnce(response([
+      frame("toolUseEvent", { toolUseId: "split", name: "read_file", input: '{"path":"safe' }),
+      frame("toolUseEvent", { toolUseId: "split", name: "read_file", input: '.txt"}' }),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]));
+
+    const body = await (await execute()).response.text();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(body).toContain('"id":"split"');
+    expect(body).toContain('\\"path\\":\\"safe.txt\\"');
+    expect(body).toContain('"finish_reason":"tool_calls"');
+    expect(body).not.toContain('"error"');
+  });
+
+  it("keeps an all-invalid tool array private after one retry", async () => {
+    const invalid = frame("toolUseEvent", [
+      { toolUseId: 123, name: "read_file", input: { path: "bad.txt" } },
+      { toolUseId: "missing", name: "read_file" }
+    ]);
+    fetchMock
+      .mockResolvedValueOnce(response([invalid, frame("metadataEvent", { stopReason: "tool_use" })]))
+      .mockResolvedValueOnce(response([invalid, frame("metadataEvent", { stopReason: "tool_use" })]));
+
+    const body = await (await execute()).response.text();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body).toContain("kiro_tool_call_repair_retry_failed");
+    expect(body).not.toContain('"tool_calls"');
+    expect(body).not.toContain("bad.txt");
+  });
+
+  it("rejects tool_use without a tool event after one retry", async () => {
+    const stop = frame("metadataEvent", { stopReason: "tool_use" });
+    fetchMock.mockResolvedValueOnce(response([stop])).mockResolvedValueOnce(response([stop]));
+
+    const body = await (await execute()).response.text();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body).toContain("kiro_tool_call_repair_retry_failed");
+    expect(body).not.toContain('"finish_reason":"tool_calls"');
   });
 
   it("requires complete direct tool input and keeps the failure private", async () => {
@@ -761,6 +877,23 @@ describe("Kiro terminal integrity recovery", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(body).toContain("integrity buffer exceeded");
     expect(body).not.toContain("larger than eight bytes");
+  });
+
+  it("keeps the tool buffer bound fatal within a multi-tool event", async () => {
+    process.env.KIRO_TOOL_CALL_REPAIR_BUFFER_MAX_BYTES = "128";
+    fetchMock.mockResolvedValueOnce(response([
+      frame("toolUseEvent", [
+        { toolUseId: "large", name: "read_file", input: { path: "x".repeat(200) } },
+        { toolUseId: "good", name: "read_file", input: { path: "safe.txt" } }
+      ]),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]));
+
+    const body = await (await execute()).response.text();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(body).toContain("kiro_integrity_buffer_exceeded");
+    expect(body).not.toContain('"id":"good"');
   });
 
   it("counts deferred tool fragments against the private memory bound", async () => {
