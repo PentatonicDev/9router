@@ -86,14 +86,6 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
     streamSource = new Response(bodyText, { status: providerResponse.status, headers: providerResponse.headers });
   }
 
-  if (onRequestSuccess) {
-    Promise.resolve()
-      .then(onRequestSuccess)
-      .catch(err => {
-        console.error("[ChatCore] onRequestSuccess failed:", err?.message || err);
-      });
-  }
-
   const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, customToolNames, model, connectionId, body, onStreamComplete, apiKey, credentials });
 
   // Terminal bytes when the stream aborts after HTTP 200 was already sent, so the
@@ -107,6 +99,7 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
   const stallTimeoutMs = PROVIDERS[provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
   const transformedBody = pipeWithDisconnect(streamSource, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
 
+  // Saved before the peek: an errored stream finalizes (and saves) its detail during it.
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId, apiKey, session,
     latency: { ttft: 0, total: Date.now() - requestStartTime },
@@ -121,9 +114,69 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
     console.error("[RequestDetail] Failed to save streaming request:", err.message);
   });
 
+  const peeked = await peekUntilContent(transformedBody, transformStream, streamController?.signal);
+  if (peeked.error) {
+    const shortMsg = sanitizePublicMessage(peeked.error, "Upstream stream failed before any output");
+    if (log?.errorLine) log.errorLine(reqTag, "✗", `STREAM ${HTTP_STATUS.BAD_GATEWAY} · ${provider}/${model} · error before content\n    ${shortMsg}`);
+    streamController?.handleError?.(new Error(`upstream stream error: ${shortMsg}`));
+    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, shortMsg, undefined, { ...errorContext, provider, model });
+  }
+
+  if (onRequestSuccess) {
+    Promise.resolve()
+      .then(onRequestSuccess)
+      .catch(err => {
+        console.error("[ChatCore] onRequestSuccess failed:", err?.message || err);
+      });
+  }
+
   return {
     success: true,
-    response: new Response(transformedBody, { headers: { ...SSE_HEADERS, ...upstreamResponseHeaders(providerResponse.headers) } })
+    response: new Response(peeked.stream, { headers: { ...SSE_HEADERS, ...upstreamResponseHeaders(providerResponse.headers) } })
+  };
+}
+
+/**
+ * Hold the client stream until the first real output, so an upstream error that
+ * arrives before any content (HTTP 200 + SSE error event) becomes a routing failure
+ * the account/combo loop can fall back from, instead of the client's terminal error.
+ * Client keepalive while held comes from createStreamingResponse's heartbeat.
+ * ponytail: a format outcome() cannot see content in is held up to PEEK_MAX_BYTES and
+ * then streamed as before (no fallback past that point); add its shape to stream.js
+ * accumulateOutput to cover it.
+ */
+const PEEK_MAX_BYTES = 64 * 1024;
+
+async function peekUntilContent(body, transformStream, signal) {
+  const reader = body.getReader();
+  const held = [];
+  let heldBytes = 0;
+  let done = false;
+  while (!done && heldBytes < PEEK_MAX_BYTES) {
+    const outcome = transformStream.outcome();
+    if (outcome.content) break;
+    if (outcome.error) {
+      reader.cancel("upstream error before content").catch(() => { });
+      return { error: outcome.error };
+    }
+    let next;
+    try { next = await reader.read(); } catch (err) { return { error: err?.message || "Upstream stream failed" }; }
+    done = next.done;
+    if (!done) { held.push(next.value); heldBytes += next.value.byteLength; }
+  }
+  // Stall/abort terminals are appended outside the transform, so outcome() never sees them.
+  if (done && signal?.aborted && !transformStream.outcome().content) return { error: "Upstream stream stalled before any output" };
+  return {
+    stream: new ReadableStream({
+      async pull(controller) {
+        if (held.length) return controller.enqueue(held.shift());
+        if (done) return controller.close();
+        const next = await reader.read();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      },
+      cancel(reason) { return reader.cancel(reason); }
+    })
   };
 }
 

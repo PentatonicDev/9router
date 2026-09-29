@@ -164,6 +164,7 @@ export function createSSEStream(options = {}) {
     if (parsed.type === "response.output_item.added" && ["function_call", "custom_tool_call"].includes(parsed.item?.type)) accumulatedToolCalls++;
     if (typeof parsed.choices?.[0]?.delta?.content === "string") appendContent(parsed.choices[0].delta.content);
     if (typeof parsed.choices?.[0]?.delta?.reasoning_content === "string") appendThinking(parsed.choices[0].delta.reasoning_content);
+    else if (typeof parsed.choices?.[0]?.delta?.reasoning === "string") appendThinking(parsed.choices[0].delta.reasoning);
     countOpenAIToolCalls(parsed.choices);
     for (const part of (parsed.candidates || parsed.response?.candidates)?.[0]?.content?.parts || []) {
       if (typeof part.text === "string") {
@@ -188,6 +189,7 @@ export function createSSEStream(options = {}) {
   let openAIResponsesDoneSent = false;
   let streamDoneSent = false;  // track duplicate [DONE] across transform + flush
   let streamErrored = false;   // an upstream error was emitted: no success terminal may follow
+  let streamErrorMessage = null;
   let finishChunkSentToClient = false; // an OpenAI finish_reason chunk actually reached the client
   let finalized = false;
 
@@ -215,7 +217,8 @@ export function createSSEStream(options = {}) {
     return {
       events,
       finish_reason: (mode === STREAM_MODE.TRANSLATE ? state?.finishReason : null) || null,
-      errored: streamErrored
+      errored: streamErrored,
+      ...(streamErrored ? { error: String(streamErrorMessage || "Upstream stream error").slice(0, 300) } : {})
     };
   };
 
@@ -252,7 +255,7 @@ export function createSSEStream(options = {}) {
     }
   };
 
-  return new TransformStream({
+  const transformStream = new TransformStream({
     transform(chunk, controller) {
       if (!ttftAt) ttftAt = Date.now();
       const text = decoder.decode(chunk, { stream: true });
@@ -321,7 +324,8 @@ export function createSSEStream(options = {}) {
                 }
               }
 
-              if (extractStreamError(parsed)) streamErrored = true;
+              streamErrorMessage ||= extractStreamError(parsed);
+              if (streamErrorMessage) streamErrored = true;
 
               accumulateOutput(parsed);
               if (!hasValuableContent(parsed, FORMATS.OPENAI)) continue;
@@ -366,8 +370,9 @@ export function createSSEStream(options = {}) {
 
           reqLogger?.appendConvertedChunk?.(output);
           controller.enqueue(sharedEncoder.encode(output));
-          // Responses clients (codex CLI) close on response.completed instead of [DONE]
-          if (responsesTerminal) finalizeStream();
+          // Responses clients (codex CLI) close on response.completed instead of [DONE];
+          // an error line is terminal too, and the reader may be cancelled before flush().
+          if (responsesTerminal || streamErrored) finalizeStream();
           continue;
         }
 
@@ -460,6 +465,7 @@ export function createSSEStream(options = {}) {
         const upstreamError = extractStreamError(parsed);
         if (upstreamError) {
           streamErrored = true;
+          streamErrorMessage ||= upstreamError;
           const output = formatSSE(errorStreamChunk(sourceFormat, upstreamError), sourceFormat);
           reqLogger?.appendConvertedChunk?.(output);
           controller.enqueue(sharedEncoder.encode(output));
@@ -682,6 +688,12 @@ export function createSSEStream(options = {}) {
       }
     }
   });
+  // Read by the streaming handler to tell a pre-content upstream error from a real turn.
+  transformStream.outcome = () => ({
+    content: totalContentLength > 0 || accumulatedToolCalls > 0,
+    error: streamErrored ? (streamErrorMessage || upstreamErrorMessage || "Upstream stream error") : null,
+  });
+  return transformStream;
 }
 
 export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, customToolNames = null, credentials = null) {
