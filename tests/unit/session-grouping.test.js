@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveDetailSession, resolveSessionIdentity } from "open-sse/utils/sessionManager.js";
 import { buildRequestDetail, extractRequestConfig } from "open-sse/handlers/chatCore/requestDetail.js";
+import { detectClientTool } from "open-sse/utils/clientDetector.js";
 
 const hashSessionId = (parts) => JSON.stringify(parts);
 const CLAUDE_UUID = "6a4c1f2e-8b3d-4a7c-9e1f-0b2d3c4e5f60";
@@ -34,6 +35,16 @@ describe("request detail session identity", () => {
     const headers = { "x-session-id": "hermes-42" };
     expect(detailSession({}, { client: "hermes", headers }).id)
       .toBe(detailSession({}, { client: "hermes", headers, connectionId: "other" }).id);
+  });
+
+  it("groups Hermes turns by x-hermes-session-id", () => {
+    const headers = { "x-hermes-session-id": "hermes-sess-1" };
+    const client = detectClientTool(headers, {});
+    expect(client).toBe("hermes");
+    const a = detailSession({}, { client, headers });
+    expect(a).toMatchObject({ client: "hermes" });
+    expect(a.id).toBe(detailSession({}, { client, headers, connectionId: "other" }).id);
+    expect(a.id).not.toBe(detailSession({}, { client, headers: { "x-hermes-session-id": "hermes-sess-2" } }).id);
   });
 
   it("never treats per-request, per-user or connection fallback as conversation", () => {

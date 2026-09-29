@@ -46,6 +46,8 @@ export function detectClientTool(headers = {}, body = {}) {
   // DeepSeek TUI
   if (ua.includes("deepseek-tui")) return "deepseek-tui";
 
+  if (headers["x-hermes-session-id"]) return "hermes";
+
   return null;
 }
 
