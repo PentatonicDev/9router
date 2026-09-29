@@ -139,7 +139,15 @@ export class OpenCodeGoExecutor extends DefaultExecutor {
 
   async execute(args) {
     const credentials = this.prepareRequestCredentials(args);
-    return super.execute({ ...args, credentials });
+    const result = await super.execute({ ...args, credentials });
+    if (result.response.status !== 400 || args.body?.reasoning_effort === undefined) return result;
+    // Some Go backends (glm-5.3-flash) 400 on reasoning_effort ("native reasoning control
+    // reasoning_effort is not ..."); those models reason unconditionally, so drop it once.
+    const text = await result.response.clone().text().catch(() => "");
+    if (!/reasoning_effort/i.test(text)) return result;
+    await result.response.body?.cancel?.().catch(() => {});
+    const { reasoning_effort, ...body } = args.body;
+    return super.execute({ ...args, body, credentials });
   }
 
   // The body is part of the signature: the session id is resolved from the
