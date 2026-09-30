@@ -58,6 +58,7 @@ export function cloakClaudeTools(body) {
   if (!tools || tools.length === 0) return { body, toolNameMap: null };
 
   const suffix = (name) => `${name}${CLAUDE_TOOL_SUFFIX}`;
+  const declaredNames = new Set(tools.map(tool => tool.name));
   const toolNameMap = new Map();
   const clientToolNames = new Set();
   const clientDeclarations = [];
@@ -76,11 +77,15 @@ export function cloakClaudeTools(body) {
   // Client tools first, then CC decoy tools (no overlap: client tools all have _cc suffix)
   const allTools = [...clientDeclarations, ...CC_DECOY_TOOLS];
 
-  // Rename tool_use in message history (all client tools get suffix)
+  // Rename tool_use in message history. A name that already carries the suffix
+  // (a cloaked name that reached the client and came back) is suffixed once from
+  // its declared original, never twice: a doubled name in history makes the
+  // model call "<tool>_ide_ide", which no declared tool matches.
+  const historyName = (name) => suffix(declaredNames.has(name) ? name : uncloakedName(name, declaredNames));
   const renamedMessages = body.messages?.map(msg => {
     if (!Array.isArray(msg.content)) return msg;
     const renamedContent = msg.content.map(block =>
-      block.type === "tool_use" ? { ...block, name: suffix(block.name) } : block
+      block.type === "tool_use" ? { ...block, name: historyName(block.name) } : block
     );
     return { ...msg, content: renamedContent };
   });
@@ -104,14 +109,29 @@ export function cloakClaudeTools(body) {
   };
 }
 
-// Strip a trailing CLAUDE_TOOL_SUFFIX from a cloaked name as a last-resort
-// fallback when the name isn't in toolNameMap (e.g. map lost across a retry/
-// reconnect). Never strips decoy names — those are meant to reach the client
-// unresolved so it can see "tool unavailable" instead of silently no-oping.
-function stripCloakSuffix(name) {
-  if (typeof name !== "string" || !name.endsWith(CLAUDE_TOOL_SUFFIX)) return null;
-  if (CC_DEFAULT_TOOLS.has(name)) return null;
-  const original = name.slice(0, -CLAUDE_TOOL_SUFFIX.length);
+// Strip trailing CLAUDE_TOOL_SUFFIX copies until the name is one of `knownNames`
+// (or none is left to strip). Returns the name unchanged when it isn't suffixed.
+function uncloakedName(name, knownNames) {
+  let current = name;
+  while (!knownNames.has(current) && current.endsWith(CLAUDE_TOOL_SUFFIX) && current.length > CLAUDE_TOOL_SUFFIX.length) {
+    current = current.slice(0, -CLAUDE_TOOL_SUFFIX.length);
+  }
+  return current;
+}
+
+// Resolve a cloaked name back to the client's: through toolNameMap, stripping
+// extra suffix copies the model copied from a doubled history name, and as a
+// last resort (map lost across a retry/reconnect) by stripping every suffix.
+// Never resolves decoy names — those reach the client unresolved so it sees
+// "tool unavailable" instead of a silent no-op.
+export function resolveCloakedName(name, toolNameMap) {
+  if (typeof name !== "string" || CC_DEFAULT_TOOLS.has(name)) return null;
+  if (toolNameMap?.has(name)) return toolNameMap.get(name);
+  if (!name.endsWith(CLAUDE_TOOL_SUFFIX)) return null;
+  const known = new Set(toolNameMap?.keys() || []);
+  const cloaked = uncloakedName(name, known);
+  if (known.has(cloaked)) return toolNameMap.get(cloaked);
+  const original = uncloakedName(name, new Set());
   return original.length > 0 ? original : null;
 }
 
@@ -120,13 +140,8 @@ export function decloakToolNames(body, toolNameMap) {
   if (!Array.isArray(body?.content)) return body;
   const content = body.content.map(block => {
     if (block?.type !== "tool_use") return block;
-    if (toolNameMap?.has(block.name)) {
-      return { ...block, name: toolNameMap.get(block.name) };
-    }
-    // toolNameMap missing/stale for this name — fall back to suffix stripping
-    // rather than forwarding an unresolvable "<tool>_ide" name to the client.
-    const fallback = stripCloakSuffix(block.name);
-    return fallback ? { ...block, name: fallback } : block;
+    const original = resolveCloakedName(block.name, toolNameMap);
+    return original ? { ...block, name: original } : block;
   });
   return { ...body, content };
 }
@@ -155,7 +170,7 @@ export function decloakStreamChunk(chunk, toolNameMap) {
   if (chunk.type !== "content_block_start") return chunk;
   const block = chunk.content_block;
   if (block?.type !== "tool_use" || typeof block.name !== "string") return chunk;
-  const original = toolNameMap?.get(block.name) || stripCloakSuffix(block.name);
+  const original = resolveCloakedName(block.name, toolNameMap);
   if (!original) return chunk;
   return { ...chunk, content_block: { ...block, name: original } };
 }

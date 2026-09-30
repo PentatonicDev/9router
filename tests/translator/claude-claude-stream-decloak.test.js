@@ -42,6 +42,12 @@ describe("Claude → Claude streaming passthrough (OAuth tool cloak)", () => {
     expect(out.content_block.name).toBe("run_code");
   });
 
+  it("restores the original name on the Claude → OpenAI path when the model repeats the suffix", () => {
+    const out = translateResponse(FORMATS.CLAUDE, FORMATS.OPENAI, toolUseStart(CLOAKED + CLAUDE_TOOL_SUFFIX), { ...state, toolCallIndex: 0, toolCalls: new Map() });
+    const names = out.flatMap(c => c?.choices?.[0]?.delta?.tool_calls || []).map(call => call.function.name);
+    expect(names).toEqual(["run_code"]);
+  });
+
   it("tolerates the null flush chunk", () => {
     const [out] = translateResponse(FORMATS.CLAUDE, FORMATS.CLAUDE, null, state);
     expect(out).toBeNull();

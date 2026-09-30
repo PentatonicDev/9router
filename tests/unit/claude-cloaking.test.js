@@ -75,6 +75,28 @@ describe("cloakClaudeTools", () => {
     expect(block.name).toBe(`todo_write${CLAUDE_TOOL_SUFFIX}`);
   });
 
+  it("suffixes a history name that already carries the suffix only once", () => {
+    const cloaked = `todo_write${CLAUDE_TOOL_SUFFIX}`;
+    const { body } = cloakClaudeTools({
+      ...baseBody,
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "t1", name: cloaked, input: {} }] },
+        { role: "assistant", content: [{ type: "tool_use", id: "t2", name: `${cloaked}${CLAUDE_TOOL_SUFFIX}`, input: {} }] }
+      ]
+    });
+    expect(body.messages.map(m => m.content[0].name)).toEqual([cloaked, cloaked]);
+  });
+
+  it("keeps a declared tool whose own name ends with the suffix", () => {
+    const declared = `run${CLAUDE_TOOL_SUFFIX}`;
+    const { body, toolNameMap } = cloakClaudeTools({
+      tools: [{ name: declared, input_schema: { type: "object", properties: {} } }],
+      messages: [{ role: "assistant", content: [{ type: "tool_use", id: "t1", name: declared, input: {} }] }]
+    });
+    expect(body.messages[0].content[0].name).toBe(`${declared}${CLAUDE_TOOL_SUFFIX}`);
+    expect(toolNameMap.get(`${declared}${CLAUDE_TOOL_SUFFIX}`)).toBe(declared);
+  });
+
   it("returns the body unchanged when there are no tools", () => {
     const input = { messages: [{ role: "user", content: "hi" }], tool_choice: { type: "tool", name: "x" } };
     const { body, toolNameMap } = cloakClaudeTools(input);
@@ -102,6 +124,20 @@ describe("decloakStreamChunk", () => {
     const chunk = toolUseStart("run_code" + CLAUDE_TOOL_SUFFIX);
     decloakStreamChunk(chunk, toolNameMap);
     expect(chunk.content_block.name).toBe("run_code" + CLAUDE_TOOL_SUFFIX);
+  });
+
+  it("restores the original name when the model repeats the suffix", () => {
+    const out = decloakStreamChunk(toolUseStart(`run_code${CLAUDE_TOOL_SUFFIX}${CLAUDE_TOOL_SUFFIX}`), toolNameMap);
+    expect(out.content_block.name).toBe("run_code");
+    const noMap = decloakStreamChunk(toolUseStart(`run_code${CLAUDE_TOOL_SUFFIX}${CLAUDE_TOOL_SUFFIX}`), null);
+    expect(noMap.content_block.name).toBe("run_code");
+  });
+
+  it("keeps a declared name that itself ends with the suffix when the model repeats it", () => {
+    const declared = `run${CLAUDE_TOOL_SUFFIX}`;
+    const map = new Map([[`${declared}${CLAUDE_TOOL_SUFFIX}`, declared]]);
+    const out = decloakStreamChunk(toolUseStart(`${declared}${CLAUDE_TOOL_SUFFIX}${CLAUDE_TOOL_SUFFIX}`), map);
+    expect(out.content_block.name).toBe(declared);
   });
 
   it("passes through names the map does not know (e.g. decoy tools)", () => {

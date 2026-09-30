@@ -5,6 +5,7 @@ import { buildChunk } from "../concerns/chunk.js";
 import { toOpenAIUsage } from "../concerns/usage.js";
 import { reasoningDelta } from "../concerns/reasoning.js";
 import { toOpenAIFinish } from "../concerns/finishReason.js";
+import { resolveCloakedName } from "../../utils/claudeCloaking.js";
 
 // Create OpenAI chunk helper
 function createChunk(state, delta, finishReason = null) {
@@ -61,8 +62,7 @@ export function claudeToOpenAIResponse(chunk, state) {
         state.textBlockStarted = true;
       } else if (block?.type === CLAUDE_BLOCK.TOOL_USE) {
         const toolCallIndex = state.toolCallIndex++;
-        // Restore original tool name from mapping (Claude OAuth)
-        const toolName = state.toolNameMap?.get(block.name) || block.name;
+        const toolName = (state.toolNameMap && resolveCloakedName(block.name, state.toolNameMap)) || block.name;
         const toolCall = {
           index: toolCallIndex,
           id: block.id,
