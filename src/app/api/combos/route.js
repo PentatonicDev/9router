@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCombos, createCombo, getComboByName } from "@/lib/localDb";
 import { getHiddenComboNames } from "@/lib/db/repos/hiddenCombosRepo.js";
-import { getRequestIdentity, getScopeFilter, ownerForCreate, scopeVisible } from "@/lib/auth/resourceScope";
+import { getRequestIdentity, getScopeFilter, ownerForCreate, resolveDefaultOwner, scopeVisible } from "@/lib/auth/resourceScope";
 import { THINKING_ORDER } from "open-sse/translator/concerns/thinking.js";
 
 export const dynamic = "force-dynamic";
@@ -72,9 +72,11 @@ export async function POST(request) {
       return NextResponse.json({ error: "Invalid maxThinking level" }, { status: 400 });
     }
 
-    // Names are unique per owner, so only a clash within the caller's own scope
-    // blocks creation — another user may already own a combo with this name.
-    const { owner, isAdmin } = await getRequestIdentity();
+    // Names are unique per owner, so only a clash within the owner the combo will
+    // land on blocks creation — another user may already own one with this name.
+    const { isAdmin } = await getRequestIdentity();
+    const requestedOwner = await ownerForCreate(body.owner);
+    const owner = requestedOwner === undefined ? await resolveDefaultOwner() : requestedOwner;
     const existing = await getComboByName(name, owner);
     if (existing && (existing.owner ?? null) === (owner ?? null)) {
       return NextResponse.json({ error: "Combo name already exists" }, { status: 400 });
@@ -92,7 +94,7 @@ export async function POST(request) {
     const combo = await createCombo({
       name, models: models || [], kind: kind || null, modelOptions: modelOptions || null,
       maxThinking: maxThinking || null,
-      owner: await ownerForCreate(body.owner),
+      owner,
     });
 
     return NextResponse.json(combo, { status: 201 });

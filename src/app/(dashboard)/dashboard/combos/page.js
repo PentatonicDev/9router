@@ -76,6 +76,7 @@ export default function CombosPage() {
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingCombo, setEditingCombo] = useState(null);
+  const [cloningCombo, setCloningCombo] = useState(null);
   const [activeProviders, setActiveProviders] = useState([]);
   const [comboStrategies, setComboStrategies] = useState({});
   const [capacityAdapter, setCapacityAdapter] = useState(EMPTY_CAPACITY_ADAPTER);
@@ -277,6 +278,33 @@ export default function CombosPage() {
       }
     } catch (error) {
       console.log("Error updating combo:", error);
+    }
+  };
+
+  const handleClone = async (source, { name, owner }) => {
+    try {
+      const res = await fetch("/api/combos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name, owner,
+          models: source.models, kind: source.kind,
+          modelOptions: source.modelOptions, maxThinking: source.maxThinking,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error || "Failed to clone combo");
+        return;
+      }
+      // ponytail: strategies are keyed by name only, so owners sharing a name share it too.
+      if (comboStrategies[source.name]) {
+        await persistComboStrategies({ ...comboStrategies, [name]: comboStrategies[source.name] });
+      }
+      await fetchData();
+      setCloningCombo(null);
+    } catch (error) {
+      console.log("Error cloning combo:", error);
     }
   };
 
@@ -564,6 +592,7 @@ export default function CombosPage() {
                     copied={copied}
                     onCopy={copy}
                     onEdit={combo.readOnly ? null : () => setEditingCombo(combo)}
+                    onClone={() => setCloningCombo(combo)}
                     onDelete={combo.readOnly ? null : () => handleDelete(combo.id)}
                     onHide={combo.readOnly ? () => handleToggleHidden(combo.name, true) : null}
                     strategy={comboStrategies[combo.name] || {}}
@@ -637,6 +666,16 @@ export default function CombosPage() {
         />
       )}
 
+      {cloningCombo && (
+        <CloneComboModal
+          key={cloningCombo.id}
+          combo={cloningCombo}
+          onClose={() => setCloningCombo(null)}
+          onClone={(data) => handleClone(cloningCombo, data)}
+          canAssignOwner={identity.scoped && identity.isAdmin}
+        />
+      )}
+
       {/* Confirm (delete / generate presets) */}
       <ConfirmModal
         isOpen={!!confirmState}
@@ -661,7 +700,46 @@ const fmtK = (n) => {
   return `${Math.round(n / 1000)}k`;
 };
 
-function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, onHide = null, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
+function CloneComboModal({ combo, onClose, onClone, canAssignOwner }) {
+  const [name, setName] = useState(`${combo.name}-copy`);
+  const [owner, setOwner] = useState(combo.owner || "");
+  const [saving, setSaving] = useState(false);
+  const nameError = !name.trim() ? "Name is required"
+    : !VALID_NAME_REGEX.test(name.trim()) ? "Only letters, numbers, -, _ and . allowed" : "";
+
+  const handleClone = async () => {
+    if (nameError) return;
+    setSaving(true);
+    // Same rule as create: only an admin picks the owner, everyone else gets their own.
+    await onClone({ name: name.trim(), ...(canAssignOwner ? { owner: owner.trim() || null } : {}) });
+    setSaving(false);
+  };
+
+  return (
+    <Modal isOpen onClose={onClose} title={`Clone "${combo.name}"`}>
+      <div className="flex flex-col gap-3">
+        <Input label="Combo Name" value={name} onChange={(e) => setName(e.target.value)} error={nameError} />
+        {canAssignOwner && (
+          <Input
+            label="Owner"
+            value={owner}
+            onChange={(e) => setOwner(e.target.value)}
+            placeholder="user@company.com"
+            hint="Leave empty to share with everyone."
+          />
+        )}
+        <div className="flex flex-col gap-2 pt-1 sm:flex-row">
+          <Button onClick={onClose} variant="ghost" fullWidth size="sm">Cancel</Button>
+          <Button onClick={handleClone} fullWidth size="sm" disabled={!!nameError || saving}>
+            {saving ? "Cloning..." : "Clone"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onClone, onDelete, onHide = null, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
@@ -773,6 +851,16 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
               >
                 <span className="material-symbols-outlined text-[18px]">edit</span>
                 <span className="text-[10px] leading-tight">Edit</span>
+              </button>
+            )}
+            {onClone && (
+              <button
+                onClick={onClone}
+                className="flex flex-col items-center rounded px-2 py-1 text-text-muted transition-colors hover:bg-black/5 hover:text-primary dark:hover:bg-white/5"
+                title="Clone"
+              >
+                <span className="material-symbols-outlined text-[18px]">file_copy</span>
+                <span className="text-[10px] leading-tight">Clone</span>
               </button>
             )}
             {onDelete && (
