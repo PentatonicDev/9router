@@ -54,7 +54,9 @@ export const SEARXNG_URL = envUrl("SEARXNG_URL", "http://localhost:8888/search")
 
 // Client-facing SSE heartbeat. Keeps reverse proxies from timing out while
 // provider selection, account fallback, or prompt prefill is still running.
-export const STREAM_HEARTBEAT_INTERVAL_MS = envMs("STREAM_HEARTBEAT_INTERVAL_MS", 25 * 1000);
+// Must stay under 20s: Claude Code shows "Waiting for API response" after 20s
+// without a byte on the wire.
+export const STREAM_HEARTBEAT_INTERVAL_MS = envMs("STREAM_HEARTBEAT_INTERVAL_MS", 10 * 1000);
 
 // Inter-chunk stall timeout (once tokens are flowing). Generous headroom so
 // slow reasoning models aren't aborted mid-stream. Env: STREAM_STALL_TIMEOUT_MS.

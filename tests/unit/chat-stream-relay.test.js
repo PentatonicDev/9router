@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import { createStreamingResponse } from "../../open-sse/utils/streamHandler.js";
-import { STREAM_STATUS_GRACE_MS } from "../../open-sse/config/runtimeConfig.js";
+import { STREAM_HEARTBEAT_INTERVAL_MS, STREAM_STATUS_GRACE_MS } from "../../open-sse/config/runtimeConfig.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -36,6 +36,10 @@ async function openAfterGrace(promise) {
 afterEach(() => vi.useRealTimers());
 
 describe("createStreamingResponse", () => {
+  it("heartbeats faster than Claude Code's 20s stall banner", () => {
+    expect(STREAM_HEARTBEAT_INTERVAL_MS).toBeLessThan(20_000);
+  });
+
   it("opens at the grace deadline, heartbeats while routing waits, then preserves final bytes", async () => {
     vi.useFakeTimers();
     const routing = deferred();
@@ -50,7 +54,7 @@ describe("createStreamingResponse", () => {
     expect(await readChunk(reader)).toEqual({ text: ": ping\n\n", done: false });
 
     const second = readChunk(reader);
-    await vi.advanceTimersByTimeAsync(25_000);
+    await vi.advanceTimersByTimeAsync(STREAM_HEARTBEAT_INTERVAL_MS);
     expect(await second).toEqual({ text: ": ping\n\n", done: false });
 
     routing.resolve(responseOf('data: {"choices":[]}\n\ndata: [DONE]\n\n'));
