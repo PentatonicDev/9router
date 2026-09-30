@@ -57,6 +57,18 @@ describe("getCapabilitiesForModel", () => {
     });
   });
 
+  it("reports Claude Opus 5.5 and Sonnet 5.5 as permanent adaptive-thinking models", () => {
+    for (const model of ["claude-opus-5-5", "claude-sonnet-5-5"]) {
+      for (const provider of ["claude", "anthropic"]) {
+        expect(getCapabilitiesForModel(provider, model)).toMatchObject({
+          ...claudeSonnet5Expected,
+          pdf: true,
+          thinkingCanDisable: false,
+        });
+      }
+    }
+  });
+
   it("reports Kiro Claude Opus 4.8 as a 1M context model", () => {
     expect(getCapabilitiesForModel("kiro", "claude-opus-4.8").contextWindow).toBe(1000000);
     expect(getCapabilitiesForModel("kiro", "anthropic/claude-opus-4.8").contextWindow).toBe(1000000);

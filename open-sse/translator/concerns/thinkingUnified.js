@@ -286,11 +286,12 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
     case "claude-adaptive": {
       if (none && canDisable) { body.thinking = { type: "disabled" }; break; }
       // Models that can disable thinking need the explicit adaptive switch.
-      // Permanently adaptive models such as Fable 5.1 accept effort directly.
-      if (canDisable) body.thinking = { type: "adaptive", ...(display ? { display } : {}) };
+      // Permanently adaptive models (Fable 5.1, Opus/Sonnet 5.5) accept effort
+      // directly, but still need the switch to carry a requested display.
+      if (canDisable || display) body.thinking = { type: "adaptive", ...(display ? { display } : {}) };
       else delete body.thinking;
       const level = toLevel(eff);
-      body.output_config = { effort: level === "xhigh" || level === "auto" ? "high" : level };
+      body.output_config = { effort: level === "xhigh" || level === "auto" ? "high" : level === "minimal" ? "low" : level };
       break;
     }
     case "claude-budget": {

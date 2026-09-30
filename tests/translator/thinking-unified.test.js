@@ -97,6 +97,18 @@ describe("applyThinking per provider format", () => {
     expect(out.output_config).toEqual({ effort: "high" });
     expect(out.thinking).toBeUndefined();
   });
+  it("Sonnet/Opus 5.5 never send thinking:disabled, which they reject with a 400", () => {
+    for (const model of ["claude-sonnet-5-5", "claude-opus-5-5"]) {
+      const out = apply("claude", model, { reasoning_effort: "none" }, "claude");
+      expect(out.thinking).toBeUndefined();
+      expect(out.output_config).toEqual({ effort: "low" });
+    }
+  });
+  it("Sonnet 5.5 keeps adaptive effort and the requested display instead of a thinking budget", () => {
+    const out = apply("claude", "claude-sonnet-5-5", { thinking: { type: "adaptive", display: "summarized" }, output_config: { effort: "low" } }, "claude");
+    expect(out.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(out.output_config).toEqual({ effort: "low" });
+  });
   it("claude haiku → enabled+budget", () => {
     const out = apply("claude", "claude-haiku-4.5", { reasoning_effort: "high" }, "claude");
     expect(out.thinking).toEqual({ type: "enabled", budget_tokens: 24576 });
