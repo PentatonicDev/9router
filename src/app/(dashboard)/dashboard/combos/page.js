@@ -264,12 +264,18 @@ export default function CombosPage() {
 
   const handleUpdate = async (id, data) => {
     try {
+      const prevName = editingCombo?.name;
       const res = await fetch(`/api/combos/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
       if (res.ok) {
+        // Strategies are keyed by name; a rename (e.g. name turned into an alias) keeps its strategy.
+        if (prevName && data.name && data.name !== prevName && comboStrategies[prevName]) {
+          const { [prevName]: moved, ...rest } = comboStrategies;
+          await persistComboStrategies({ ...rest, [data.name]: moved });
+        }
         await fetchData();
         setEditingCombo(null);
       } else {
@@ -768,6 +774,11 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
           </div>
           <div className="min-w-0 flex-1">
             <code className="block truncate font-mono text-sm font-medium">{combo.name}</code>
+            {combo.aliases?.length > 0 && (
+              <p className="truncate font-mono text-[10px] text-text-muted" title={combo.aliases.join(", ")}>
+                aka {combo.aliases.join(", ")}
+              </p>
+            )}
             <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
               {combo.models.length === 0 ? (
                 <span className="text-xs text-text-muted italic">No models</span>
@@ -1235,6 +1246,9 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState("");
   const [owner, setOwner] = useState(combo?.owner || "");
+  const [aliases, setAliases] = useState(combo?.aliases || []);
+  const [aliasDraft, setAliasDraft] = useState("");
+  const [aliasError, setAliasError] = useState("");
   const [modelAliases, setModelAliases] = useState({});
 
   const sensors = useSensors(
@@ -1291,6 +1305,29 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
     else setNameError("");
   };
 
+  const addAlias = (raw, { fromName = false } = {}) => {
+    const alias = raw.trim();
+    if (!alias) return false;
+    if (!VALID_NAME_REGEX.test(alias)) { setAliasError("Only letters, numbers, -, _ and . allowed"); return false; }
+    if (!fromName && alias === name.trim()) { setAliasError("Alias can't be the combo name"); return false; }
+    setAliasError("");
+    setAliases((prev) => (prev.includes(alias) ? prev : [...prev, alias]));
+    return true;
+  };
+
+  const handleAliasKeyDown = (e) => {
+    if (e.key !== "Enter" && e.key !== ",") return;
+    e.preventDefault();
+    if (addAlias(aliasDraft)) setAliasDraft("");
+  };
+
+  // Keeps the current name answering requests as an alias and asks for a new one.
+  const convertNameToAlias = () => {
+    if (!addAlias(name, { fromName: true })) return;
+    setName("");
+    setNameError("Enter a new name");
+  };
+
   const handleAddModel = (model) => {
     if (!models.includes(model.value)) {
       setModels([...models, model.value]);
@@ -1337,6 +1374,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
       name: name.trim(), models,
       modelOptions: Object.keys(modelOptions).length ? modelOptions : null,
       maxThinking: maxThinking || null,
+      aliases,
       ...(canAssignOwner ? { owner: owner.trim() || null } : {}),
     });
     setSaving(false);
@@ -1363,6 +1401,54 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
             />
             <p className="text-[10px] text-text-muted mt-0.5">
               Only letters, numbers, -, _ and . allowed
+            </p>
+          </div>
+
+          {/* Aliases */}
+          <div>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <label htmlFor="combo-alias-input" className="text-sm font-medium">Aliases</label>
+              <button
+                type="button"
+                onClick={convertNameToAlias}
+                disabled={!name.trim() || !!nameError}
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-40"
+                title="Keep the current name as an alias and pick a new name"
+              >
+                <span className="material-symbols-outlined text-[14px]" aria-hidden="true">swap_horiz</span>
+                Convert name to alias
+              </button>
+            </div>
+            {aliases.length > 0 && (
+              <ul className="mb-1.5 flex flex-wrap gap-1" aria-label="Combo aliases">
+                {aliases.map((alias) => (
+                  <li key={alias} className="inline-flex items-center gap-1 rounded bg-black/5 py-0.5 pl-1.5 pr-0.5 font-mono text-xs dark:bg-white/5">
+                    {alias}
+                    <button
+                      type="button"
+                      onClick={() => setAliases(aliases.filter((a) => a !== alias))}
+                      className="rounded p-0.5 text-text-muted hover:bg-red-500/10 hover:text-red-500"
+                      aria-label={`Remove alias ${alias}`}
+                    >
+                      <span className="material-symbols-outlined text-[12px]" aria-hidden="true">close</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <input
+              id="combo-alias-input"
+              value={aliasDraft}
+              onChange={(e) => { setAliasDraft(e.target.value); setAliasError(""); }}
+              onKeyDown={handleAliasKeyDown}
+              onBlur={() => { if (aliasDraft.trim() && addAlias(aliasDraft)) setAliasDraft(""); }}
+              placeholder="claude-opus-5"
+              aria-invalid={!!aliasError}
+              aria-describedby="combo-alias-help"
+              className="w-full rounded border border-black/10 bg-white px-2 py-1.5 font-mono text-sm outline-none focus:border-primary dark:border-white/10 dark:bg-black/20"
+            />
+            <p id="combo-alias-help" className={`mt-0.5 text-[10px] ${aliasError ? "text-red-500" : "text-text-muted"}`}>
+              {aliasError || "Other model names this combo answers to. Press Enter to add."}
             </p>
           </div>
 

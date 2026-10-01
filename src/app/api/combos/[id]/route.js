@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getComboById, updateCombo, deleteCombo, getComboByName } from "@/lib/localDb";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import { canSee, getRequestIdentity, getScopeFilter, normalizeOwnerInput } from "@/lib/auth/resourceScope";
-import { isValidModelOptions, isValidMaxThinking } from "@/app/api/combos/route.js";
+import { isValidModelOptions, isValidMaxThinking, normalizeAliases, findNameClash } from "@/app/api/combos/route.js";
 
 // A shared combo (no owner) is usable by everyone but only an admin may change it.
 async function denyWrite(combo) {
@@ -45,17 +45,19 @@ export async function PUT(request, { params }) {
     const denied = await denyWrite(prev);
     if (denied) return NextResponse.json({ error: denied.error }, { status: denied.status });
 
-    // Validate name format if provided
-    if (body.name) {
-      if (!VALID_NAME_REGEX.test(body.name)) {
-        return NextResponse.json({ error: "Name can only contain letters, numbers, -, _ and ." }, { status: 400 });
-      }
+    if (body.name && !VALID_NAME_REGEX.test(body.name)) {
+      return NextResponse.json({ error: "Name can only contain letters, numbers, -, _ and ." }, { status: 400 });
+    }
+    const nextName = body.name || prev.name;
+    const { aliases, error: aliasError } = normalizeAliases(body.aliases ?? prev.aliases, nextName);
+    if (aliasError) return NextResponse.json({ error: aliasError }, { status: 400 });
 
-      // Names clash only within the same owner's scope.
-      const existing = await getComboByName(body.name, prev.owner ?? null);
-      if (existing && existing.id !== id && (existing.owner ?? null) === (prev.owner ?? null)) {
-        return NextResponse.json({ error: "Combo name already exists" }, { status: 400 });
-      }
+    // Only names that are new to this combo can clash; its current ones are its own.
+    const owned = new Set([prev.name, ...(prev.aliases || [])]);
+    const added = [nextName, ...aliases].filter((n) => !owned.has(n));
+    const clash = await findNameClash(added, prev.owner ?? null, id, true);
+    if (clash) {
+      return NextResponse.json({ error: clash.name === nextName ? "Combo name already exists" : `"${clash.name}" is already used by combo "${clash.combo.name}"` }, { status: 400 });
     }
 
     if (!isValidModelOptions(body.modelOptions)) {
@@ -66,7 +68,7 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: "Invalid maxThinking level" }, { status: 400 });
     }
 
-    const patch = { ...body };
+    const patch = { ...body, aliases };
     delete patch.owner;
     if (body.owner !== undefined && (await getRequestIdentity()).isAdmin) {
       patch.owner = normalizeOwnerInput(body.owner);

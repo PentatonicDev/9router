@@ -258,7 +258,8 @@ export function getComboModelsFromData(modelStr, combosData) {
   // Handle both array and object formats
   const combos = Array.isArray(combosData) ? combosData : (combosData?.combos || []);
   
-  const combo = combos.find(c => c.name === modelStr);
+  const combo = combos.find(c => c.name === modelStr)
+    || combos.find(c => Array.isArray(c.aliases) && c.aliases.includes(modelStr));
   if (combo && combo.models && combo.models.length > 0) {
     return combo.models;
   }

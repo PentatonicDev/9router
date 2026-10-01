@@ -12,6 +12,7 @@ function rowToCombo(row) {
     models: parseJson(row.models, []),
     modelOptions: parseJson(row.modelOptions, null),
     maxThinking: row.maxThinking ?? null,
+    aliases: parseJson(row.aliases, []) || [],
     owner: row.owner ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -37,24 +38,30 @@ export async function getComboById(id) {
  */
 export async function getComboByName(name, owner = undefined) {
   const db = await getDb();
-  const shared = () => db.selectFrom("combos").selectAll()
-    .where("name", "=", name).where("owner", "is", null).executeTakeFirst();
+  // A name always beats an alias in the same scope.
+  const find = async (scope) => {
+    const byName = await scope(db.selectFrom("combos").selectAll().where("name", "=", name)).executeTakeFirst();
+    if (byName) return byName;
+    // LIKE only narrows the scan (`_` is a wildcard); the parsed array decides.
+    const candidates = await scope(db.selectFrom("combos").selectAll()
+      .where("aliases", "like", `%${JSON.stringify(name)}%`)).execute();
+    return candidates.find((r) => (parseJson(r.aliases, []) || []).includes(name)) || null;
+  };
+  const shared = () => find((q) => q.where("owner", "is", null));
 
-  if (owner === undefined) {
-    return rowToCombo(await db.selectFrom("combos").selectAll().where("name", "=", name).executeTakeFirst());
-  }
+  if (owner === undefined) return rowToCombo(await find((q) => q));
   if (owner === null) return rowToCombo(await shared());
 
-  const own = await db.selectFrom("combos").selectAll()
-    .where("name", "=", name).where("owner", "=", owner).executeTakeFirst();
+  const own = await find((q) => q.where("owner", "=", owner));
   if (own) return rowToCombo(own);
 
-  // A shared combo the user hid no longer answers for them.
+  // A shared combo the user hid no longer answers for them, under any of its names.
+  const sharedRow = await shared();
+  if (!sharedRow) return null;
   const hidden = await db.selectFrom("kv").select("value")
     .where("scope", "=", "hiddenGlobalCombos").where("key", "=", owner).executeTakeFirst();
-  if ((parseJson(hidden?.value, []) || []).includes(name)) return null;
-
-  return rowToCombo(await shared());
+  if ((parseJson(hidden?.value, []) || []).includes(sharedRow.name)) return null;
+  return rowToCombo(sharedRow);
 }
 
 export async function createCombo(data) {
@@ -67,6 +74,7 @@ export async function createCombo(data) {
     models: data.models || [],
     modelOptions: data.modelOptions || null,
     maxThinking: data.maxThinking || null,
+    aliases: data.aliases || [],
     owner: data.owner === undefined ? await resolveDefaultOwner() : normalizeOwnerInput(data.owner),
     createdAt: now,
     updatedAt: now,
@@ -76,6 +84,7 @@ export async function createCombo(data) {
     models: stringifyJson(combo.models),
     modelOptions: combo.modelOptions ? stringifyJson(combo.modelOptions) : null,
     maxThinking: combo.maxThinking,
+    aliases: combo.aliases.length ? stringifyJson(combo.aliases) : null,
     owner: combo.owner,
     createdAt: combo.createdAt, updatedAt: combo.updatedAt,
   }).execute();
@@ -94,6 +103,7 @@ export async function updateCombo(id, data) {
       models: stringifyJson(merged.models || []),
       modelOptions: merged.modelOptions ? stringifyJson(merged.modelOptions) : null,
       maxThinking: merged.maxThinking || null,
+      aliases: merged.aliases?.length ? stringifyJson(merged.aliases) : null,
       owner: merged.owner ?? null, updatedAt: merged.updatedAt,
     }).where("id", "=", id).execute();
     result = merged;

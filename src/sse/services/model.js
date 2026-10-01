@@ -78,6 +78,13 @@ export async function getModelInfo(modelStr, comboOwner = undefined) {
   return getModelInfoCore(modelStr, getModelAliases);
 }
 
+// Combo strategies, rotation and logs are keyed by the combo's own name, so an
+// alias is swapped for it before routing. Anything else passes through unchanged.
+export async function canonicalComboName(modelStr, comboOwner = undefined) {
+  if (!modelStr || modelStr.includes("/")) return modelStr;
+  return (await getComboByName(modelStr, comboOwner))?.name || modelStr;
+}
+
 /**
  * Check if model is a combo and get models list
  * @returns {Promise<string[]|null>} Array of models or null if not a combo

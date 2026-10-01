@@ -140,6 +140,8 @@ export const TABLES = {
       modelOptions: "TEXT",
       // Combo-wide thinking cap (same levels); a per-model cap below it wins.
       maxThinking: "TEXT",
+      // JSON array of extra names the combo answers to; unique in the same scope as names.
+      aliases: "TEXT",
       // See providerConnections.owner.
       owner: "TEXT",
       createdAt: "TEXT NOT NULL",

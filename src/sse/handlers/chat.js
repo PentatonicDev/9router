@@ -10,7 +10,7 @@ import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../service
 import { getExhaustedQuotaResetMs } from "../services/quotaReset.js";
 import { getSettings, getApiKeyRoutingContext } from "@/lib/localDb";
 import { resolveScopedSettings, headroomProjectUrl } from "@/lib/auth/scopedSettings";
-import { getModelInfo, getComboModels, getComboModelOptions } from "../services/model.js";
+import { getModelInfo, getComboModels, getComboModelOptions, canonicalComboName } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
 import { getTransform as getPxpipeTransform } from "@/lib/pxpipe/loader.js";
@@ -143,11 +143,12 @@ export async function handleChat(request, clientRawRequest = null, options = {})
   return route(request.signal);
 }
 
-async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, clientRawRequest, request, apiKey, errorContext, signal, entryPhases }) {
+async function routeChat({ body, modelStr: requestedModel, settings, comboOwner, apiKeyContext, clientRawRequest, request, apiKey, errorContext, signal, entryPhases }) {
   // Reuse request-scoped reads across model/account fallback. In distributed mode
   // these are Postgres round trips; re-reading the same settings/owner for every
   // candidate adds latency without changing the answer inside one request.
   const routingContext = { settings, comboOwner, apiKeyContext, entryPhases };
+  const modelStr = await canonicalComboName(requestedModel, comboOwner);
   const requiredCapabilities = detectRequiredCapabilities(body);
   const comboModels = await getComboModels(modelStr, comboOwner);
   if (comboModels) routingContext.comboName = modelStr;
@@ -225,11 +226,12 @@ async function routeChat({ body, modelStr, settings, comboOwner, apiKeyContext, 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, errorContext = {}, signal = null, routingContext = {}, comboModelOptions = null) {
+async function handleSingleModelChat(body, entryModel, clientRawRequest = null, request = null, apiKey = null, errorContext = {}, signal = null, routingContext = {}, comboModelOptions = null) {
   // Combo names are unique per owner. routeChat already resolved both values;
   // fallback recursion carries them instead of repeating the same DB reads.
   const comboOwner = routingContext.comboOwner;
   const chatSettings = routingContext.settings || await getSettings();
+  const modelStr = await canonicalComboName(entryModel, comboOwner);
   const modelInfo = await getModelInfo(modelStr, comboOwner);
 
   // If provider is null, this might be a combo name - check and handle

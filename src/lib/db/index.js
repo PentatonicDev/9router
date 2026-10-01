@@ -82,7 +82,7 @@ export async function exportDb() {
     providerNodes: (await db.selectFrom("providerNodes").selectAll().execute()).map((r) => ({ ...parseJson(r.data, {}), id: r.id, type: r.type, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     proxyPools: (await db.selectFrom("proxyPools").selectAll().execute()).map((r) => ({ ...parseJson(r.data, {}), id: r.id, isActive: r.isActive === 1, testStatus: r.testStatus, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     apiKeys: (await db.selectFrom("apiKeys").selectAll().execute()).map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1, allowedConnectionIds: parseJson(r.allowedConnectionIds, null), tags: parseJson(r.tags, null), owner: r.owner ?? null, createdAt: r.createdAt })),
-    combos: (await db.selectFrom("combos").selectAll().execute()).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), owner: r.owner ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt })),
+    combos: (await db.selectFrom("combos").selectAll().execute()).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), modelOptions: parseJson(r.modelOptions, null), maxThinking: r.maxThinking ?? null, aliases: parseJson(r.aliases, []) || [], owner: r.owner ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     modelAliases: {},
     customModels: [],
     mitmAlias: {},
@@ -189,6 +189,9 @@ export async function importDb(payload) {
     for (const c of payload.combos || []) {
       await upsertRow(trx, "combos", "id", {
         id: c.id, name: c.name, kind: c.kind || null, models: stringifyJson(c.models || []),
+        modelOptions: c.modelOptions ? stringifyJson(c.modelOptions) : null,
+        maxThinking: c.maxThinking || null,
+        aliases: c.aliases?.length ? stringifyJson(c.aliases) : null,
         owner: c.owner ?? null, createdAt: c.createdAt || new Date().toISOString(),
         updatedAt: c.updatedAt || new Date().toISOString(),
       });
