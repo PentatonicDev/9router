@@ -116,6 +116,9 @@ const HEADER_HOOKS = {
     h["User-Agent"] = ua;
     h["X-Title"] = OPENROUTER_CLIENT_TITLES[detectClientTool(raw)] || ua.split("/")[0];
   },
+  // Muse: x-api-version only on subscription (minted key) requests — plain
+  // Model API keys already work without it
+  museHeaders: (h, c) => { if (c?.accessToken && !c?.apiKey) h["x-api-version"] = "1.0.0"; },
   clineHeaders: (h, c) => Object.assign(h, buildClineHeaders(c.apiKey || c.accessToken)),
   kilocodeOrg: (h, c) => { if (c.providerSpecificData?.orgId) h["X-Kilocode-OrganizationID"] = c.providerSpecificData.orgId; },
 };

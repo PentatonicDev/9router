@@ -122,8 +122,11 @@ export async function handleChat(request, clientRawRequest = null, options = {})
   const bypassResponse = handleBypassRequest(body, modelStr, userAgent, !!settings.ccFilterNaming);
   if (bypassResponse) return bypassResponse.response || bypassResponse;
 
+  // Codex accounts may enable only the 1M variant ("gpt-6-sol[1m]"); credential
+  // filtering must see the marker that was stripped from the routed model.
+  const requestedModel = contextMarker ? `${modelStr.slice(modelStr.indexOf("/") + 1)}[${contextMarker}]` : null;
   const route = (signal) => routeChat({
-    body, modelStr, settings, comboOwner, apiKeyContext,
+    body, modelStr, settings, comboOwner, apiKeyContext, requestedModel,
     clientRawRequest, request, apiKey, errorContext, signal, entryPhases,
   });
   const pathname = new URL(request.url).pathname;
@@ -143,12 +146,12 @@ export async function handleChat(request, clientRawRequest = null, options = {})
   return route(request.signal);
 }
 
-async function routeChat({ body, modelStr: requestedModel, settings, comboOwner, apiKeyContext, clientRawRequest, request, apiKey, errorContext, signal, entryPhases }) {
+async function routeChat({ body, modelStr: entryModel, settings, comboOwner, apiKeyContext, requestedModel, clientRawRequest, request, apiKey, errorContext, signal, entryPhases }) {
   // Reuse request-scoped reads across model/account fallback. In distributed mode
   // these are Postgres round trips; re-reading the same settings/owner for every
   // candidate adds latency without changing the answer inside one request.
-  const routingContext = { settings, comboOwner, apiKeyContext, entryPhases };
-  const modelStr = await canonicalComboName(requestedModel, comboOwner);
+  const routingContext = { settings, comboOwner, apiKeyContext, entryPhases, requestedModel };
+  const modelStr = await canonicalComboName(entryModel, comboOwner);
   const requiredCapabilities = detectRequiredCapabilities(body);
   const comboModels = await getComboModels(modelStr, comboOwner);
   if (comboModels) routingContext.comboName = modelStr;
@@ -317,6 +320,8 @@ async function handleSingleModelChat(body, entryModel, clientRawRequest = null, 
       settings: chatSettings,
       keyOwner: comboOwner === undefined ? null : comboOwner,
       allowedConnectionIds: routingContext.apiKeyContext?.allowedConnectionIds ?? null,
+      // Only the candidate the marker was stripped from carries it; combo/adapter siblings don't.
+      requestedModel: routingContext.requestedModel?.startsWith(`${model}[`) ? routingContext.requestedModel : model,
     });
 
     if (credentials?.noActiveCredentials) {
@@ -386,6 +391,8 @@ async function handleSingleModelChat(body, entryModel, clientRawRequest = null, 
       comboName: routingContext.comboName,
       signal,
       sourceFormatOverride: clientFormat,
+      // Per-provider user overrides (custom headers / connect timeout) from settings
+      providerOverrides: (chatSettings.providerOverrides || {})[provider] || null,
       onCredentialsRefreshed: async (newCreds) => {
         await updateProviderCredentials(credentials.connectionId, {
           ...newCreds,

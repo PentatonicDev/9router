@@ -63,6 +63,10 @@ const STREAM_MODE = {
 };
 
 const MAX_ACCUMULATED_CHARS = 64 * 1024;
+// Upper bound on the deferred response.completed wait: a chat->responses stream
+// that saw finish_reason without usage must not hold the client's terminal event
+// forever when the upstream stalls with no usage trailer and no [DONE].
+const PENDING_COMPLETION_FLUSH_MS = 3000;
 
 /**
  * Create unified SSE transform stream
@@ -192,6 +196,7 @@ export function createSSEStream(options = {}) {
   let streamErrorMessage = null;
   let finishChunkSentToClient = false; // an OpenAI finish_reason chunk actually reached the client
   let finalized = false;
+  let completionFlushTimer = null;
 
   // Diagnostics for the stored request detail — why a turn ended the way it did.
   // Populated for a Responses-format upstream only; other formats keep events+finish_reason.
@@ -225,6 +230,7 @@ export function createSSEStream(options = {}) {
   // Usage/logging tail, callable from transform() as well as flush(): a client that
   // closes right after the terminal event cancels the reader, and flush() never runs.
   const finalizeStream = () => {
+    if (completionFlushTimer) { clearTimeout(completionFlushTimer); completionFlushTimer = null; }
     if (finalized) return;
     finalized = true;
     // Terminal Responses events may call finalizeStream from inside transform(),
@@ -253,6 +259,20 @@ export function createSSEStream(options = {}) {
         truncated: accumulationTruncated
       }, finalUsage, ttftAt, firstContentAt, buildUpstreamSummary());
     }
+  };
+
+  // Emit the deferred response.completed now — at [DONE], or when the watchdog
+  // below gives up on a usage trailer that never arrives.
+  const flushPendingCompletion = (controller) => {
+    const completed = translateResponse(targetFormat, sourceFormat, null, state);
+    for (const item of completed || []) {
+      if (item === null || item === undefined) continue;
+      const output = formatSSE(item, sourceFormat);
+      reqLogger?.appendConvertedChunk?.(output);
+      controller.enqueue(sharedEncoder.encode(output));
+      sseEmittedCount++;
+    }
+    finalizeStream();
   };
 
   const transformStream = new TransformStream({
@@ -415,6 +435,13 @@ export function createSSEStream(options = {}) {
         // For other formats: done=true is the [DONE] sentinel, skip
         if (parsed && parsed.done && targetFormat !== FORMATS.OLLAMA) {
           if (streamErrored) { finalizeStream(); continue; }
+          // A direct Chat-to-Responses translation can defer response.completed
+          // while waiting for a usage trailer. [DONE] ends that opportunity even
+          // if the upstream keeps the HTTP connection open, so finish now.
+          if (targetFormat === FORMATS.OPENAI && sourceFormat === FORMATS.OPENAI_RESPONSES &&
+              state.completionPending && !state.completedSent) {
+            flushPendingCompletion(controller);
+          }
 
           // Synthesize response.failed if the Responses stream never sent a terminal event
           if (keepsOpenAIResponsesFormat && !openAIResponsesTerminalSeen) {
@@ -540,6 +567,18 @@ export function createSSEStream(options = {}) {
           controller.enqueue(sharedEncoder.encode(doneOutput));
           streamDoneSent = true;
           finalizeStream();
+        }
+
+        // The completion deferral can outlive the upstream: a broken chat upstream
+        // may stall after finish_reason with no usage trailer and no [DONE], holding
+        // the connection open. Bound the wait so the client still gets a terminal event.
+        if (targetFormat === FORMATS.OPENAI && sourceFormat === FORMATS.OPENAI_RESPONSES &&
+            state?.completionPending && !state?.completedSent && !completionFlushTimer) {
+          completionFlushTimer = setTimeout(() => {
+            completionFlushTimer = null;
+            if (state?.completedSent) return;
+            try { flushPendingCompletion(controller); } catch { /* controller already closed */ }
+          }, PENDING_COMPLETION_FLUSH_MS);
         }
       }
       if (!firstContentAt && (accumulatedContent || accumulatedThinking)) firstContentAt = Date.now();

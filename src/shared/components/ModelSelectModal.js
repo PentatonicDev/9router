@@ -22,7 +22,8 @@ const NO_AUTH_PROVIDER_IDS = Object.keys(FREE_PROVIDERS).filter(id => FREE_PROVI
 
 // Providers with per-account live catalogs via /api/providers/[id]/models.
 // Static registry stays as fallback when live fetch fails or is empty.
-const LIVE_CATALOG_PROVIDERS = ["cursor", "cline", "clinepass", "bedrock"];
+// zed: its backend customResolver already returns live models (#4244).
+const LIVE_CATALOG_PROVIDERS = ["cursor", "cline", "clinepass", "bedrock", "zed"];
 
 // Fetch a provider's account-scoped catalog for every active connection and merge
 // the results. Entries collapse by model id on purpose: two connections of the
@@ -113,15 +114,17 @@ export default function ModelSelectModal({
   const clineConnectionIds = liveConnectionIdsByProvider.cline;
   const clinepassConnectionIds = liveConnectionIdsByProvider.clinepass;
   const bedrockConnectionIds = liveConnectionIdsByProvider.bedrock;
+  const zedConnectionIds = liveConnectionIdsByProvider.zed;
 
   const cursorModels = useLiveProviderModels(isOpen, cursorConnectionIds, "Cursor");
   const clineModels = useLiveProviderModels(isOpen, clineConnectionIds, "Cline");
   const clinepassModels = useLiveProviderModels(isOpen, clinepassConnectionIds, "ClinePass");
   // Bedrock: the connection's discovered catalog (models + inference profiles the account can invoke)
   const bedrockModels = useLiveProviderModels(isOpen, bedrockConnectionIds, "Bedrock");
+  const zedModels = useLiveProviderModels(isOpen, zedConnectionIds, "Zed");
   const liveModelsByProvider = useMemo(
-    () => ({ cursor: cursorModels, cline: clineModels, clinepass: clinepassModels, bedrock: bedrockModels }),
-    [cursorModels, clineModels, clinepassModels, bedrockModels],
+    () => ({ cursor: cursorModels, cline: clineModels, clinepass: clinepassModels, bedrock: bedrockModels, zed: zedModels }),
+    [cursorModels, clineModels, clinepassModels, bedrockModels, zedModels],
   );
 
   const fetchCombos = async () => {

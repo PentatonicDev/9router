@@ -1,11 +1,27 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import {
-  createProviderConnection,
-  getProviderConnections,
-  deleteProviderConnection,
-  updateProviderConnection,
-} from "../../src/lib/db/index.js";
+// Runs on a throwaway DATA_DIR: these cases write rows, and must never touch ~/.9router.
+const originalDataDir = process.env.DATA_DIR;
+let tempDir;
+let createProviderConnection, getProviderConnections, deleteProviderConnection, updateProviderConnection;
+
+beforeAll(async () => {
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "9router-provider-insert-"));
+  process.env.DATA_DIR = tempDir;
+  vi.resetModules();
+  const db = await import("../../src/lib/db/index.js");
+  await db.initDb();
+  ({ createProviderConnection, getProviderConnections, deleteProviderConnection, updateProviderConnection } = db);
+});
+
+afterAll(() => {
+  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+  if (originalDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = originalDataDir;
+});
 
 // #4311: POST /api/providers was O(pool) per insert. Inside one transaction it
 // read the whole pool AND renumbered every row's priority, so a 5k-key import
@@ -13,8 +29,7 @@ import {
 // serialized on the same transaction. On top of that, an apikey name collision
 // silently overwrote the stored key with no 409.
 //
-// The test DB persists across tests in a file, so each case uses its own
-// provider alias; priorities are per-provider.
+// Cases share one temp DB, so each uses its own provider alias; priorities are per-provider.
 
 async function seed(provider, n) {
   for (let i = 0; i < n; i++) {
@@ -76,10 +91,11 @@ describe("name collision no longer destroys a key silently (#4311)", () => {
   // Seeded once: these cases each mutate the SAME row, so a per-test seed
   // would make the later assertions depend on earlier ones.
   const P = `openai-compatible-clash-${Date.now()}`;
-  const original = (async () => {
+  let original;
+  beforeAll(async () => {
     await seed(P, 1);
-    return (await getProviderConnections({ provider: P }))[0];
-  })();
+    original = (await getProviderConnections({ provider: P }))[0];
+  });
 
   it("throws a typed conflict instead of overwriting, when overwrite is refused", async () => {
     const orig = await original;

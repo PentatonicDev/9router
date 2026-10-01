@@ -1,5 +1,6 @@
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS, getModelKind } from "@/shared/constants/models";
 import {
+  ALIAS_TO_ID,
   AI_PROVIDERS,
   getProviderAlias,
   isAnthropicCompatibleProvider,
@@ -40,6 +41,22 @@ async function resolveQoderLiveModels(conn, provider) {
   const models = routableQoderModels(result);
   if (!models.length) return null;
   return { models: models.map((m) => ({ id: m.id, name: m.name })) };
+}
+
+// Combo seats use UI aliases; the model registry also has transport aliases.
+// Capability overrides and catalog limits are keyed by provider id.
+const ALIAS_TO_PROVIDER_ID = {
+  ...Object.fromEntries(
+    Object.entries(PROVIDER_ID_TO_ALIAS).map(([id, alias]) => [alias, id])
+  ),
+  ...ALIAS_TO_ID,
+};
+
+function comboSeatCapabilities(seat) {
+  const slash = seat.indexOf("/");
+  if (slash <= 0) return null;
+  const alias = seat.slice(0, slash);
+  return getCapabilitiesForModel(ALIAS_TO_PROVIDER_ID[alias] || alias, seat.slice(slash + 1));
 }
 
 // Per-provider live model resolvers. Each receives a connection record and
@@ -345,7 +362,6 @@ export async function buildModelsList(kindFilter, options = {}) {
   }
 
   const models = [];
-
   // Lookup map so aggregateComboCapabilities can recursively resolve nested combos
   const comboByName = Object.fromEntries(combos.flatMap((c) => [c.name, ...(c.aliases || [])].map((n) => [n, c.models])));
 
@@ -360,7 +376,7 @@ export async function buildModelsList(kindFilter, options = {}) {
     if (combo.kind === "webSearch" || combo.kind === "webFetch") {
       entry.kind = combo.kind;
     } else {
-      const comboCaps = aggregateComboCapabilities(combo.models, comboByName);
+      const comboCaps = aggregateComboCapabilities(combo.models, comboByName, comboSeatCapabilities);
       if (comboCaps) entry.capabilities = comboCaps;
 
       // Align both fields to the member a request would reach right now so
@@ -381,11 +397,8 @@ export async function buildModelsList(kindFilter, options = {}) {
 
   if (connections.length === 0 && !allowedConnectionIds) {
     // DB unavailable -> return static models, filtered by per-model kind
-    const aliasToProviderId = Object.fromEntries(
-      Object.entries(PROVIDER_ID_TO_ALIAS).map(([id, alias]) => [alias, id])
-    );
     for (const [alias, providerModels] of Object.entries(PROVIDER_MODELS)) {
-      const providerId = aliasToProviderId[alias] || alias;
+      const providerId = ALIAS_TO_PROVIDER_ID[alias] || alias;
       if (!providerMatchesKinds(providerId, kindFilter)) continue;
       for (const model of providerModels) {
         if (!kindFilter.includes(modelKind(model))) continue;

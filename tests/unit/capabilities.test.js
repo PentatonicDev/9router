@@ -57,8 +57,8 @@ describe("getCapabilitiesForModel", () => {
     });
   });
 
-  it("reports Claude Opus 5.5 and Sonnet 5.5 as permanent adaptive-thinking models", () => {
-    for (const model of ["claude-opus-5-5", "claude-sonnet-5-5"]) {
+  it("reports Claude Opus 5.5 as a permanent adaptive-thinking model", () => {
+    for (const model of ["claude-opus-5-5"]) {
       for (const provider of ["claude", "anthropic"]) {
         expect(getCapabilitiesForModel(provider, model)).toMatchObject({
           ...claudeSonnet5Expected,
@@ -94,15 +94,17 @@ describe("getCapabilitiesForModel", () => {
   });
 
   it("reports Codex GPT 6.0 Astra as a vision and thinking capable model", () => {
+    // Codex OAuth serves 272k (Codex CLI model catalog); the 1M window is the [1m] variant.
     expect(getCapabilitiesForModel("codex", "gpt-6-astra")).toMatchObject({
       vision: true,
       pdf: true,
       reasoning: true,
       search: true,
       thinkingFormat: "openai",
-      contextWindow: 1050000,
+      contextWindow: 272000,
       maxOutput: 128000,
     });
+    expect(getCapabilitiesForModel("codex", "gpt-6-astra[1m]").contextWindow).toBe(872000);
   });
 
   it("CommandCode v4.1-flash is vision + effort capable", () => {

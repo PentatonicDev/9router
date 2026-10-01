@@ -34,6 +34,7 @@ const RETRY_DELAY_MS = 30 * 60 * 1000;
 // while building rather than on every lookup. Providers absent here keep whatever
 // the local pattern table resolves; names that already match need no entry.
 export const PROVIDER_ALIASES = {
+  "github": "github-copilot",
   "glm": "zai",
   "glm-cn": "zhipuai",
   "claude": "anthropic",

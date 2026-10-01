@@ -79,6 +79,8 @@ const DEFAULT_SETTINGS = {
   webSearchEmulation: true,
   // Admin-configured SearXNG base URL. Empty = SEARXNG_URL env / registry default.
   searxngUrl: "",
+  // Per-provider user header overrides applied at dispatch: { [providerId]: { headers: {..} } }
+  providerOverrides: {},
 };
 
 async function readRaw() {

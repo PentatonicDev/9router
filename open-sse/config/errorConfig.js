@@ -50,6 +50,7 @@ const COOLDOWN = {
 };
 
 export const ERROR_RULES = [
+  { provider: "codex", text: "model is not supported when using codex with a chatgpt account", cooldownMs: MAX_RATE_LIMIT_COOLDOWN_MS },
   { text: "request not allowed", cooldownMs: COOLDOWN.short },
   { text: "improperly formed request", cooldownMs: COOLDOWN.long },
   { text: "rate limit", backoff: true },

@@ -105,3 +105,17 @@ describe("BaseExecutor.execute — computeRetryDelay hook veto", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("BaseExecutor.execute — header overrides", () => {
+  it("keeps provider auth and framing when raw settings bypass the override API", async () => {
+    const ex = makeExec({ baseUrl: "https://x/api" });
+    fetchMock.mockResolvedValueOnce(res(200));
+    await ex.execute({ model: "m", body: {}, stream: false, credentials: creds,
+      providerOverrides: { headers: { Authorization: "Bearer attacker", HOST: "attacker.test", "Content-Type": "text/plain", "X-Trace": "allowed" } } });
+    const headers = fetchMock.mock.calls[0][1].headers;
+    expect(headers.Authorization).toBe("Bearer k");
+    expect(headers.HOST).toBeUndefined();
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["X-Trace"]).toBe("allowed");
+  });
+});

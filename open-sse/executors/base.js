@@ -97,7 +97,7 @@ export class BaseExecutor {
     return { status: response.status, message: bodyText || `HTTP ${response.status}` };
   }
 
-  async execute({ model, body, stream, credentials, signal, log, proxyOptions = null, sourceFormat }) {
+  async execute({ model, body, stream, credentials, signal, log, proxyOptions = null, sourceFormat, providerOverrides = null }) {
     const fallbackCount = this.getFallbackCount();
     let lastError = null;
     let lastStatus = 0;
@@ -128,6 +128,13 @@ export class BaseExecutor {
       const url = this.buildUrl(model, stream, urlIndex, credentials);
       const transformedBody = this.transformRequest(model, body, stream, credentials, sourceFormat);
       const headers = this.buildHeaders(credentials, stream, url, model, transformedBody);
+      // Settings can also be PATCHed directly: never let overrides replace auth or
+      // request framing, even when they bypass the provider override route.
+      const blocked = new Set(["host", "content-length", "content-type", "connection", "transfer-encoding", "authorization", "cookie"]);
+      for (const [name, value] of Object.entries(providerOverrides?.headers || {})) {
+        if (/^[A-Za-z0-9-]+$/.test(name) && !blocked.has(name.toLowerCase()) &&
+            typeof value === "string" && !/[\r\n]/.test(value)) headers[name] = value;
+      }
 
       if (!retryAttemptsByUrl[urlIndex]) retryAttemptsByUrl[urlIndex] = 0;
 
