@@ -83,6 +83,8 @@ describe("getCapabilitiesForModel", () => {
     expect(getCapabilitiesForModel("kiro", "claude-sonnet-5-thinking")).toMatchObject(claudeSonnet5Expected);
     expect(getCapabilitiesForModel("kiro", "claude-sonnet-5-agentic")).toMatchObject(claudeSonnet5Expected);
     expect(getCapabilitiesForModel("kiro", "claude-sonnet-5-thinking-agentic")).toMatchObject(claudeSonnet5Expected);
+    expect(getCapabilitiesForModel("kiro", "claude-sonnet-5.5")).toMatchObject(claudeSonnet5Expected);
+    expect(getCapabilitiesForModel("kiro", "claude-sonnet-5.5-thinking-agentic")).toMatchObject(claudeSonnet5Expected);
   });
 
   it("reports Kiro GPT 5.6 models with the Kiro 272k context window", () => {

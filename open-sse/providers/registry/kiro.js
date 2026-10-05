@@ -64,7 +64,8 @@ export default {
     { id: "claude-opus-4.5-thinking", name: "Claude Opus 4.5 (Thinking)" },
     { id: "claude-opus-4.5-agentic", name: "Claude Opus 4.5 (Agentic)" },
     { id: "claude-opus-4.5-thinking-agentic", name: "Claude Opus 4.5 (Thinking + Agentic)" },
-    // Sonnet
+    // Sonnet 5.5 — experimental preview since 2026-10-03, 1M context, 1.3x credits
+    { id: "claude-sonnet-5.5", name: "Claude Sonnet 5.5" },
     { id: "claude-sonnet-5", name: "Claude Sonnet 5" },
     { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5" },
     // Haiku
@@ -78,6 +79,7 @@ export default {
     { id: "gpt-5.6-terra", name: "GPT 5.6 Terra", contextLength: 272000, rateMultiplier: 1.2, upstreamModelId: "gpt-5.6-terra", description: "Experimental preview of OpenAI GPT 5.6 Terra with 272k context window" },
     { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", contextLength: 272000, rateMultiplier: 0.6, upstreamModelId: "gpt-5.6-luna", description: "Experimental preview of OpenAI GPT 5.6 Luna with 272k context window" },
     // Thinking variants
+    { id: "claude-sonnet-5.5-thinking", name: "Claude Sonnet 5.5 (Thinking)" },
     { id: "claude-sonnet-5-thinking", name: "Claude Sonnet 5 (Thinking)" },
     { id: "claude-sonnet-4.5-thinking", name: "Claude Sonnet 4.5 (Thinking)" },
     { id: "claude-haiku-4.5-thinking", name: "Claude Haiku 4.5 (Thinking)" },
@@ -85,6 +87,7 @@ export default {
     { id: "gpt-5.6-terra-thinking", name: "GPT 5.6 Terra (Thinking)", contextLength: 272000, rateMultiplier: 1.2, upstreamModelId: "gpt-5.6-terra", description: "Experimental preview of OpenAI GPT 5.6 Terra with 272k context window" },
     { id: "gpt-5.6-luna-thinking", name: "GPT 5.6 Luna (Thinking)", contextLength: 272000, rateMultiplier: 0.6, upstreamModelId: "gpt-5.6-luna", description: "Experimental preview of OpenAI GPT 5.6 Luna with 272k context window" },
     // Agentic variants
+    { id: "claude-sonnet-5.5-agentic", name: "Claude Sonnet 5.5 (Agentic)" },
     { id: "claude-sonnet-5-agentic", name: "Claude Sonnet 5 (Agentic)" },
     { id: "claude-sonnet-4.5-agentic", name: "Claude Sonnet 4.5 (Agentic)" },
     { id: "claude-haiku-4.5-agentic", name: "Claude Haiku 4.5 (Agentic)" },
@@ -92,6 +95,7 @@ export default {
     { id: "gpt-5.6-terra-agentic", name: "GPT 5.6 Terra (Agentic)", contextLength: 272000, rateMultiplier: 1.2, upstreamModelId: "gpt-5.6-terra", description: "Experimental preview of OpenAI GPT 5.6 Terra with 272k context window" },
     { id: "gpt-5.6-luna-agentic", name: "GPT 5.6 Luna (Agentic)", contextLength: 272000, rateMultiplier: 0.6, upstreamModelId: "gpt-5.6-luna", description: "Experimental preview of OpenAI GPT 5.6 Luna with 272k context window" },
     // Thinking + Agentic variants
+    { id: "claude-sonnet-5.5-thinking-agentic", name: "Claude Sonnet 5.5 (Thinking + Agentic)" },
     { id: "claude-sonnet-5-thinking-agentic", name: "Claude Sonnet 5 (Thinking + Agentic)" },
     { id: "claude-sonnet-4.5-thinking-agentic", name: "Claude Sonnet 4.5 (Thinking + Agentic)" },
     { id: "claude-haiku-4.5-thinking-agentic", name: "Claude Haiku 4.5 (Thinking + Agentic)" },
