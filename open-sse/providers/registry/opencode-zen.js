@@ -38,6 +38,9 @@ export default {
     // Claude (messages)
     { id: "claude-fable-5", name: "Claude Fable 5", supportedFormats: ["claude"] },
     { id: "claude-fable-5-1", name: "Claude Fable 5.1", supportedFormats: ["claude"] },
+    { id: "claude-opus-5-5", name: "Claude Opus 5.5", supportedFormats: ["claude"] },
+    { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", supportedFormats: ["claude"] },
+    { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", supportedFormats: ["claude"] },
     { id: "claude-opus-5", name: "Claude Opus 5", supportedFormats: ["claude"] },
     { id: "claude-opus-4-8", name: "Claude Opus 4.8", supportedFormats: ["claude"] },
     { id: "claude-opus-4-7", name: "Claude Opus 4.7", supportedFormats: ["claude"] },
@@ -58,6 +61,9 @@ export default {
     { id: "gemini-3-flash", name: "Gemini 3 Flash", supportedFormats: ["openai"] },
     // GPT / Grok / Muse Spark paid (responses)
     { id: "gpt-6-astra", name: "GPT 6 Astra", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
+    { id: "gpt-6.1-sol", name: "GPT 6.1 Sol", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
+    { id: "gpt-6-sol", name: "GPT 6 Sol", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
+    { id: "gpt-6-luna", name: "GPT 6 Luna", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
     { id: "gpt-5.6-sol", name: "GPT 5.6 Sol", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
     { id: "gpt-5.6-terra", name: "GPT 5.6 Terra", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
     { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
