@@ -33,7 +33,8 @@
 // model spec); set `search` from vendor docs (Claude 4.x+, GPT-5.x/4o, Gemini
 // 2.0+, Grok, Perplexity). Verify with: curl -s https://models.dev/api.json
 
-import { matchPattern } from "./pricing.js";
+import { matchPattern, canonicalPricingModel } from "./pricing.js";
+import { stripBedrockGeoPrefix } from "./bedrockGeoPrefix.js";
 import { looksLikeVisionModel } from "./visionPatterns.js";
 
 /**
@@ -693,6 +694,11 @@ export function getCapabilitiesForModel(provider, model) {
   // 2. Canonical exact, then catalog overlay so provider-scoped models.dev deltas still apply.
   if (MODEL_CAPABILITIES[baseModel]) return refine(MODEL_CAPABILITIES[baseModel], provider, model);
   if (MODEL_CAPABILITIES[model]) return refine(MODEL_CAPABILITIES[model], provider, model);
+
+  // 2b. Gateway spellings of a known model: Bedrock ids ("us.anthropic.claude-
+  // opus-4-7"), effort/mode variants ("claude-opus-4.7-thinking").
+  const canonical = canonicalPricingModel(stripBedrockGeoPrefix(baseModel).replace(/^anthropic\./, ""));
+  if (canonical !== baseModel && MODEL_CAPABILITIES[canonical]) return refine(MODEL_CAPABILITIES[canonical], provider, model);
 
   // 3. Pattern match (first match wins), refined by catalog + name heuristic
   for (const { pattern, caps } of PATTERN_CAPABILITIES) {

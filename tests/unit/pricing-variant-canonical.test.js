@@ -27,3 +27,15 @@ describe("variant spellings bill at the base model", () => {
     expect(getPricingForModel("codex", "gpt-6-luna[1m]")).toEqual(getPricingForModel("codex", "gpt-6-luna"));
   });
 });
+
+import { getCapabilitiesForModel } from "../../open-sse/providers/capabilities.js";
+
+describe("variant spellings resolve the base model's limits", () => {
+  it.each([
+    ["bedrock", "us.anthropic.claude-opus-4-8"],
+    ["bedrock", "global.anthropic.claude-opus-4-7"],
+    ["kiro", "claude-opus-4.7-thinking"],
+  ])("%s %s gets the 1M window", (provider, model) => {
+    expect(getCapabilitiesForModel(provider, model)).toMatchObject({ contextWindow: 1000000, maxOutput: 128000 });
+  });
+});
