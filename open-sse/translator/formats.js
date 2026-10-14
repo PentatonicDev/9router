@@ -12,8 +12,7 @@ export const FORMATS = {
   KIRO: "kiro",
   CURSOR: "cursor",
   OLLAMA: "ollama",
-  COMMANDCODE: "commandcode",
-  BEDROCK_CONVERSE: "bedrock-converse"
+  COMMANDCODE: "commandcode"
 };
 
 /**

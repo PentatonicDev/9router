@@ -214,24 +214,6 @@ describe("provider-native translated output accumulation", () => {
     expect(contentObj).toMatchObject({ content: "answer", thinking: "reason", toolCalls: 1 });
   });
 
-  it("records Bedrock Converse text, thinking and one tool call", async () => {
-    const events = [
-      { messageStart: { role: "assistant" } },
-      { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: "reason" } } } },
-      { contentBlockDelta: { contentBlockIndex: 1, delta: { text: "answer" } } },
-      { contentBlockStart: { contentBlockIndex: 2, start: { toolUse: { toolUseId: "tool_1", name: "search" } } } },
-      { contentBlockDelta: { contentBlockIndex: 2, delta: { toolUse: { input: '{"q":"hi"}' } } } },
-      { messageStop: { stopReason: "tool_use" } },
-      { metadata: { usage: { inputTokens: 5, outputTokens: 3 } } },
-    ];
-    const { contentObj, text } = await runPassthrough(events.flatMap(event => [`data: ${JSON.stringify(event)}`, ""]), {
-      provider: "bedrock", target: FORMATS.BEDROCK_CONVERSE, source: FORMATS.OPENAI,
-    });
-
-    expect(text).toContain('"content":"answer"');
-    expect(contentObj).toMatchObject({ content: "answer", thinking: "reason", toolCalls: 1 });
-  });
-
   it("records Ollama NDJSON text, thinking and one tool call", async () => {
     const events = [
       { model: "local", message: { role: "assistant", thinking: "reason", content: "" }, done: false },

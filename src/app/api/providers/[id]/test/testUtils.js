@@ -1,8 +1,9 @@
 import { getProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { testProxyUrl } from "@/lib/network/proxyTest";
-import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
+import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
 import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js";
 import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";
 import { GROK_CLI_PAGER_USER_AGENT, GROK_CLI_VERSION } from "open-sse/config/grokCli.js";
@@ -20,7 +21,6 @@ import {
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
-import { probeBedrockCredential } from "open-sse/services/bedrockModels.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -538,6 +538,19 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
     }
   }
 
+  // AWS-signed providers (Bedrock): without this every Test ends in the switch's default,
+  // "Provider test not supported", and marks a working connection as errored.
+  if (AI_PROVIDERS[connection.provider]?.credentialForm === "aws") {
+    try {
+      return await probeBedrockCredentials(
+        connection,
+        (url, options) => fetchWithConnectionProxy(url, options, effectiveProxy),
+      );
+    } catch (err) {
+      return { valid: false, error: err.message };
+    }
+  }
+
   try {
     switch (connection.provider) {
       case "cloudflare-ai": {
@@ -843,15 +856,6 @@ case "llm7": {
           headers: { Authorization: `Bearer ${connection.apiKey}` },
         }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key or base URL" };
-      }
-      case "bedrock": {
-        // Both authMethod modes (bearer api_key / IAM sigv4) resolve through
-        // the same shared client config — see bedrockClient.js.
-        const result = await probeBedrockCredential({
-          apiKey: connection.apiKey,
-          providerSpecificData: connection.providerSpecificData,
-        });
-        return { valid: result.valid, error: result.error };
       }
       case "kimchi": {
         // Dual-auth: same validation endpoint as the OAuth flow — the token (API key

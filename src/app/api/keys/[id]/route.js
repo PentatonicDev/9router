@@ -3,6 +3,7 @@ import {
   deleteApiKey, getApiKeyById, updateApiKey, getProviderConnections,
   getAdminKeyByOwner, isAdminOwnerConflict, normalizeConnectionBudgets,
 } from "@/lib/localDb";
+import { validateKeyAccessInput } from "@/shared/utils/keyAccess.js";
 import { canSee, getRequestIdentity, getScopeFilter, normalizeOwnerInput, scopeVisible } from "@/lib/auth/resourceScope";
 
 const MAX_NAME_LENGTH = 100;
@@ -69,7 +70,7 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { isActive, allowedConnectionIds, connectionBudgets, name, tags, owner, kind } = body;
+    const { isActive, allowedConnectionIds, connectionBudgets, name, tags, owner, kind, access } = body;
 
     const filter = await getScopeFilter();
     const existing = await getApiKeyById(id);
@@ -127,6 +128,11 @@ export async function PUT(request, { params }) {
         if (owner !== undefined) updateData.owner = effectiveOwner;
         if (kind !== undefined) updateData.kind = kind;
       }
+    }
+    if (access !== undefined) {
+      const checked = validateKeyAccessInput(access);
+      if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 });
+      updateData.access = checked.value;
     }
 
     let updated;

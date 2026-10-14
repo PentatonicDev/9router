@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { BaseExecutor } from "./base.js";
+import { randomUUID } from "node:crypto";
 import { PROVIDERS, PROVIDER_OAUTH } from "../config/providers.js";
 import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE, selectAnthropicBeta, mergeAnthropicBeta } from "../providers/shared.js";
 import { resolveOpenAICompatibleApiType } from "../services/provider.js";
@@ -115,6 +116,14 @@ const HEADER_HOOKS = {
     if (!ua) return;
     h["User-Agent"] = ua;
     h["X-Title"] = OPENROUTER_CLIENT_TITLES[detectClientTool(raw)] || ua.split("/")[0];
+  },
+  // MiniMax Code (mcode): the placeholder x-api-key rides every request next
+  // to the Bearer token, plus per-request session/timezone headers. Static
+  // teammates (User-Agent, X-Mavis-Agent-Id) live in the registry transport.
+  minimaxHeaders: (h) => {
+    h["x-api-key"] = "sk-xxx";
+    h["X-Mavis-Timezone-Offset"] = String(new Date().getTimezoneOffset() * -60);
+    if (!h["X-Mavis-Session-Id"]) h["X-Mavis-Session-Id"] = randomUUID();
   },
   // Muse: x-api-version only on subscription (minted key) requests — plain
   // Model API keys already work without it

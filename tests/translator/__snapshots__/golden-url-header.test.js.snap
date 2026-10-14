@@ -240,25 +240,6 @@ exports[`GOLDEN buildHeaders (default executor providers) > bazaarlink → heade
 }
 `;
 
-exports[`GOLDEN buildHeaders (default executor providers) > bedrock → headers (apiKey / oauth) 1`] = `
-{
-  "apiKey": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "nonStream": {
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "oauth": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-}
-`;
-
 exports[`GOLDEN buildHeaders (default executor providers) > blackbox → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
@@ -422,10 +403,10 @@ exports[`GOLDEN buildHeaders (default executor providers) > cline → headers (a
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
     "HTTP-Referer": "https://cline.bot",
-    "User-Agent": "9Router/0.5.95",
+    "User-Agent": "9Router/0.5.99",
     "X-CLIENT-TYPE": "9router",
-    "X-CLIENT-VERSION": "0.5.95",
-    "X-CORE-VERSION": "0.5.95",
+    "X-CLIENT-VERSION": "0.5.99",
+    "X-CORE-VERSION": "0.5.99",
     "X-IS-MULTIROOT": "false",
     "X-PLATFORM": "linux",
     "X-PLATFORM-VERSION": "v24.15.0",
@@ -435,10 +416,10 @@ exports[`GOLDEN buildHeaders (default executor providers) > cline → headers (a
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
     "HTTP-Referer": "https://cline.bot",
-    "User-Agent": "9Router/0.5.95",
+    "User-Agent": "9Router/0.5.99",
     "X-CLIENT-TYPE": "9router",
-    "X-CLIENT-VERSION": "0.5.95",
-    "X-CORE-VERSION": "0.5.95",
+    "X-CLIENT-VERSION": "0.5.99",
+    "X-CORE-VERSION": "0.5.99",
     "X-IS-MULTIROOT": "false",
     "X-PLATFORM": "linux",
     "X-PLATFORM-VERSION": "v24.15.0",
@@ -449,10 +430,10 @@ exports[`GOLDEN buildHeaders (default executor providers) > cline → headers (a
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
     "HTTP-Referer": "https://cline.bot",
-    "User-Agent": "9Router/0.5.95",
+    "User-Agent": "9Router/0.5.99",
     "X-CLIENT-TYPE": "9router",
-    "X-CLIENT-VERSION": "0.5.95",
-    "X-CORE-VERSION": "0.5.95",
+    "X-CLIENT-VERSION": "0.5.99",
+    "X-CORE-VERSION": "0.5.99",
     "X-IS-MULTIROOT": "false",
     "X-PLATFORM": "linux",
     "X-PLATFORM-VERSION": "v24.15.0",
@@ -468,10 +449,10 @@ exports[`GOLDEN buildHeaders (default executor providers) > clinepass → header
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
     "HTTP-Referer": "https://cline.bot",
-    "User-Agent": "9Router/0.5.95",
+    "User-Agent": "9Router/0.5.99",
     "X-CLIENT-TYPE": "9router",
-    "X-CLIENT-VERSION": "0.5.95",
-    "X-CORE-VERSION": "0.5.95",
+    "X-CLIENT-VERSION": "0.5.99",
+    "X-CORE-VERSION": "0.5.99",
     "X-IS-MULTIROOT": "false",
     "X-PLATFORM": "linux",
     "X-PLATFORM-VERSION": "v24.15.0",
@@ -481,10 +462,10 @@ exports[`GOLDEN buildHeaders (default executor providers) > clinepass → header
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
     "HTTP-Referer": "https://cline.bot",
-    "User-Agent": "9Router/0.5.95",
+    "User-Agent": "9Router/0.5.99",
     "X-CLIENT-TYPE": "9router",
-    "X-CLIENT-VERSION": "0.5.95",
-    "X-CORE-VERSION": "0.5.95",
+    "X-CLIENT-VERSION": "0.5.99",
+    "X-CORE-VERSION": "0.5.99",
     "X-IS-MULTIROOT": "false",
     "X-PLATFORM": "linux",
     "X-PLATFORM-VERSION": "v24.15.0",
@@ -495,10 +476,10 @@ exports[`GOLDEN buildHeaders (default executor providers) > clinepass → header
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
     "HTTP-Referer": "https://cline.bot",
-    "User-Agent": "9Router/0.5.95",
+    "User-Agent": "9Router/0.5.99",
     "X-CLIENT-TYPE": "9router",
-    "X-CLIENT-VERSION": "0.5.95",
-    "X-CORE-VERSION": "0.5.95",
+    "X-CLIENT-VERSION": "0.5.99",
+    "X-CORE-VERSION": "0.5.99",
     "X-IS-MULTIROOT": "false",
     "X-PLATFORM": "linux",
     "X-PLATFORM-VERSION": "v24.15.0",
@@ -933,7 +914,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > kimi → headers (ap
     "X-Msh-Device-Model": "Linux x64",
     "X-Msh-Device-Name": "GSOUZAGRUDESK01",
     "X-Msh-Platform": "9router",
-    "X-Msh-Version": "0.5.95",
+    "X-Msh-Version": "0.5.99",
     "x-api-key": "<CRED>",
   },
   "nonStream": {
@@ -944,7 +925,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > kimi → headers (ap
     "X-Msh-Device-Model": "Linux x64",
     "X-Msh-Device-Name": "GSOUZAGRUDESK01",
     "X-Msh-Platform": "9router",
-    "X-Msh-Version": "0.5.95",
+    "X-Msh-Version": "0.5.99",
     "x-api-key": "<CRED>",
   },
   "oauth": {
@@ -956,7 +937,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > kimi → headers (ap
     "X-Msh-Device-Model": "Linux x64",
     "X-Msh-Device-Name": "GSOUZAGRUDESK01",
     "X-Msh-Platform": "9router",
-    "X-Msh-Version": "0.5.95",
+    "X-Msh-Version": "0.5.99",
     "x-api-key": "<CRED>",
   },
 }
@@ -1027,6 +1008,80 @@ exports[`GOLDEN buildHeaders (default executor providers) > minimax-cn → heade
     "Anthropic-Version": "2023-06-01",
     "Content-Type": "application/json",
     "x-api-key": "<CRED>",
+  },
+}
+`;
+
+exports[`GOLDEN buildHeaders (default executor providers) > minimax-code → headers (apiKey / oauth) 1`] = `
+{
+  "apiKey": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+    "User-Agent": "MiniMaxAgent",
+    "X-Mavis-Agent-Id": "main",
+    "X-Mavis-Session-Id": "<UUID>",
+    "X-Mavis-Timezone-Offset": "<TZ>",
+    "anthropic-version": "2023-06-01",
+    "x-api-key": "sk-xxx",
+  },
+  "nonStream": {
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+    "User-Agent": "MiniMaxAgent",
+    "X-Mavis-Agent-Id": "main",
+    "X-Mavis-Session-Id": "<UUID>",
+    "X-Mavis-Timezone-Offset": "<TZ>",
+    "anthropic-version": "2023-06-01",
+    "x-api-key": "sk-xxx",
+  },
+  "oauth": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+    "User-Agent": "MiniMaxAgent",
+    "X-Mavis-Agent-Id": "main",
+    "X-Mavis-Session-Id": "<UUID>",
+    "X-Mavis-Timezone-Offset": "<TZ>",
+    "anthropic-version": "2023-06-01",
+    "x-api-key": "sk-xxx",
+  },
+}
+`;
+
+exports[`GOLDEN buildHeaders (default executor providers) > minimax-code-global → headers (apiKey / oauth) 1`] = `
+{
+  "apiKey": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+    "User-Agent": "MiniMaxAgent",
+    "X-Mavis-Agent-Id": "main",
+    "X-Mavis-Session-Id": "<UUID>",
+    "X-Mavis-Timezone-Offset": "<TZ>",
+    "anthropic-version": "2023-06-01",
+    "x-api-key": "sk-xxx",
+  },
+  "nonStream": {
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+    "User-Agent": "MiniMaxAgent",
+    "X-Mavis-Agent-Id": "main",
+    "X-Mavis-Session-Id": "<UUID>",
+    "X-Mavis-Timezone-Offset": "<TZ>",
+    "anthropic-version": "2023-06-01",
+    "x-api-key": "sk-xxx",
+  },
+  "oauth": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+    "User-Agent": "MiniMaxAgent",
+    "X-Mavis-Agent-Id": "main",
+    "X-Mavis-Session-Id": "<UUID>",
+    "X-Mavis-Timezone-Offset": "<TZ>",
+    "anthropic-version": "2023-06-01",
+    "x-api-key": "sk-xxx",
   },
 }
 `;
@@ -1632,13 +1687,6 @@ exports[`GOLDEN buildUrl (default executor providers) > bazaarlink → url (stre
 }
 `;
 
-exports[`GOLDEN buildUrl (default executor providers) > bedrock → url (stream + non-stream) 1`] = `
-{
-  "nonStream": null,
-  "stream": null,
-}
-`;
-
 exports[`GOLDEN buildUrl (default executor providers) > blackbox → url (stream + non-stream) 1`] = `
 {
   "nonStream": "https://api.blackbox.ai/v1/chat/completions",
@@ -1853,6 +1901,20 @@ exports[`GOLDEN buildUrl (default executor providers) > minimax-cn → url (stre
 {
   "nonStream": "https://api.minimaxi.com/anthropic/v1/messages?beta=true",
   "stream": "https://api.minimaxi.com/anthropic/v1/messages?beta=true",
+}
+`;
+
+exports[`GOLDEN buildUrl (default executor providers) > minimax-code → url (stream + non-stream) 1`] = `
+{
+  "nonStream": "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages",
+  "stream": "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages",
+}
+`;
+
+exports[`GOLDEN buildUrl (default executor providers) > minimax-code-global → url (stream + non-stream) 1`] = `
+{
+  "nonStream": "https://agent.minimax.io/mavis/api/v1/llm/v1/messages",
+  "stream": "https://agent.minimax.io/mavis/api/v1/llm/v1/messages",
 }
 `;
 

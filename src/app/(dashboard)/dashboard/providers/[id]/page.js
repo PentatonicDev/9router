@@ -14,7 +14,6 @@ import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { translate } from "@/i18n/runtime";
 import { fetchSuggestedModels } from "@/shared/utils/providerModelsFetcher";
 import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
-import { summarizeDiscoveryItems } from "@/shared/utils/bedrockDiscovery";
 import ModelRow from "./ModelRow";
 import PassthroughModelsSection from "./PassthroughModelsSection";
 import CompatibleModelsSection from "./CompatibleModelsSection";
@@ -91,8 +90,6 @@ export default function ProviderDetailPage() {
   // Per-connection inline message under the "Discover" button (bedrock only) —
   // { text, isError } keyed by connection id, auto-cleared after 8s or on the
   // next discover click for that same connection.
-  const [discoveryMessages, setDiscoveryMessages] = useState({});
-  const discoveryMessageTimersRef = useRef({});
   const [importingQoderModels, setImportingQoderModels] = useState(false);
   const [importingClineModels, setImportingClineModels] = useState(false);
   const { copied, copy } = useCopyToClipboard();
@@ -1032,23 +1029,6 @@ export default function ProviderDetailPage() {
   };
 
 
-  const DISCOVERY_MESSAGE_TIMEOUT_MS = 8000;
-
-  const setDiscoveryMessage = (connectionId, message) => {
-    clearTimeout(discoveryMessageTimersRef.current[connectionId]);
-    setDiscoveryMessages((prev) => ({ ...prev, [connectionId]: message }));
-    if (message) {
-      discoveryMessageTimersRef.current[connectionId] = setTimeout(() => {
-        setDiscoveryMessages((prev) => ({ ...prev, [connectionId]: null }));
-      }, DISCOVERY_MESSAGE_TIMEOUT_MS);
-    }
-  };
-
-  useEffect(() => {
-    const timers = discoveryMessageTimersRef.current;
-    return () => Object.values(timers).forEach(clearTimeout);
-  }, []);
-
   const isSelected = (connectionId) => selectedConnectionIds.includes(connectionId);
 
   // Owners come from the accounts themselves, so the filter cannot offer a value
@@ -1129,28 +1109,6 @@ export default function ProviderDetailPage() {
                   setShowEditModal(true);
                 }}
                 onDelete={() => handleDelete(conn.id)}
-                onDiscoverModels={providerId === "bedrock" ? async () => {
-                  setDiscoveryMessage(conn.id, null);
-                  try {
-                    const res = await fetch(`/api/providers/${conn.id}/discover`, { method: "POST" });
-                    const data = await res.json().catch(() => null);
-                    if (!res.ok) {
-                      setDiscoveryMessage(conn.id, { text: data?.error || "Failed to discover Bedrock models", isError: true });
-                      return;
-                    }
-                    const errors = data?.discovery?.errors || [];
-                    const summaryText = `Discovered ${summarizeDiscoveryItems(data?.discovery)}`;
-                    setDiscoveryMessage(conn.id, {
-                      text: errors.length ? `${summaryText} — ${errors.join(" ")}` : summaryText,
-                      isError: false,
-                    });
-                    await fetchConnections();
-                  } catch (error) {
-                    console.log("Error discovering Bedrock models:", error);
-                    setDiscoveryMessage(conn.id, { text: "Failed to reach the discovery endpoint", isError: true });
-                  }
-                } : undefined}
-                discoveryMessage={discoveryMessages[conn.id] || null}
                 oneByOneStatus={oneByOneResults[conn.id] || null}
               />
             </div>

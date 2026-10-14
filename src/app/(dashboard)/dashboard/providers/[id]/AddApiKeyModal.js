@@ -5,7 +5,6 @@ import PropTypes from "prop-types";
 import { Button, Badge, Input, Modal, Select } from "@/shared/components";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { planBulkAdd } from "@/shared/utils/bulkAdd";
-import { summarizeDiscoveryItems } from "@/shared/utils/bedrockDiscovery";
 
 const BULK_PLACEHOLDER = `name1|sk-key1\nname2|sk-key2\nsk-key-only-auto-named`;
 
@@ -17,11 +16,17 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   const credentialLabel = isCookie ? "Cookie Value" : provider === "qoder" || provider === "qoder-cn" ? "Personal Access Token (PAT)" : "API Key";
   const credentialPlaceholder = isCookie
     ? (provider === "grok-web" ? "sso=xxxxx... or just the raw value" : "eyJhbGciOi...")
-    : (isXaiApiKey ? "xai-..." : provider === "qoder" || provider === "qoder-cn" ? "pt-..." : provider === "bedrock" ? "Bedrock API key (bearer token)" : "");
+    : (isXaiApiKey ? "xai-..." : provider === "qoder" || provider === "qoder-cn" ? "pt-..." : "");
 
   const isAzure = provider === "azure";
   const isCloudflareAi = provider === "cloudflare-ai";
-  const isBedrock = provider === "bedrock";
+  // Capability, not identity: gating this on `provider === "bedrock"` left bedrock-xai with no
+  // way to enter a profile at all, which is the same mistake as hardcoding the API-key exemption.
+  const usesAwsCredentialForm =
+    AI_PROVIDERS?.[provider]?.credentialForm === "aws";
+  // Registry-declared: names the providerSpecificData field that stands in for an API key, so
+  // a provider whose credential lives outside the key field can be saved without one.
+  const apiKeyOptionalWith = AI_PROVIDERS?.[provider]?.apiKeyOptionalWith || null;
   const providerRegions = AI_PROVIDERS?.[provider]?.regions || null;
   const defaultRegion = AI_PROVIDERS?.[provider]?.defaultRegion || providerRegions?.[0]?.id || "";
 
@@ -41,22 +46,11 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   });
   const [cloudflareData, setCloudflareData] = useState({ accountId: "" });
   const [bedrockData, setBedrockData] = useState({
-    authMethod: "api_key",
-    region: "us-east-1",
-    homeRegion: "",
-    inferenceProfilePrefix: "",
-    endpoint: "",
+    profile: "",
+    region: "",
     accessKeyId: "",
-    secretAccessKey: "",
     sessionToken: "",
-    creditsUsd: "",
   });
-  const isBedrockIam = isBedrock && bedrockData.authMethod === "iam";
-  const isBedrockGlobal = isBedrock && bedrockData.region.trim().toLowerCase() === "global";
-  // null = never run, else { loading, discovery: {items,errors} | null, error: string | null }
-  const [bedrockDiscovery, setBedrockDiscovery] = useState(null);
-  const canDiscoverBedrock = isBedrock && !!bedrockData.region.trim()
-    && (isBedrockIam ? !!bedrockData.accessKeyId.trim() && !!bedrockData.secretAccessKey.trim() : !!formData.apiKey);
   const [region, setRegion] = useState(defaultRegion);
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
@@ -86,42 +80,31 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     if (isCloudflareAi) {
       return { accountId: cloudflareData.accountId };
     }
-    if (isBedrock) {
-      const base = {
-        authMethod: bedrockData.authMethod,
-        region: bedrockData.region.trim() || "us-east-1",
-        inferenceProfilePrefix: bedrockData.inferenceProfilePrefix,
-        ...(bedrockData.endpoint.trim() ? { endpoint: bedrockData.endpoint.trim() } : {}),
-        ...(isBedrockGlobal && bedrockData.homeRegion.trim() ? { homeRegion: bedrockData.homeRegion.trim() } : {}),
-      };
-      const creditsUsd = Number(bedrockData.creditsUsd.trim());
-      if (bedrockData.creditsUsd.trim() && Number.isFinite(creditsUsd) && creditsUsd > 0) {
-        base.creditsUsd = creditsUsd;
-      }
-      // Carries over whatever "Discover models" last found so the connection
-      // is saved with those items already in place (see requirement 3/4b) —
-      // never re-fetched here, just the last preview result.
-      if (bedrockDiscovery?.discovery?.items?.length) {
-        base.discoveredModels = {
-          at: bedrockDiscovery.discovery.at,
-          items: bedrockDiscovery.discovery.items,
-          errors: bedrockDiscovery.discovery.errors,
-        };
-      }
-      if (bedrockData.authMethod === "iam") {
-        return {
-          ...base,
-          accessKeyId: bedrockData.accessKeyId.trim(),
-          secretAccessKey: bedrockData.secretAccessKey.trim(),
-          ...(bedrockData.sessionToken.trim() ? { sessionToken: bedrockData.sessionToken.trim() } : {}),
-        };
-      }
-      return base;
+    if (usesAwsCredentialForm) {
+      // Only send what the user filled in: an empty `profile` would otherwise select profile
+      // mode and shadow static keys, since detectCredentialMode prefers a profile.
+      const data = {};
+      if (bedrockData.profile.trim()) data.profile = bedrockData.profile.trim();
+      if (bedrockData.region.trim()) data.region = bedrockData.region.trim();
+      if (bedrockData.accessKeyId.trim()) data.accessKeyId = bedrockData.accessKeyId.trim();
+      if (bedrockData.sessionToken.trim()) data.sessionToken = bedrockData.sessionToken.trim();
+      return Object.keys(data).length ? data : undefined;
     }
     if (providerRegions && region) {
       return { region };
     }
     return undefined;
+  };
+
+  // One place decides whether the credential requirement is met. The button's disabled state and
+  // handleSubmit's early return both read it; encoding the rule twice is what let Save look
+  // clickable while silently doing nothing for profile-only Bedrock connections.
+  const apiKeySatisfied = () => {
+    const psd = buildProviderSpecificData();
+    if (apiKeyOptionalWith && psd?.[apiKeyOptionalWith]) return true;
+    // AWS static keys are a pair: a secret alone saves a connection that can never sign.
+    if (usesAwsCredentialForm) return !!formData.apiKey && !!psd?.accessKeyId;
+    return !!formData.apiKey;
   };
 
   const handleValidate = async () => {
@@ -141,29 +124,9 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     }
   };
 
-  const handleDiscoverBedrockModels = async () => {
-    setBedrockDiscovery({ loading: true, discovery: null, error: null });
-    try {
-      const res = await fetch("/api/providers/bedrock/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: formData.apiKey, providerSpecificData: buildProviderSpecificData() }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        setBedrockDiscovery({ loading: false, discovery: null, error: data?.error || "Discovery failed" });
-        return;
-      }
-      setBedrockDiscovery({ loading: false, discovery: data.discovery, error: null });
-    } catch {
-      setBedrockDiscovery({ loading: false, discovery: null, error: "Failed to reach the discovery endpoint" });
-    }
-  };
-
   const handleSubmit = async () => {
     if (!provider) return;
-    if (!isOllamaLocal && !isBedrockIam && !formData.apiKey) return;
-    if (isBedrockIam && (!bedrockData.accessKeyId.trim() || !bedrockData.secretAccessKey.trim())) return;
+    if (!isOllamaLocal && !apiKeySatisfied()) return;
     if (!isOllamaLocal) {
       // Non-ollama providers require a name
       if (!formData.name) return;
@@ -261,11 +224,14 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   return (
     <Modal isOpen={isOpen} title={`Add ${providerName || provider} ${credentialLabel}`} onClose={onClose}>
       <div className="flex flex-col gap-4">
-        {/* Mode switcher */}
-        <div className="flex gap-2">
-          <Button size="sm" variant={mode === "single" ? "primary" : "ghost"} onClick={() => { setMode("single"); setBulkResult(null); }}>Single</Button>
-          <Button size="sm" variant={mode === "bulk" ? "primary" : "ghost"} onClick={() => { setMode("bulk"); setBulkResult(null); }}>Bulk Add</Button>
-        </div>
+        {/* Mode switcher. Hidden for AWS credentials: bulk lines carry only a key, so a
+            Bedrock entry would be saved with no access key id or profile and never work. */}
+        {!usesAwsCredentialForm && (
+          <div className="flex gap-2">
+            <Button size="sm" variant={mode === "single" ? "primary" : "ghost"} onClick={() => { setMode("single"); setBulkResult(null); }}>Single</Button>
+            <Button size="sm" variant={mode === "bulk" ? "primary" : "ghost"} onClick={() => { setMode("bulk"); setBulkResult(null); }}>Bulk Add</Button>
+          </div>
+        )}
 
         {mode === "bulk" && (
           <div className="flex flex-col gap-3">
@@ -320,7 +286,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             </div>
           </div>
         )}
-        {!isOllamaLocal && !isBedrockIam && (
+        {!isOllamaLocal && (
           <div className="flex gap-2">
             <Input
               label={credentialLabel}
@@ -331,7 +297,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
               className="flex-1"
             />
             <div className="pt-6">
-              <Button onClick={handleValidate} disabled={!formData.apiKey || validating || saving} variant="secondary">
+              <Button onClick={handleValidate} disabled={!apiKeySatisfied() || validating || saving} variant="secondary">
                 {validating ? "Checking..." : "Check"}
               </Button>
             </div>
@@ -403,6 +369,49 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             </p>
           </div>
         )}
+        {usesAwsCredentialForm && (
+          <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
+            <h3 className="font-semibold mb-3 text-sm">AWS Bedrock Credentials</h3>
+            <div className="flex flex-col gap-3">
+              <Input
+                label="AWS Profile (SSO — recommended)"
+                value={bedrockData.profile}
+                onChange={(e) => setBedrockData({ ...bedrockData, profile: e.target.value })}
+                placeholder="my-sso-profile"
+              />
+              <Input
+                label="Region"
+                value={bedrockData.region}
+                onChange={(e) => setBedrockData({ ...bedrockData, region: e.target.value })}
+                placeholder="us-east-1"
+              />
+            </div>
+            <p className="text-xs text-text-muted mt-2">
+              Set a profile from <code>~/.aws/config</code> and leave the API key empty, then run
+              {" "}<code>aws sso login --profile {bedrockData.profile || "my-sso-profile"}</code>.
+              Credentials refresh automatically.
+            </p>
+            <div className="flex flex-col gap-3 mt-4">
+              <Input
+                label="Access Key ID (only for static keys)"
+                value={bedrockData.accessKeyId}
+                onChange={(e) => setBedrockData({ ...bedrockData, accessKeyId: e.target.value })}
+                placeholder="AKIA..."
+              />
+              <Input
+                label="Session Token (only for temporary ASIA… keys)"
+                type="password"
+                value={bedrockData.sessionToken}
+                onChange={(e) => setBedrockData({ ...bedrockData, sessionToken: e.target.value })}
+                placeholder="FwoGZXIvYXdz..."
+              />
+            </div>
+            <p className="text-xs text-text-muted mt-2">
+              For static keys instead: put the AWS <strong>secret</strong> access key in the API Key
+              field above and the access key id here. A profile, if set, takes precedence.
+            </p>
+          </div>
+        )}
         {isAzure && (
           <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
             <h3 className="font-semibold mb-3 text-sm">Azure OpenAI Configuration</h3>
@@ -431,103 +440,6 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
                 onChange={(e) => setAzureData({ ...azureData, organization: e.target.value })}
                 placeholder="Organization ID"
               />
-            </div>
-          </div>
-        )}
-
-        {isBedrock && (
-          <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
-            <h3 className="font-semibold mb-3 text-sm">Amazon Bedrock Configuration</h3>
-            <div className="flex flex-col gap-3">
-              <Select
-                label="Auth Method"
-                value={bedrockData.authMethod}
-                onChange={(e) => setBedrockData({ ...bedrockData, authMethod: e.target.value })}
-                options={[
-                  { value: "api_key", label: "API key (bearer token)" },
-                  { value: "iam", label: "IAM access key / secret" },
-                ]}
-              />
-              {isBedrockIam && (
-                <>
-                  <Input
-                    label="AWS Access Key ID"
-                    value={bedrockData.accessKeyId}
-                    onChange={(e) => setBedrockData({ ...bedrockData, accessKeyId: e.target.value })}
-                    placeholder="AKIA..."
-                  />
-                  <Input
-                    label="AWS Secret Access Key"
-                    type="password"
-                    value={bedrockData.secretAccessKey}
-                    onChange={(e) => setBedrockData({ ...bedrockData, secretAccessKey: e.target.value })}
-                  />
-                  <Input
-                    label="Session Token (optional)"
-                    type="password"
-                    value={bedrockData.sessionToken}
-                    onChange={(e) => setBedrockData({ ...bedrockData, sessionToken: e.target.value })}
-                    placeholder="Only needed for temporary/STS credentials"
-                  />
-                </>
-              )}
-              <Input
-                label="Region"
-                value={bedrockData.region}
-                onChange={(e) => setBedrockData({ ...bedrockData, region: e.target.value })}
-                placeholder="us-east-1, eu-west-1, global, ..."
-              />
-              {isBedrockGlobal && (
-                <Input
-                  label="Home Region (control-plane calls for Discover models)"
-                  value={bedrockData.homeRegion}
-                  onChange={(e) => setBedrockData({ ...bedrockData, homeRegion: e.target.value })}
-                  placeholder="Defaults to us-east-1 — set this to wherever your account has Bedrock control-plane access"
-                />
-              )}
-              <Select
-                label="Cross-Region Inference Profile"
-                value={bedrockData.inferenceProfilePrefix}
-                onChange={(e) => setBedrockData({ ...bedrockData, inferenceProfilePrefix: e.target.value })}
-                options={[
-                  { value: "", label: "None (use the model id as-is)" },
-                  { value: "us.", label: "US" },
-                  { value: "eu.", label: "EU" },
-                  { value: "apac.", label: "APAC" },
-                  { value: "global.", label: "Global" },
-                ]}
-              />
-              <Input
-                label="Endpoint Override (optional)"
-                value={bedrockData.endpoint}
-                onChange={(e) => setBedrockData({ ...bedrockData, endpoint: e.target.value })}
-                placeholder="For a VPC endpoint or GovCloud — leave blank otherwise"
-              />
-              <Input
-                label="Credits (USD, optional)"
-                type="number"
-                min="0"
-                step="0.01"
-                value={bedrockData.creditsUsd}
-                onChange={(e) => setBedrockData({ ...bedrockData, creditsUsd: e.target.value })}
-                placeholder="Total credits available for this account — enables spend tracking in the Quota Tracker"
-              />
-              <div className="flex items-center gap-2">
-                <Button onClick={handleDiscoverBedrockModels} disabled={!canDiscoverBedrock || bedrockDiscovery?.loading} variant="secondary" size="sm">
-                  {bedrockDiscovery?.loading ? "Discovering..." : "Discover models"}
-                </Button>
-                {bedrockDiscovery?.discovery && (
-                  <span className="text-xs text-text-muted">
-                    {summarizeDiscoveryItems(bedrockDiscovery.discovery)}
-                  </span>
-                )}
-              </div>
-              {bedrockDiscovery?.error && (
-                <p className="text-xs text-red-500 break-words">{bedrockDiscovery.error}</p>
-              )}
-              {!!bedrockDiscovery?.discovery?.errors?.length && (
-                <p className="text-xs text-yellow-500 break-words">{bedrockDiscovery.discovery.errors.join(" ")}</p>
-              )}
             </div>
           </div>
         )}
@@ -561,7 +473,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         </p>
 
         <div className="flex gap-2">
-          <Button onClick={handleSubmit} fullWidth disabled={saving || (!isOllamaLocal && !isBedrockIam && (!formData.name || !formData.apiKey)) || (isBedrockIam && (!formData.name || !bedrockData.accessKeyId.trim() || !bedrockData.secretAccessKey.trim())) || (isCompatible && !formData.defaultModel.trim()) || (isAzure && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization)) || (isCloudflareAi && !cloudflareData.accountId)}>
+          <Button onClick={handleSubmit} fullWidth disabled={saving || (!isOllamaLocal && (!formData.name || !apiKeySatisfied())) || (isCompatible && !formData.defaultModel.trim()) || (isAzure && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization)) || (isCloudflareAi && !cloudflareData.accountId)}>
             {saving ? "Saving..." : "Save"}
           </Button>
           <Button onClick={onClose} variant="ghost" fullWidth>

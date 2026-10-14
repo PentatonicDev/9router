@@ -32,12 +32,6 @@ export function injectSystemPrompt(body, format, prompt) {
       injectGeminiSystem(body, prompt);
       return;
     }
-    // Converse also carries messages[], but a system role inside it is rejected
-    // ("Unexpected field type"): system lives in the top-level system: [{text}].
-    if (format === FORMATS.BEDROCK_CONVERSE) {
-      injectConverseSystem(body, prompt);
-      return;
-    }
 
     // Dispatch by actual wire shape for OpenAI-shaped formats.
     // instructions string takes precedence; messages[] means Chat; input[] means Responses.
@@ -242,21 +236,6 @@ function injectClaudeSystem(body, prompt) {
     }
     // absent/null
     try { body.system = prompt; } catch (_) {}
-  } catch (_) {}
-}
-
-// ---- Bedrock Converse ----
-function injectConverseSystem(body, prompt) {
-  try {
-    const sys = body.system;
-    if (Array.isArray(sys)) {
-      try { if (sys.some(b => b && hasPrompt(b.text, prompt))) return; } catch (_) {}
-      // Stay inside the cached prefix: the translator ends system with a cachePoint.
-      const at = sys.length && sys[sys.length - 1]?.cachePoint ? sys.length - 1 : sys.length;
-      try { sys.splice(at, 0, { text: prompt }); } catch (_) {}
-      return;
-    }
-    try { body.system = [{ text: prompt }]; } catch (_) {}
   } catch (_) {}
 }
 

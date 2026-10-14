@@ -7,6 +7,7 @@ import {
 import { getSettings, getApiKeyRoutingContext } from "@/lib/localDb";
 import { adminKeyRefusal } from "../utils/adminKeyGuard.js";
 import { getModelInfo } from "../services/model.js";
+import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAccess.js";
 import { handleSystemoneCore } from "open-sse/handlers/systemoneCore.js";
 import { errorResponse, unavailableResponse, responseFromRoutingCandidate } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
@@ -76,6 +77,10 @@ export async function handleSystemone(request) {
   }
 
   const { provider, model } = modelInfo;
+
+  // Per-key access control: checked before any credential lookup.
+  const keyAccessDenied = await enforceKeyAccessResolved(await getKeyAccessContext(request), modelStr, provider, model);
+  if (keyAccessDenied) return keyAccessDenied;
 
   if (modelStr !== `${provider}/${model}`) {
     log.info("ROUTING", `${modelStr} → ${provider}/${model}`);

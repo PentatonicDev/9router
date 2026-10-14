@@ -55,6 +55,8 @@ export function normalizeTags(value) {
   }
   return tags.length ? tags : null;
 }
+import { keyAccessFromColumns, keyAccessToColumns } from "@/shared/utils/keyAccess.js";
+import { KEY_ACCESS_UNRESTRICTED } from "@/shared/constants/keyAccess.js";
 
 function rowToKey(row) {
   if (!row) return null;
@@ -72,6 +74,7 @@ function rowToKey(row) {
     tags: normalizeTags(parseJson(row.tags, null)) || [],
     owner: row.owner ?? null,
     createdAt: row.createdAt,
+    access: keyAccessFromColumns(row.accessRestricted, row.accessAllow),
   };
 }
 
@@ -84,6 +87,14 @@ export async function getApiKeys() {
 export async function getApiKeyById(id) {
   const db = await getDb();
   const row = await db.selectFrom("apiKeys").selectAll().where("id", "=", id).executeTakeFirst();
+  return rowToKey(row);
+}
+
+// Used by the /v1 handlers to read the presented key's access settings.
+export async function getApiKeyByKey(key) {
+  if (!key) return null;
+  const db = await getDb();
+  const row = await db.selectFrom("apiKeys").selectAll().where("key", "=", key).executeTakeFirst();
   return rowToKey(row);
 }
 
@@ -104,12 +115,14 @@ export async function createApiKey(name, machineId, tags = null, owner = undefin
     tags: normalizeTags(tags) || [],
     owner: owner === undefined ? await resolveDefaultOwner() : normalizeOwnerInput(owner),
     createdAt: new Date().toISOString(),
+    access: { restricted: false, allow: [] },
   };
   await db.insertInto("apiKeys").values({
     id: apiKey.id, key: apiKey.key, name: apiKey.name, machineId: apiKey.machineId,
     isActive: 1, kind: apiKey.kind, connectionBudgets: null, allowedConnectionIds: null,
     tags: apiKey.tags.length ? stringifyJson(apiKey.tags) : null,
     owner: apiKey.owner, createdAt: apiKey.createdAt,
+    ...keyAccessToColumns(KEY_ACCESS_UNRESTRICTED),
   }).execute();
   return apiKey;
 }
@@ -168,6 +181,7 @@ export async function updateApiKey(id, data) {
       allowedConnectionIds: merged.allowedConnectionIds ? stringifyJson(merged.allowedConnectionIds) : null,
       tags: tags ? stringifyJson(tags) : null,
       owner: merged.owner ?? null,
+      ...keyAccessToColumns(merged.access),
     }).where("id", "=", id).execute();
     result = merged;
   });

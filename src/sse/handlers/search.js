@@ -14,6 +14,7 @@ import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
 import { rejectAdminKey } from "../utils/adminKeyGuard.js";
+import { getKeyAccessContext, enforceKeyAccessProvider } from "../services/keyAccess.js";
 
 /**
  * Handle web search request for the SSE/Next.js server.
@@ -74,6 +75,12 @@ export async function handleSearch(request) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: query");
   }
 
+  // Per-key access control: the provider IS the model here, so a
+  // restricted key needs the provider id (or the combo) on its list.
+  const comboModels = getComboModelsFromData(providerInput, await getCombos());
+  const keyAccessDenied = await enforceKeyAccessProvider(await getKeyAccessContext(request), providerInput, comboModels);
+  if (keyAccessDenied) return keyAccessDenied;
+
   return runSearch(body, providerInput, apiKey, settings);
 }
 
@@ -87,6 +94,7 @@ export async function handleSearch(request) {
 export async function runSearch(body, providerInput, apiKey, settings) {
   const combos = await getCombos();
   const comboModels = getComboModelsFromData(providerInput, combos);
+
   if (comboModels) {
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[providerInput]?.fallbackStrategy || settings.comboStrategy || "fallback";

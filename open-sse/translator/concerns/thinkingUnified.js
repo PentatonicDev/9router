@@ -141,6 +141,11 @@ function resolveFormat(targetFormat, model, provider, transportFmt = null) {
   const caps = getCapabilitiesForModel(provider, model);
   const isOpenAIWire = targetFormat === "openai" || targetFormat === "openai-responses";
   if (caps.thinkingFormat && !(isOpenAIWire && NATIVE_ONLY_FORMATS.has(caps.thinkingFormat))) {
+    // Muse (Meta) strict Responses API rejects top-level reasoning_effort and
+    // requires nested reasoning: { effort, summary }. Other upstreams keep Chat-shaped effort.
+    if (provider === "muse" && targetFormat === "openai-responses") {
+      return "openai-responses";
+    }
     return caps.thinkingFormat;
   }
   return FORMAT_TO_NATIVE[targetFormat] || "openai";
@@ -283,6 +288,22 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
       if (level) body.reasoning_effort = normalizeOpenAILevel(level, supportedLevels);
       break;
     }
+    case "openai-responses": {
+      // The Responses API nests effort: reasoning:{effort,summary}. A top-level
+      // reasoning_effort is rejected by strict upstreams (Meta: "unknown
+      // parameter `reasoning_effort`"). "none" is expressed by omitting reasoning.
+      if (none && canDisable) { delete body.reasoning; break; }
+      const level = toLevel(eff);
+      if (level) {
+        const current = body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)
+          ? body.reasoning
+          : {};
+        body.reasoning = { ...current, effort: normalizeOpenAILevel(level, supportedLevels) };
+        if (!body.reasoning.summary) body.reasoning.summary = "auto";
+      }
+      delete body.reasoning_effort;
+      break;
+    }
     case "claude-adaptive": {
       if (none && canDisable) { body.thinking = { type: "disabled" }; break; }
       // Models that can disable thinking need the explicit adaptive switch.
@@ -292,6 +313,7 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
       else delete body.thinking;
       const level = toLevel(eff);
       // xhigh is model-gated (Opus/Sonnet 4.6 reject it) — clamp when not advertised.
+      // Claude effort has no "minimal" (always-on models clamp "none" to it).
       body.output_config = { effort: level === "auto" ? "high"
         : level === "minimal" ? "low"
         : level === "xhigh" && !supportedLevels?.includes("xhigh") ? "high" : level };
@@ -301,36 +323,6 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
       if (none && canDisable) { body.thinking = { type: "disabled" }; break; }
       const budget = toBudget(eff, caps.thinkingRange);
       body.thinking = budget === -1 ? { type: "enabled", ...(display ? { display } : {}) } : { type: "enabled", budget_tokens: budget || 8192, ...(display ? { display } : {}) };
-      break;
-    }
-    case "bedrock-converse": {
-      // additionalModelRequestFields.thinking is Bedrock Converse's passthrough
-      // for Claude's native `thinking` field — same shape as claude-budget's
-      // body.thinking, just nested one level deeper (see translator/request/
-      // openai-to-bedrock-converse.js, which must not clobber this field).
-      if (none && canDisable) {
-        if (body.additionalModelRequestFields) delete body.additionalModelRequestFields.thinking;
-        break;
-      }
-      const budget = toBudget(eff, caps.thinkingRange);
-      const budgetTokens = budget === -1 ? undefined : (budget || 8192);
-      if (!body.additionalModelRequestFields) body.additionalModelRequestFields = {};
-      body.additionalModelRequestFields.thinking = budgetTokens
-        ? { type: "enabled", budget_tokens: budgetTokens }
-        : { type: "enabled" };
-      // Anthropic-on-Bedrock requires inferenceConfig.maxTokens strictly greater
-      // than budget_tokens (else 400) — same reconciliation as the direct Claude
-      // API path (prepareClaudeRequest in formats/claude.js).
-      if (budgetTokens) {
-        if (!body.inferenceConfig) body.inferenceConfig = {};
-        const ceiling = caps.maxOutput || DEFAULT_MAX_TOKENS;
-        if (!(body.inferenceConfig.maxTokens > budgetTokens)) {
-          body.inferenceConfig.maxTokens = Math.min(budgetTokens + 1024, ceiling);
-          if (budgetTokens >= body.inferenceConfig.maxTokens) {
-            body.additionalModelRequestFields.thinking.budget_tokens = Math.max(1024, body.inferenceConfig.maxTokens - 1024);
-          }
-        }
-      }
       break;
     }
     case "gemini-level": {

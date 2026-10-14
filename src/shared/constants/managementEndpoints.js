@@ -20,7 +20,6 @@ export const MANAGEMENT_ENDPOINTS = [
   { method: "PUT", path: "/api/providers/{id}", purpose: "Update a provider connection", adminOnly: false },
   { method: "DELETE", path: "/api/providers/{id}", purpose: "Remove a provider connection", adminOnly: false },
   { method: "POST", path: "/api/providers/{id}/test", purpose: "Test a provider connection", adminOnly: false },
-  { method: "POST", path: "/api/providers/{id}/discover", purpose: "Discover available models (Bedrock)", adminOnly: false },
   { method: "GET", path: "/api/keys", purpose: "List API keys", adminOnly: false },
   { method: "POST", path: "/api/keys", purpose: "Create an API key", adminOnly: false },
   { method: "GET", path: "/api/keys/{id}", purpose: "Get a single API key", adminOnly: false },

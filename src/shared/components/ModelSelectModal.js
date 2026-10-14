@@ -23,7 +23,7 @@ const NO_AUTH_PROVIDER_IDS = Object.keys(FREE_PROVIDERS).filter(id => FREE_PROVI
 // Providers with per-account live catalogs via /api/providers/[id]/models.
 // Static registry stays as fallback when live fetch fails or is empty.
 // zed: its backend customResolver already returns live models (#4244).
-const LIVE_CATALOG_PROVIDERS = ["cursor", "cline", "clinepass", "bedrock", "zed"];
+const LIVE_CATALOG_PROVIDERS = ["cursor", "cline", "clinepass", "zed"];
 
 // Fetch a provider's account-scoped catalog for every active connection and merge
 // the results. Entries collapse by model id on purpose: two connections of the
@@ -113,18 +113,15 @@ export default function ModelSelectModal({
   const cursorConnectionIds = liveConnectionIdsByProvider.cursor;
   const clineConnectionIds = liveConnectionIdsByProvider.cline;
   const clinepassConnectionIds = liveConnectionIdsByProvider.clinepass;
-  const bedrockConnectionIds = liveConnectionIdsByProvider.bedrock;
   const zedConnectionIds = liveConnectionIdsByProvider.zed;
 
   const cursorModels = useLiveProviderModels(isOpen, cursorConnectionIds, "Cursor");
   const clineModels = useLiveProviderModels(isOpen, clineConnectionIds, "Cline");
   const clinepassModels = useLiveProviderModels(isOpen, clinepassConnectionIds, "ClinePass");
-  // Bedrock: the connection's discovered catalog (models + inference profiles the account can invoke)
-  const bedrockModels = useLiveProviderModels(isOpen, bedrockConnectionIds, "Bedrock");
   const zedModels = useLiveProviderModels(isOpen, zedConnectionIds, "Zed");
   const liveModelsByProvider = useMemo(
-    () => ({ cursor: cursorModels, cline: clineModels, clinepass: clinepassModels, bedrock: bedrockModels, zed: zedModels }),
-    [cursorModels, clineModels, clinepassModels, bedrockModels, zedModels],
+    () => ({ cursor: cursorModels, cline: clineModels, clinepass: clinepassModels, zed: zedModels }),
+    [cursorModels, clineModels, clinepassModels, zedModels],
   );
 
   const fetchCombos = async () => {
@@ -222,10 +219,23 @@ export default function ModelSelectModal({
       ? NO_AUTH_PROVIDER_IDS.filter((id) => (AI_PROVIDERS[id]?.serviceKinds || ["llm"]).includes(kindFilter))
       : NO_AUTH_PROVIDER_IDS;
 
+    // Compatible nodes (OpenAI/Anthropic Compatible) that already have user-added
+    // custom models should be selectable even without an API-key connection. Local /
+    // self-hosted endpoints (Ollama, internal relays, etc.) don't always need a stored
+    // key, so gating on connections hides models the user already added. These nodes
+    // are LLM-only, so only surface them when no kind filter is active.
+    // See #4177, #2113, #2119, #1988.
+    const compatibleNodeIds = kindFilter
+      ? []
+      : customModels
+          .map((m) => m.providerAlias)
+          .filter((alias) => isOpenAICompatibleProvider(alias) || isAnthropicCompatibleProvider(alias));
+
     // Only show connected providers (including both standard and custom)
     const providerIdsToShow = new Set([
       ...activeConnectionIds,  // Only connected providers
       ...noAuthIds,            // No-auth providers (kind-filtered)
+      ...compatibleNodeIds,    // Compatible nodes with user-added models
     ]);
 
     // Sort by PROVIDER_ORDER

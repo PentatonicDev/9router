@@ -4,7 +4,6 @@ import "open-sse/index.js";
 import { getProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
 import { canSee, getScopeFilter } from "@/lib/auth/resourceScope";
 import { getUsageForProvider } from "open-sse/services/usage.js";
-import { getBedrockCreditsUsage } from "@/lib/usage/bedrockCredits.js";
 import { isUnrecoverableRefreshError } from "open-sse/services/tokenRefresh.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
@@ -182,11 +181,7 @@ export async function GET(request, { params }) {
       }
     }
 
-    // Bedrock has no native quota API — usage is derived from local spend
-    // history instead, so the OAuth refresh/retry logic below doesn't apply.
-    let usage = connection.provider === "bedrock"
-      ? await getBedrockCreditsUsage(connection)
-      : await getUsageForProvider(connection, proxyOptions, { force });
+    let usage = await getUsageForProvider(connection, proxyOptions, { force });
 
     // If provider returned an auth-expired message instead of throwing,
     // force-refresh token and retry once (OAuth only)

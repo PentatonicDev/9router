@@ -19,6 +19,8 @@ import EndpointRow from "./components/EndpointRow";
 import StatusAlert from "./components/StatusAlert";
 import Tooltip from "./components/Tooltip";
 import SecurityWarning from "./components/SecurityWarning";
+import KeyAccessControls from "./components/KeyAccessControls";
+
 // Tags are typed as a comma-separated list; the repo does the trimming,
 // de-duplication and capping.
 function parseTagInput(value) {
@@ -758,6 +760,25 @@ export default function APIPageClient({ machineId }) {
     return true;
   });
 
+  // Save a key's access (restricted flag + allow list).
+  const handleUpdateKeyAccess = async (id, access) => {
+    try {
+      const res = await fetch(`/api/keys/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ access }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.key) {
+        setKeys(prev => prev.map(k => k.id === id ? { ...k, access: data.key.access } : k));
+      } else {
+        console.log("Error updating key access:", data.error || res.status);
+      }
+    } catch (error) {
+      console.log("Error updating key access:", error);
+    }
+  };
+
   const maskKey = (fullKey) => {
     if (!fullKey || fullKey.length <= 10) return fullKey || "";
     return fullKey.slice(0, 6) + "•".repeat(fullKey.length - 10) + fullKey.slice(-4);
@@ -1124,7 +1145,7 @@ export default function APIPageClient({ machineId }) {
             {visibleKeyList.map((key) => (
               <div
                 key={key.id}
-                className={`group flex items-center justify-between py-3 border-b border-black/[0.03] dark:border-white/[0.03] last:border-b-0 ${key.isActive === false ? "opacity-60" : ""}`}
+                className={`group flex items-start justify-between gap-3 py-3 border-b border-black/[0.03] dark:border-white/[0.03] last:border-b-0 ${key.isActive === false ? "opacity-60" : ""}`}
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -1156,27 +1177,29 @@ export default function APIPageClient({ machineId }) {
                       </button>
                     ))}
                   </div>
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <code className="text-xs text-text-muted font-mono">
+                  <div className="flex items-center gap-2 mt-1.5 min-w-0 flex-wrap">
+                    <code className="text-xs text-text-muted font-mono break-all min-w-0">
                       {visibleKeys.has(key.id) ? key.key : maskKey(key.key)}
                     </code>
-                    <button
-                      onClick={() => toggleKeyVisibility(key.id)}
-                      className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
-                      title={visibleKeys.has(key.id) ? "Hide key" : "Show key"}
-                    >
-                      <span className="material-symbols-outlined text-[14px]">
-                        {visibleKeys.has(key.id) ? "visibility_off" : "visibility"}
-                      </span>
-                    </button>
-                    <button
-                      onClick={() => copy(key.key, key.id)}
-                      className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
-                    >
-                      <span className="material-symbols-outlined text-[14px]">
-                        {copied === key.id ? "check" : "content_copy"}
-                      </span>
-                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => toggleKeyVisibility(key.id)}
+                        className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
+                        title={visibleKeys.has(key.id) ? "Hide key" : "Show key"}
+                      >
+                        <span className="material-symbols-outlined text-[14px]">
+                          {visibleKeys.has(key.id) ? "visibility_off" : "visibility"}
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => copy(key.key, key.id)}
+                        className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
+                      >
+                        <span className="material-symbols-outlined text-[14px]">
+                          {copied === key.id ? "check" : "content_copy"}
+                        </span>
+                      </button>
+                    </div>
                   </div>
                   {key.isActive === false && (
                     <p className="text-xs text-orange-500 mt-1.5">Paused</p>
@@ -1195,8 +1218,20 @@ export default function APIPageClient({ machineId }) {
                       ))}
                     </div>
                   )}
+                  <KeyAccessControls
+                    apiKey={key}
+                    onChange={(access) => handleUpdateKeyAccess(key.id, access)}
+                    onRequestRestrict={() => setConfirmState({
+                      title: "Restrict API Key",
+                      message: `Restrict API key "${key.name}"?\n\nIt will only be able to call the combos and models you add. Until you add one, it can call nothing.`,
+                      onConfirm: async () => {
+                        setConfirmState(null);
+                        handleUpdateKeyAccess(key.id, { restricted: true, allow: key.access?.allow || [] });
+                      }
+                    })}
+                  />
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0 pt-0.5">
                   <button
                     onClick={() => setEditKeyState({ id: key.id, name: key.name || "", tags: (key.tags || []).join(", "), owner: key.owner || "", error: null })}
                     className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"

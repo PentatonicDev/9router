@@ -20,7 +20,7 @@ const SPECIALIZED = new Set([
   "antigravity", "azure", "gemini-cli", "github", "iflow", "qoder", "kiro",
   "codex", "cursor", "vertex", "vertex-partner", "opencode",
   "opencode-go", "grok-web", "perplexity-web", "ollama-local", "commandcode",
-  "xiaomi-tokenplan", "mimo-free",
+  "xiaomi-tokenplan", "mimo-free", "bedrock", "bedrock-xai",
 ]);
 
 // Sanitize header: khử token + field thời gian động (kimi X-Msh-Device-Id) để snapshot ổn định.
@@ -32,6 +32,8 @@ function sanitize(headers) {
           .replace(/sk-test-APIKEY|tok-test-ACCESS/g, "<CRED>")
           .replace(/kimi-\d{10,}/g, "kimi-<TS>")
       : v;
+    if (k === "X-Mavis-Session-Id") out[k] = "<UUID>";
+    if (k === "X-Mavis-Timezone-Offset") out[k] = "<TZ>";
   }
   return out;
 }

@@ -12,6 +12,7 @@ import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/provid
 import { getScopeFilter, getRequestIdentity, isScopeEnabled, ownerForCreate, scopeVisible } from "@/lib/auth/resourceScope";
 import { getDisabledAccountIds } from "@/lib/db/repos/disabledAccountsRepo.js";
 import { getSettings } from "@/lib/localDb";
+import { toProviderConnectionResponse } from "@/lib/providerConnectionResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -78,15 +79,11 @@ export async function GET() {
         : c.name;
       const shared = (c.owner ?? null) === null;
       return {
-        ...c,
+        ...toProviderConnectionResponse(c),
         name,
         shared,
         readOnly: scoped && shared,
         disabledForMe: disabledForMe.has(c.id),
-        apiKey: undefined,
-        accessToken: undefined,
-        refreshToken: undefined,
-        idToken: undefined,
       };
     });
 
@@ -130,19 +127,13 @@ export async function POST(request) {
     if (!provider || !isValidProvider) {
       return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
     }
-    // Bedrock IAM mode authenticates via providerSpecificData.{accessKeyId,secretAccessKey},
-    // not a bearer apiKey — same "no apiKey" carve-out ollama-local already has.
-    const isBedrockIam = provider === "bedrock" && body.providerSpecificData?.authMethod === "iam";
-    if (!apiKey && provider !== "ollama-local" && !isBedrockIam) {
+    // A provider may declare a providerSpecificData field that stands in for an API key — e.g.
+    // Bedrock's `profile`, where the credential lives in the local AWS config and there is no
+    // key to paste. Without this, following such a provider's own setup notice returns 400.
+    const apiKeySubstitute = AI_PROVIDERS[provider]?.apiKeyOptionalWith;
+    const hasApiKeySubstitute = !!(apiKeySubstitute && body.providerSpecificData?.[apiKeySubstitute]);
+    if (!apiKey && provider !== "ollama-local" && !hasApiKeySubstitute) {
       return NextResponse.json({ error: `${isWebCookieProvider ? "Cookie value" : "API Key"} is required` }, { status: 400 });
-    }
-    // accessKeyId without secretAccessKey isn't "use the default provider
-    // chain instead" (that's the case with neither field set) — it's a half
-    // configured credential the SDK would only fail on later, at call time.
-    // The dashboard modal already gates on both; enforce it here too so a
-    // direct API call can't skip it.
-    if (isBedrockIam && !!body.providerSpecificData?.accessKeyId !== !!body.providerSpecificData?.secretAccessKey) {
-      return NextResponse.json({ error: "AWS Access Key ID and Secret Access Key must be provided together" }, { status: 400 });
     }
     const connectionName = name || displayName || AI_PROVIDERS[provider]?.name;
     if (!connectionName) {
@@ -212,11 +203,10 @@ export async function POST(request) {
       allowOverwrite: body.id ? true : (body.allowOverwrite === true || body.overwrite === true),
     });
 
-    // Hide sensitive fields
-    const result = { ...newConnection };
-    delete result.apiKey;
-
-    return NextResponse.json({ connection: result }, { status: 201 });
+    return NextResponse.json(
+      { connection: toProviderConnectionResponse(newConnection) },
+      { status: 201 },
+    );
   } catch (error) {
     if (error?.code === "PROVIDER_NAME_CONFLICT") {
       return NextResponse.json(

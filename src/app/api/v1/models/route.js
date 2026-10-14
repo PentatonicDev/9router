@@ -8,6 +8,7 @@ import {
 } from "@/shared/constants/providers";
 import { getProviderConnections, getCombos, getCustomModels, getModelAliases, getApiKeyAllowedConnectionIds, getApiKeyOwner, getSettings } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
+import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
 import { resolveQoderModels, routableQoderModels } from "open-sse/services/qoderModels.js";
@@ -141,14 +142,6 @@ const LIVE_MODEL_RESOLVERS = {
       providerSpecificData: conn.providerSpecificData || {},
     }, { log: console });
     return result?.models?.length ? { models: result.models } : null;
-  },
-  // Bedrock's live catalog is per-connection discovery (POST .../discover),
-  // not fetched on every /v1/models call — surface the last persisted result
-  // when there is one, else fall through to the registry's seeded models.
-  bedrock: async (conn) => {
-    const items = conn.providerSpecificData?.discoveredModels?.items;
-    if (!items?.length) return null;
-    return { models: items.map((m) => ({ id: m.id, name: m.name })) };
   },
   zed: async (conn) => {
     const result = await resolveZedModels({
@@ -649,7 +642,10 @@ export async function GET(request) {
   try {
     // Detect cross-instance recursive /models fetch (another 9router fetching our /models)
     const skipDynamicFetch = request?.headers?.get(INTERNAL_MODELS_FETCH_HEADER) === "1";
-    const data = await buildModelsList([LLM_KIND], { skipDynamicFetch, apiKey: extractApiKey(request) });
+    const data = await filterModelsListForKey(
+      await getKeyAccessContext(request),
+      await buildModelsList([LLM_KIND], { skipDynamicFetch, apiKey: extractApiKey(request) })
+    );
     return Response.json({ object: "list", data }, {
       headers: { "Access-Control-Allow-Origin": "*" },
     });

@@ -35,7 +35,6 @@
 
 import { matchPattern } from "./pricing.js";
 import { looksLikeVisionModel } from "./visionPatterns.js";
-import { stripBedrockGeoPrefix } from "./bedrockGeoPrefix.js";
 
 /**
  * Safe floor — every resolved result is merged over this so consumers
@@ -99,6 +98,9 @@ export const MODEL_CAPABILITIES = {
   "claude-opus-5.5-thinking": { vision: true, pdf: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
   "claude-opus-5.5-agentic": { vision: true, pdf: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
   "claude-opus-5.5-thinking-agentic": { vision: true, pdf: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5-5-high":              { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000, thinkingCanDisable: false, forcedToolChoice: false },
+  "claude-opus-5-5-medium":            { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000, thinkingCanDisable: false, forcedToolChoice: false },
+  "claude-opus-5-5-low":               { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000, thinkingCanDisable: false, forcedToolChoice: false },
   "claude-opus-4.6":   { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
   "claude-opus-4.7":   { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
   "claude-opus-4-7":   { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
@@ -111,6 +113,10 @@ export const MODEL_CAPABILITIES = {
   "claude-sonnet-4-6": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
   // Sonnet 5.5 rejects thinking.type "disabled" (use "between_tools") and forced tool_choice (any/tool).
   "claude-sonnet-5-5": { vision: true, pdf: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000, thinkingOffType: "between_tools", forcedToolChoice: false },
+  "claude-sonnet-5-5-thinking": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000, thinkingOffType: "between_tools", forcedToolChoice: false },
+  "claude-sonnet-5-5-high": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000, thinkingOffType: "between_tools", forcedToolChoice: false },
+  "claude-sonnet-5-5-medium": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000, thinkingOffType: "between_tools", forcedToolChoice: false },
+  "claude-sonnet-5-5-low": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000, thinkingOffType: "between_tools", forcedToolChoice: false },
   "claude-sonnet-5": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
   "claude-sonnet-5-thinking": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
   "claude-sonnet-5-agentic": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
@@ -245,16 +251,13 @@ export const PROVIDER_CAPABILITIES = {
   // reasoning.canDisableThinking flag — see the note in the codebuddy-cn block
   // below; it is NOT the inverse of onlyReasoning.
   "codebuddy-cn": {
-    "glm-5.2":            { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 48000 },
+    "glm-5.2":            { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 131072 },
     "glm-5.1":            { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 48000 },
     "glm-5.0":            { reasoning: true, thinkingFormat: "openai", contextWindow: 200000, maxOutput: 48000 },
     // maxOutput 64000 per both the plugin-baked fallback and the live server
     // table (the old 38000 had no source and truncated output).
-    "glm-5v-turbo":       { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 64000 },
     "glm-4.7":            { reasoning: true, thinkingFormat: "openai", contextWindow: 200000, maxOutput: 48000 },
-    "minimax-m3":         { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 512000, maxOutput: 128000 },
-    "kimi-k2.7":          { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 256000, maxOutput: 32000 },
-    "kimi-k2.6":          { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 256000, maxOutput: 32000 },
+    "minimax-m3":         { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 512000, maxOutput: 524288 },
     "kimi-k2.5":          { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 164000, maxOutput: 32000 },
     "hy3-preview":        { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 192000, maxOutput: 64000 },
     "deepseek-v4-flash":  { reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 50000 },
@@ -271,14 +274,20 @@ export const PROVIDER_CAPABILITIES = {
     // their thinking is switchable; the hy* models are forced always-on.
     "hy3":                { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 192000, maxOutput: 64000 },
     "hy4-preview":        { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 64000 },
-    "glm-5.3":            { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 48000 },
-    "glm-5.3-flash":      { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 32000 },
-    "kimi-k3-1":          { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 32000 },
-    "deepseek-v4-pro":    { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 50000 },
-    // deepseek-v4.1-flash replaces v4-flash (dropped from the server list;
-    // the old endpoint still answers 200 but the published list is the
-    // contract). maxOutput 128000 per the server's product-config payload.
-    "deepseek-v4.1-flash": { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 128000 },
+    "glm-5.3":            { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 131072 },
+    "glm-5.3-flash":      { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 131072 },
+    "kimi-k3-1":          { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 1048576 },
+    // contextWindow is the server's contextWindow.defaultLength (300000), NOT
+    // maxInputTokens — k2.8 publishes supportedLengths [300000, 1000000] and the
+    // gateway only gives 1M when the request opts in (this executor never does).
+    // Using 1000000 here would let the capacity adapter budget history for a
+    // window the model doesn't actually have.
+    "kimi-k2.8-preview":  { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 300000, maxOutput: 131072 },
+    "deepseek-v4-pro":    { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 393216 },
+    // deepseek-v4.1-flash replaced v4-flash on the server list. The 2026-09-30
+    // snapshot raised maxOutput to 393216 (matching v4-pro) and changed the
+    // published efforts from low/high/xhigh to low/high/max.
+    "deepseek-v4.1-flash": { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 393216 },
   },
   // Poolside Laguna — OpenAI-compatible, all reasoning-capable (32K max output).
   "poolside": {
@@ -295,42 +304,15 @@ export const PROVIDER_CAPABILITIES = {
   "ollama": {
     "deepseek-v4.1-flash:cloud": { vision: true, reasoning: true, thinkingFormat: "deepseek", contextWindow: 1000000, maxOutput: 384000 },
   },
-  // Amazon Bedrock — one generic executor for every vendor, so capabilities are
-  // keyed by Bedrock's own model id (not a shared PATTERN, to avoid a Bedrock id
-  // accidentally matching an unrelated pattern meant for another provider's
-  // naming convention). Claude-on-Bedrock ids get reasoning via the
-  // "bedrock-converse" thinkingFormat (additionalModelRequestFields.thinking —
-  // see thinkingUnified.js). ponytail: the field name/shape is per AWS Converse
-  // docs for Claude, mocked-stream tested only — needs one live confirmation
-  // against a real Anthropic-on-Bedrock ConverseStream call before prod rollout.
-  "bedrock": {
-    "anthropic.claude-opus-4-1-20250805-v1:0": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 200000, maxOutput: 32000 },
-    "anthropic.claude-opus-4-5-20251101-v1:0": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
-    "anthropic.claude-sonnet-4-5-20250929-v1:0": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
-    "anthropic.claude-haiku-4-5-20251001-v1:0": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 200000, maxOutput: 64000 },
-    // 1M-context generation (limits per models.dev amazon-bedrock, 2026-09-21).
-    "anthropic.claude-opus-4-6-v1": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
-    "anthropic.claude-sonnet-4-6": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
-    "anthropic.claude-opus-4-7": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
-    "anthropic.claude-opus-4-8": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
-    "anthropic.claude-opus-5": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
-    "anthropic.claude-sonnet-5": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
-    "anthropic.claude-fable-5": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
-    "anthropic.claude-fable-5-1": { vision: true, reasoning: true, thinkingFormat: "bedrock-converse", contextWindow: 1000000, maxOutput: 128000 },
-    "amazon.nova-micro-v1:0": { contextWindow: 128000, maxOutput: 10000 },
-    "amazon.nova-lite-v1:0": { vision: true, contextWindow: 300000, maxOutput: 10000 },
-    "amazon.nova-pro-v1:0": { vision: true, contextWindow: 300000, maxOutput: 10000 },
-    "amazon.nova-premier-v1:0": { vision: true, contextWindow: 1000000, maxOutput: 10000 },
-    "meta.llama3-3-70b-instruct-v1:0": { contextWindow: 128000, maxOutput: 8192 },
-    "meta.llama4-scout-17b-instruct-v1:0": { vision: true, contextWindow: 328000, maxOutput: 8192 },
-    "meta.llama4-maverick-17b-instruct-v1:0": { vision: true, contextWindow: 1000000, maxOutput: 8192 },
-    "mistral.mistral-large-2407-v1:0": { contextWindow: 128000, maxOutput: 8192 },
-    "mistral.pixtral-large-2502-v1:0": { vision: true, contextWindow: 128000, maxOutput: 8192 },
-    "deepseek.r1-v1:0": { contextWindow: 128000, maxOutput: 8192 },
-    "deepseek.v3-v1:0": { contextWindow: 128000, maxOutput: 8192 },
-    "qwen.qwen3-32b-v1:0": { contextWindow: 128000, maxOutput: 8192 },
-    "qwen.qwen3-coder-480b-a35b-v1:0": { contextWindow: 256000, maxOutput: 8192 },
-    "cohere.command-r-plus-v1:0": { contextWindow: 128000, maxOutput: 4096 },
+  // MiniMax Code (mcode) credits lane — Anthropic messages on mavis; thinking
+  // is adaptive effort via output_config (claude-adaptive). Limits from
+  // magpie's minimax plugin static catalog (live probes pending). M2.7 pair
+  // always thinks and takes no effort knob in MiniMax Code itself.
+  "minimax-code": {
+    "MiniMax-M3.1-Flash-Preview": { vision: true, reasoning: true, thinkingFormat: "claude-adaptive", thinkingCanDisable: false, contextWindow: 512000, maxOutput: 128000 },
+    "MiniMax-M3":                 { vision: true, reasoning: true, thinkingFormat: "claude-adaptive", contextWindow: 512000, maxOutput: 128000 },
+    "MiniMax-M2.7":               { reasoning: true, thinkingFormat: "claude-adaptive", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 128000 },
+    "MiniMax-M2.7-highspeed":     { reasoning: true, thinkingFormat: "claude-adaptive", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 128000 },
   },
 };
 
@@ -340,6 +322,8 @@ PROVIDER_CAPABILITIES["qoder-cn"] = PROVIDER_CAPABILITIES["qoder"];
 PROVIDER_CAPABILITIES.cx = PROVIDER_CAPABILITIES.codex;
 PROVIDER_CAPABILITIES.dv = PROVIDER_CAPABILITIES["devin-cli"];
 PROVIDER_CAPABILITIES.devin = PROVIDER_CAPABILITIES["devin-cli"];
+// The global mcode site serves the same catalog — share the capability table.
+PROVIDER_CAPABILITIES["minimax-code-global"] = PROVIDER_CAPABILITIES["minimax-code"];
 
 /**
  * Pattern fallback — glob (* = wildcard), matched case-insensitively and
@@ -440,10 +424,18 @@ export const PATTERN_CAPABILITIES = [
   // ── GLM / Z.ai (thinking.enabled; disable via enable_thinking:false) ─
   // reasoning_effort is only read by z.ai from GLM-5.2 onward (docs.z.ai/guides/capabilities/thinking) —
   // older GLM (4.x, 5.0, 5.1, 5-turbo, 5v-turbo) ignore it, so gate it per exact version, not the "*glm-5*" catch-all.
-  // GLM-5.3 reasons unconditionally: turning thinking off 400s with "Reasoning is mandatory
-  // for this endpoint and cannot be disabled" (seen on openrouter/z-ai/glm-5.3-flash).
-  { pattern: "*glm-5.3*",       caps: { reasoning: true, thinkingFormat: "zai", thinkingEffortSupported: true, thinkingCanDisable: false, contextWindow: 200000, maxOutput: 128000 } },
-  { pattern: "*glm-5.2*",       caps: { reasoning: true, thinkingFormat: "zai", thinkingEffortSupported: true, contextWindow: 200000, maxOutput: 128000 } },
+  // thinkingCanDisable:false for the whole 5.3 line, per z.ai docs:
+  // "GLM-5.3 and GLM-5.3-FLASH no longer support disabling thinking (an error
+  // will occur if the thinking.type parameter is set to disabled)." Set on the
+  // pattern rather than an exact entry so both glm-5.3 and glm-5.3-flash get it
+  // while keeping thinkingEffortSupported:true, which the pattern owns. #4409
+  { pattern: "*glm-5.3*",       caps: { reasoning: true, thinkingFormat: "zai", thinkingEffortSupported: true, thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 128000 } },
+  // 5.2 keeps its 1M window. thinkingCanDisable is deliberately NOT set here:
+  // the exact MODEL_CAPABILITIES entry for glm-5.2 (added Sep 2026) already
+  // declares it false, and that predates this fix — z.ai's docs suggest 5.2 can
+  // in fact disable thinking, so that entry looks wrong, but changing it is
+  // outside the scope of #4409 and is worth its own issue.
+  { pattern: "*glm-5.2*",       caps: { reasoning: true, thinkingFormat: "zai", thinkingEffortSupported: true, contextWindow: 1000000, maxOutput: 128000 } },
   { pattern: "*glm-5*",         caps: { reasoning: true, thinkingFormat: "zai", contextWindow: 200000, maxOutput: 128000 } },
   { pattern: "*glm-4.7*",       caps: { reasoning: true, thinkingFormat: "zai", contextWindow: 200000, maxOutput: 128000 } },
   { pattern: "*glm-4*",         caps: { reasoning: true, thinkingFormat: "zai", contextWindow: 200000 } },
@@ -668,13 +660,6 @@ function isCommandCodeTextOnly(model) {
 }
 export function getCapabilitiesForModel(provider, model) {
   if (!model) return { ...DEFAULT_CAPABILITIES };
-
-  // Requests carry the inference-profile id ("us.anthropic.claude-sonnet-4-5-...")
-  // but every table below (PROVIDER_CAPABILITIES.bedrock, MODEL_CAPABILITIES, ...)
-  // is keyed by the bare vendor id — strip it up front so lookups actually hit
-  // instead of silently falling through to the generic pattern match (which
-  // guesses the wrong thinkingFormat/contextWindow/maxOutput for this provider).
-  if (provider === "bedrock") model = stripBedrockGeoPrefix(model);
 
   // Canonical exact lookup strips vendor prefix: "anthropic/claude-opus-4.7" -> "claude-opus-4.7".
   const baseModel = model.includes("/") ? model.split("/").pop() : model;

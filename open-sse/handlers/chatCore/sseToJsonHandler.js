@@ -43,7 +43,7 @@ function pickAssistantMessageForChatCompletion(output) {
  * Used when provider forces streaming but client wants non-streaming.
  *
  * `targetFormat` is the format the raw SSE lines are actually IN (the
- * provider's own wire format, e.g. bedrock-converse). It is optional because
+ * provider's own wire format). It is optional because
  * most forceStream providers (plain OpenAI-compatible, plus kiro/commandcode,
  * which self-translate to OpenAI-shaped chunks inside their own executor
  * before this function ever sees them) already hand back OpenAI chat-

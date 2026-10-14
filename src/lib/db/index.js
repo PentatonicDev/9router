@@ -1,6 +1,8 @@
 // Public API barrel — all DB functions
 import { getDb } from "./kysely.js";
 import { stringifyJson, parseJson } from "./helpers/jsonCol.js";
+import { keyAccessFromColumns, keyAccessToColumns, validateKeyAccessInput } from "@/shared/utils/keyAccess.js";
+import { KEY_ACCESS_UNRESTRICTED } from "@/shared/constants/keyAccess.js";
 
 // Settings
 export {
@@ -29,7 +31,7 @@ export {
 
 // API keys
 export {
-  getApiKeys, getApiKeyById, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
+  getApiKeys, getApiKeyById, getApiKeyByKey, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
   getApiKeyAllowedConnectionIds,
   getApiKeyOwner,
   getApiKeyIdentity, getApiKeyRoutingContext,
@@ -81,7 +83,7 @@ export async function exportDb() {
     providerConnections: (await db.selectFrom("providerConnections").selectAll().execute()).map((r) => ({ ...parseJson(r.data, {}), id: r.id, provider: r.provider, authType: r.authType, name: r.name, email: r.email, priority: r.priority, isActive: r.isActive === 1, owner: r.owner ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     providerNodes: (await db.selectFrom("providerNodes").selectAll().execute()).map((r) => ({ ...parseJson(r.data, {}), id: r.id, type: r.type, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     proxyPools: (await db.selectFrom("proxyPools").selectAll().execute()).map((r) => ({ ...parseJson(r.data, {}), id: r.id, isActive: r.isActive === 1, testStatus: r.testStatus, createdAt: r.createdAt, updatedAt: r.updatedAt })),
-    apiKeys: (await db.selectFrom("apiKeys").selectAll().execute()).map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1, allowedConnectionIds: parseJson(r.allowedConnectionIds, null), tags: parseJson(r.tags, null), owner: r.owner ?? null, createdAt: r.createdAt })),
+    apiKeys: (await db.selectFrom("apiKeys").selectAll().execute()).map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1, allowedConnectionIds: parseJson(r.allowedConnectionIds, null), tags: parseJson(r.tags, null), owner: r.owner ?? null, createdAt: r.createdAt, access: keyAccessFromColumns(r.accessRestricted, r.accessAllow) })),
     combos: (await db.selectFrom("combos").selectAll().execute()).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), modelOptions: parseJson(r.modelOptions, null), maxThinking: r.maxThinking ?? null, aliases: parseJson(r.aliases, []) || [], owner: r.owner ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     modelAliases: {},
     customModels: [],
@@ -178,12 +180,21 @@ export async function importDb(payload) {
       });
     }
     for (const k of payload.apiKeys || []) {
+      // Per-key access: a backup without `access` (older version) restores
+      // unrestricted, exactly as before; a malformed `access` is refused.
+      let access = KEY_ACCESS_UNRESTRICTED;
+      if (k.access !== undefined) {
+        const checked = validateKeyAccessInput(k.access);
+        if (!checked.ok) throw new Error(`apiKeys ${k.id}: ${checked.error}`);
+        access = checked.value;
+      }
       await upsertRow(trx, "apiKeys", "id", {
         id: k.id, key: k.key, name: k.name || null, machineId: k.machineId || null,
         isActive: k.isActive === false ? 0 : 1,
         allowedConnectionIds: Array.isArray(k.allowedConnectionIds) && k.allowedConnectionIds.length ? stringifyJson(k.allowedConnectionIds) : null,
         tags: Array.isArray(k.tags) && k.tags.length ? stringifyJson(k.tags) : null,
         owner: k.owner ?? null, createdAt: k.createdAt || new Date().toISOString(),
+        ...keyAccessToColumns(access),
       });
     }
     for (const c of payload.combos || []) {
