@@ -81,3 +81,10 @@ describe("forced tool use on permanently adaptive Claude models", () => {
     expect(body.tool_choice).toEqual({ type: "auto" });
   });
 });
+
+describe("Claude Haiku 5.5", () => {
+  it("is listed for Claude Code and the Anthropic API with its own price and 1M window", () => {
+    expect(getPricingForModel("claude", "claude-haiku-5-5")).toMatchObject({ input: 0.1, output: 0.5, cached: 0.01 });
+    expect(getCapabilitiesForModel("claude", "claude-haiku-5-5")).toMatchObject({ contextWindow: 1000000, maxOutput: 128000, thinkingFormat: "claude-adaptive" });
+  });
+});
