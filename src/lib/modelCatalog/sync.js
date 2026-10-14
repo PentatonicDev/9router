@@ -48,6 +48,8 @@ export const PROVIDER_ALIASES = {
   "doubao": "volcengine",
   "cloudflare-ai": "cloudflare-workers-ai",
   "kilo-gateway": "kilo",
+  "bedrock": "amazon-bedrock",
+  "bedrock-xai": "amazon-bedrock",
 };
 
 let state = { running: false, lastSync: null, lastError: null, lastResult: null, etag: null, fileVersion: null, syncedAt: null };

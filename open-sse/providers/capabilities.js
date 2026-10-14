@@ -34,7 +34,6 @@
 // 2.0+, Grok, Perplexity). Verify with: curl -s https://models.dev/api.json
 
 import { matchPattern, canonicalPricingModel } from "./pricing.js";
-import { stripBedrockGeoPrefix } from "./bedrockGeoPrefix.js";
 import { looksLikeVisionModel } from "./visionPatterns.js";
 
 /**
@@ -697,7 +696,7 @@ export function getCapabilitiesForModel(provider, model) {
 
   // 2b. Gateway spellings of a known model: Bedrock ids ("us.anthropic.claude-
   // opus-4-7"), effort/mode variants ("claude-opus-4.7-thinking").
-  const canonical = canonicalPricingModel(stripBedrockGeoPrefix(baseModel).replace(/^anthropic\./, ""));
+  const canonical = canonicalPricingModel(baseModel);
   if (canonical !== baseModel && MODEL_CAPABILITIES[canonical]) return refine(MODEL_CAPABILITIES[canonical], provider, model);
 
   // 3. Pattern match (first match wins), refined by catalog + name heuristic

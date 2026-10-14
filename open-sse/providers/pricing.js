@@ -6,8 +6,6 @@
 //   3. Catalog pricing (synced from models.dev every 3h)
 //   4. MODEL_PRICING[model]               — canonical model price (provider-agnostic)
 //   5. PATTERN_PRICING                    — glob pattern match (e.g. "codex-*")
-import { stripBedrockGeoPrefix, bedrockCanonicalModelName } from "./bedrockGeoPrefix.js";
-import { BEDROCK_PRICING } from "./bedrockPricing.js";
 import { resolveProviderAlias } from "../services/model.js";
 
 let pricingCatalogSource = null;
@@ -213,10 +211,6 @@ export const MODEL_PRICING = {
  * Keyed by provider alias (cc, cx, gc, gh, ...) or provider id (openai, anthropic, ...).
  */
 export const PROVIDER_PRICING = {
-  // Amazon Bedrock — generated from models.dev (bedrock-pricing skill),
-  // keyed by the exact Bedrock id because regional profiles cost more than the
-  // bare/global id. See bedrockPricing.js.
-  bedrock: BEDROCK_PRICING,
   // TokenRouter — exact rates from https://api.tokenrouter.com/api/pricing ($1/1M tokens).
   // Ratio→USD: input = model_ratio×2, output = model_ratio×completion_ratio×2.
   // These override the canonical MODEL_PRICING/PATTERN_PRICING, whose rates often
@@ -438,7 +432,8 @@ const VARIANT_SUFFIX = /-(thinking|agentic|review|fast|none|minimal|low|medium|h
 // select a reasoning level or client mode, never ones naming a distinct model
 // (-mini, -nano, -pro, -codex, -spark, -image).
 export function canonicalPricingModel(model) {
-  let id = String(model).replace(/\[[^\]]*\]$/, "");
+  let id = String(model).replace(/\[[^\]]*\]$/, "")
+    .replace(/^(?:[a-z-]+\.)?anthropic\./, "").replace(/-v\d+(?::\d+)?$/, "");
   while (VARIANT_SUFFIX.test(id)) id = id.replace(VARIANT_SUFFIX, "");
   return id.replace(/^(claude-(?:opus|sonnet|haiku|fable)-\d+)\.(\d+)/, "$1-$2");
 }
@@ -452,14 +447,6 @@ export function getPricingForModel(provider, model) {
   // "unknown". Resolved here rather than at each call site: the tables are the
   // thing that is keyed by id, so the translation belongs with them.
   provider = resolveProviderAlias(provider);
-
-  // Bedrock prices depend on the geo prefix (a "us." profile lists ~10% above
-  // the bare id, "global." does not), so the exact id is tried first and the
-  // prefix is only stripped for the fallbacks below.
-  if (provider === "bedrock") {
-    if (PROVIDER_PRICING.bedrock[model]) return PROVIDER_PRICING.bedrock[model];
-    model = stripBedrockGeoPrefix(model);
-  }
 
   // 1. Provider-specific override
   if (provider && PROVIDER_PRICING[provider]?.[model]) {
@@ -490,18 +477,6 @@ export function getPricingForModel(provider, model) {
   for (const { pattern, pricing } of PATTERN_PRICING) {
     if (matchPattern(pattern, baseModel) || matchPattern(pattern, model)) {
       return pricing;
-    }
-  }
-
-  // 5. Bedrock only: an id models.dev does not list yet (new launches) is
-  // reduced to its canonical name and tried against the provider-agnostic
-  // tables. ponytail: those are direct-API list prices, an approximation until
-  // the bedrock-pricing skill picks the model up.
-  if (provider === "bedrock") {
-    const canonical = bedrockCanonicalModelName(model);
-    if (MODEL_PRICING[canonical]) return MODEL_PRICING[canonical];
-    for (const { pattern, pricing } of PATTERN_PRICING) {
-      if (matchPattern(pattern, canonical)) return pricing;
     }
   }
 

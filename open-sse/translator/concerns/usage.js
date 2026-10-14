@@ -63,16 +63,6 @@ const USAGE_EXTRACTORS = {
     const total = typeof raw.totalTokens === "number" ? raw.totalTokens : input + output;
     return { promptTokens: input, completionTokens: output, totalTokens: total };
   },
-  bedrock(raw) {
-    // Measured against real Converse TokenUsage: inputTokens EXCLUDES cache
-    // tokens, but totalTokens already includes them (total = input + output +
-    // cacheRead + cacheWrite) — fold cache into prompt like the claude extractor.
-    const input = n(raw.inputTokens), output = n(raw.outputTokens);
-    const cacheRead = n(raw.cacheReadInputTokens), cacheCreate = n(raw.cacheWriteInputTokens);
-    const prompt = input + cacheRead + cacheCreate;
-    const total = typeof raw.totalTokens === "number" ? raw.totalTokens : prompt + output;
-    return { promptTokens: prompt, completionTokens: output, totalTokens: total, cachedTokens: cacheRead, cacheCreationTokens: cacheCreate };
-  },
 };
 
 // Convert provider-native usage object → OpenAI usage. Returns null if no extractor/raw.

@@ -39,3 +39,10 @@ describe("variant spellings resolve the base model's limits", () => {
     expect(getCapabilitiesForModel(provider, model)).toMatchObject({ contextWindow: 1000000, maxOutput: 128000 });
   });
 });
+
+describe("Bedrock ids without a synced catalog", () => {
+  it("bill Claude inference profiles at the base model's list price", () => {
+    expect(getPricingForModel("bedrock", "us.anthropic.claude-opus-5-5")).toMatchObject({ input: 4, output: 20 });
+    expect(getPricingForModel("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0")).toMatchObject({ input: 1, output: 5 });
+  });
+});

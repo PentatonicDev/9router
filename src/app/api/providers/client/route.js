@@ -18,7 +18,7 @@ const SAFE_PSD_FIELDS = [
   "connectionProxyEnabled", "connectionProxyUrl", "connectionNoProxy",
   "githubLogin", "githubName", "githubEmail", "githubUserId",
   "username", "firstName", "lastName", "authMethod", "authKind",
-  "profileArn", "creditsUsd",
+  "profileArn",
 ];
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -48,9 +48,6 @@ function isUsageEligible(connection) {
   if (!USAGE_SUPPORTED_PROVIDERS.includes(connection.provider)) return false;
   if (connection.authType === "oauth") return true;
   if (!USAGE_APIKEY_PROVIDERS.includes(connection.provider)) return false;
-  // Bedrock has no native quota API — it only shows up once a credits ceiling
-  // is set on the connection, so the tracker has something to render.
-  if (connection.provider === "bedrock") return Number(connection.providerSpecificData?.creditsUsd) > 0;
   return true;
 }
 

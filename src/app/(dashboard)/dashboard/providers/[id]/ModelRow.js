@@ -1,9 +1,5 @@
 import PropTypes from "prop-types";
-import { Badge, CapacityBadges } from "@/shared/components";
-
-// Bedrock discovery is the only source that puts `kind` ("model"/"profile")
-// and `access` ("granted"/"denied"/"unknown") on a model entry — badges are a
-// no-op for every other provider's plain {id, name} objects.
+import { CapacityBadges } from "@/shared/components";
 
 export default function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting, onDisable, caps, thinkingSuffix }) {
   const displayModel = thinkingSuffix ? `${fullModel}(${thinkingSuffix})` : fullModel;
