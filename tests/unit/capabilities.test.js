@@ -106,7 +106,7 @@ describe("getCapabilitiesForModel", () => {
       contextWindow: 272000,
       maxOutput: 128000,
     });
-    expect(getCapabilitiesForModel("codex", "gpt-6-astra[1m]").contextWindow).toBe(872000);
+    expect(getCapabilitiesForModel("codex", "gpt-6-astra[1m]").contextWindow).toBe(922000);
   });
 
   it("CommandCode v4.1-flash is vision + effort capable", () => {

@@ -177,7 +177,8 @@ const KIRO_GPT_5_6_CAPABILITIES = { vision: true, reasoning: true, search: true,
 // (lower than OpenAI API's 1.05M). Sol differs from Terra/Luna. #2720
 const CODEX_GPT_56_SOL_CAPS  = { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 372000, maxOutput: 128000 };
 const CODEX_GPT_56_DEFAULT_CAPS = { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 };
-const CODEX_EXTENDED_CAPS = { ...CODEX_GPT_56_DEFAULT_CAPS, contextWindow: 872000 };
+// 922k is the API input limit (1.05M window minus 128k output), per models.dev.
+const CODEX_EXTENDED_CAPS = { ...CODEX_GPT_56_DEFAULT_CAPS, contextWindow: 922000 };
 
 // Devin CLI's registry declares a 200k context window for these GPT variants.
 // Keep the GPT feature/output fields because provider overrides short-circuit
@@ -363,7 +364,7 @@ export const PATTERN_CAPABILITIES = [
   // ── OpenAI GPT-6.x (vision + thinking + web search) ──────────────
   // 1.05M is the API window for the whole gpt-6 family. A gateway that truncates
   // lower records its own number in PROVIDER_CAPABILITIES, which wins over this
-  // pattern (Kiro 272k; Codex OAuth 272k, 872k on the [1m] variants).
+  // pattern (Kiro 272k; Codex OAuth 272k, 922k on the [1m] variants).
   { pattern: "*gpt-6*",         caps: { vision: true, pdf: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 1050000, maxOutput: 128000 } },
 
   // ── OpenAI GPT-5.x (vision + thinking + web search) ──────────────
