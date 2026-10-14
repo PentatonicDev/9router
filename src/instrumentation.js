@@ -30,5 +30,8 @@ export async function register() {
 
     const { startQuotaUnlock } = await import("@/shared/services/quotaUnlock.js");
     startQuotaUnlock();
+
+    const { startClaudeResetAutoApply } = await import("@/shared/services/claudeResetAutoApply.js");
+    startClaudeResetAutoApply();
   }
 }
