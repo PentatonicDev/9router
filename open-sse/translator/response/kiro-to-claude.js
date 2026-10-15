@@ -15,6 +15,7 @@
  */
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
+import { toClaudeMessageId } from "../concerns/message.js";
 
 function stopThinkingBlock(state, results) {
   if (!state.thinkingBlockStarted) return;
@@ -97,9 +98,7 @@ export function kiroToClaudeResponse(chunk, state) {
   // First chunk → emit message_start.
   if (!state.messageStartSent) {
     state.messageStartSent = true;
-    state.messageId =
-      (typeof data.id === "string" && data.id.replace("chatcmpl-", "")) ||
-      `msg_${Date.now()}`;
+    state.messageId = toClaudeMessageId(typeof data.id === "string" && data.id);
     state.model = data.model || "kiro";
     state.nextBlockIndex = 0;
     results.push({

@@ -3,6 +3,7 @@ import { FORMATS } from "../formats.js";
 import { ROLE, CLAUDE_BLOCK, MODEL_FALLBACK } from "../schema/index.js";
 import { fromOpenAIFinish } from "../concerns/finishReason.js";
 import { extractReasoningText } from "../concerns/reasoning.js";
+import { toClaudeMessageId } from "../concerns/message.js";
 
 // Legacy "proxy_" prefix used by older request translators. Response strips it
 // defensively so tool names from such turns resolve back (e.g. proxy_Read → Read
@@ -112,12 +113,10 @@ export function openaiToClaudeResponse(chunk, state) {
   // First chunk - ALWAYS send message_start first
   if (!state.messageStartSent) {
     state.messageStartSent = true;
-    state.messageId = chunk.id?.replace("chatcmpl-", "") || `msg_${Date.now()}`;
-    if (!state.messageId || state.messageId === "chat" || state.messageId.length < 8) {
-      state.messageId = chunk.extend_fields?.requestId ||
-        chunk.extend_fields?.traceId ||
-        `msg_${Date.now()}`;
-    }
+    const upstreamId = chunk.id?.replace("chatcmpl-", "");
+    state.messageId = toClaudeMessageId(upstreamId && upstreamId !== "chat" && upstreamId.length >= 8
+      ? upstreamId
+      : chunk.extend_fields?.requestId || chunk.extend_fields?.traceId);
     state.model = chunk.model || MODEL_FALLBACK;
     state.nextBlockIndex = 0;
     results.push({

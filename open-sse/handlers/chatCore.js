@@ -32,6 +32,7 @@ import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType, shouldDefaultClaudeToolType } from "../translator/concerns/toolCall.js";
+import { toClaudeMessageId } from "../translator/concerns/message.js";
 import { resolveSessionId, resolveDetailSession } from "../utils/sessionManager.js";
 
 /**
@@ -243,6 +244,13 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
   // Token savers: applied at the final body just before dispatch
   // Covers both passthrough (source shape) and translated (target shape) flows
   const finalFormat = passthrough ? sourceFormat : targetFormat;
+
+  // A session whose last turn was answered by a non-Anthropic provider can still echo
+  // a non-`msg_` id here; Anthropic only checks the prefix.
+  const previousMessageId = translatedBody.diagnostics?.previous_message_id;
+  if (finalFormat === FORMATS.CLAUDE && typeof previousMessageId === "string") {
+    translatedBody.diagnostics = { ...translatedBody.diagnostics, previous_message_id: toClaudeMessageId(previousMessageId) };
+  }
 
   // Request line: one correlated summary (fmt + thinking + counts + account)
   if (log?.line) {

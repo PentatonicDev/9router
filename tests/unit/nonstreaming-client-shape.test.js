@@ -24,7 +24,7 @@ describe("non-streaming client shaping (stage 2)", () => {
   it("claude client on a kiro-format provider gets a Message, not chat.completion", () => {
     const out = translateNonStreamingResponse(completion(), "kiro", "claude");
     expect(out.type).toBe("message");
-    expect(out.id).toBe("abc123");
+    expect(out.id).toBe("msg_abc123");
     const toolUses = out.content.filter((b) => b.type === "tool_use");
     expect(toolUses).toHaveLength(1);
     expect(toolUses[0].input).toEqual({ file_path: "/a.js" });

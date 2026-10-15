@@ -7,6 +7,7 @@
 import { FORMATS } from "../../translator/formats.js";
 import { fromOpenAIFinish } from "../../translator/concerns/finishReason.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
+import { toClaudeMessageId } from "../../translator/concerns/message.js";
 
 function parseToolArguments(value) {
   if (!value) return {};
@@ -49,7 +50,7 @@ export function openAICompletionToClaudeMessage(responseBody) {
 
   const usage = responseBody.usage || {};
   return {
-    id: String(responseBody.id || `msg_${Date.now()}`).replace(/^chatcmpl-/, ""),
+    id: toClaudeMessageId(responseBody.id),
     type: "message",
     role: "assistant",
     model: responseBody.model || "unknown",

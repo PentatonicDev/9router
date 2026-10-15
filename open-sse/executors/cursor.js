@@ -609,10 +609,7 @@ export class CursorExecutor extends BaseExecutor {
       };
     }
 
-    // The Claude SSE translator derives Anthropic's message ID by stripping
-    // `chatcmpl-`. Keep the remaining ID in Anthropic's required `msg_` form
-    // so strict clients such as Claude Code accept the completed stream.
-    const responseId = `chatcmpl-msg_${Date.now()}`;
+    const responseId = `chatcmpl-${Date.now()}`;
     const created = Math.floor(Date.now() / 1000);
     const composerModel = isComposerModel(model);
     let pending = Buffer.alloc(0);
