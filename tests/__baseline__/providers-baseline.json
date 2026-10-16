@@ -32,7 +32,7 @@
     ],
     "format": "antigravity",
     "headers": {
-      "User-Agent": "antigravity/ide/2.11.0 darwin/arm64"
+      "User-Agent": "antigravity/ide/2.22.0 darwin/arm64"
     },
     "retry": {
       "429": {
@@ -258,6 +258,11 @@
       "User-Agent": "connect-es/1.6.1"
     },
     "clientVersion": "3.12.17",
+    "usage": {
+      "url": "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+      "planInfoUrl": "https://api2.cursor.sh/aiserver.v1.DashboardService/GetPlanInfo",
+      "authUsageUrl": "https://api2.cursor.sh/auth/usage"
+    },
     "billing": "subscription"
   },
   "deepgram": {
@@ -884,6 +889,9 @@
     },
     "forceStream": true,
     "noAuth": true,
+    "reasoningInject": {
+      "scope": "all"
+    },
     "quirks": {
       "forceAutoToolChoiceModels": [
         "muse-spark-1.3-contributor-free"
@@ -1248,15 +1256,6 @@
     "format": "openai",
     "billing": "usage"
   },
-  "bedrock-xai": {
-    "baseUrl": "https://bedrock-runtime.{region}.amazonaws.com",
-    "auth": {
-      "header": "aws-sigv4",
-      "scheme": "raw"
-    },
-    "format": "openai",
-    "billing": "usage"
-  },
   "muse": {
     "baseUrl": "https://api.meta.ai/v1/chat/completions",
     "validateUrl": "https://api.meta.ai/v1/models",
@@ -1341,5 +1340,26 @@
     "clientId": "mcode-public",
     "tokenUrl": "https://account.minimax.io/oauth2/token",
     "billing": "subscription"
+  },
+  "bedrock-xai": {
+    "baseUrl": "https://bedrock-runtime.{region}.amazonaws.com",
+    "auth": {
+      "header": "aws-sigv4",
+      "scheme": "raw"
+    },
+    "format": "openai",
+    "billing": "usage"
+  },
+  "nous": {
+    "baseUrl": "https://inference-api.nousresearch.com/v1/chat/completions",
+    "format": "openai",
+    "auth": {
+      "combined": true,
+      "header": "Authorization",
+      "scheme": "bearer"
+    },
+    "clientId": "hermes-cli",
+    "tokenUrl": "https://portal.nousresearch.com/api/oauth/token",
+    "billing": "usage"
   }
 }

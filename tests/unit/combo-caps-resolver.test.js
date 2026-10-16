@@ -63,4 +63,15 @@ describe("aggregateComboCapabilities: resolveCaps override", () => {
     expect(caps).toEqual(aggregateComboCapabilities(["kimi/kimi-k3"]));
     expect(caps.contextWindow).toBe(getCapabilitiesForModel("kimi", "kimi-k3").contextWindow);
   });
+
+  it("claude-haiku-5-5 combo: 1M through the provider-alias resolver", () => {
+    const seats = ["ocg/claude-haiku-5-5", "cmc/claude-haiku-5-5"];
+    const seatCaps = (fullId) => {
+      const slash = fullId.indexOf("/");
+      if (slash <= 0) return null;
+      const providerId = { ocg: "opencode-go", cmc: "commandcode" }[fullId.slice(0, slash)] || fullId.slice(0, slash);
+      return getCapabilitiesForModel(providerId, fullId.slice(slash + 1));
+    };
+    expect(aggregateComboCapabilities(seats, null, seatCaps).contextWindow).toBe(1_000_000);
+  });
 });

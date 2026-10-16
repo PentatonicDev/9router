@@ -86,6 +86,7 @@ export async function deleteProviderNode(id) {
     if (!row) return;
     removed = rowToNode(row);
     await trx.deleteFrom("providerNodes").where("id", "=", id).execute();
+    await trx.deleteFrom("kv").where("scope", "=", "customModels").where("key", "like", `${id}|%`).execute();
   });
   return removed;
 }

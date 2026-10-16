@@ -55,7 +55,8 @@ describe("/v1/models — account binding", () => {
 
     const models = await buildModelsList(["llm"], { apiKey: "sk-free", skipDynamicFetch: true });
 
-    expect(providersOf(models)).toEqual(["cc", "openai"]);
+    // mmf/oc are no-auth free providers: listed for any key not bound to accounts.
+    expect(providersOf(models)).toEqual(["cc", "mmf", "oc", "openai"]);
   });
 
   // The static-catalog fallback exists for an unreachable DB. A key whose
