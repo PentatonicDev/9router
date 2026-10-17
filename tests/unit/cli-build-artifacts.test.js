@@ -51,6 +51,47 @@ afterEach(() => {
 });
 
 describe("CLI build server artifacts", () => {
+  for (const indirect of [false, true]) {
+    it(`rejects ${indirect ? "indirect" : "direct"} directory link cycles`, () => {
+      const root = createTempDir();
+      const appDir = path.join(root, "9router");
+      const buildDistDir = path.join(appDir, ".next-cli-build");
+      const standaloneDir = path.join(buildDistDir, "standalone");
+      const modules = path.join(standaloneDir, "node_modules");
+      writeFixture(standaloneDir, "server.js");
+      writeFixture(modules, "pkg/index.js");
+      const linkParent = indirect ? path.join(modules, "pkg") : modules;
+      fs.symlinkSync(modules, path.join(linkParent, "node_modules"), "junction");
+
+      assert.throws(
+        () => copyStandaloneBuild(appDir, buildDistDir, path.join(root, "bundle")),
+        /Circular directory link/,
+      );
+    });
+  }
+
+  it("copies sibling links to the same external package and skips broken links", () => {
+    const root = createTempDir();
+    const appDir = path.join(root, "9router");
+    const buildDistDir = path.join(appDir, ".next-cli-build");
+    const standaloneDir = path.join(buildDistDir, "standalone");
+    const bundle = path.join(root, "bundle");
+    const pkg = path.join(root, "pkg");
+    writeFixture(standaloneDir, "server.js");
+    writeFixture(pkg, "index.js", "shared package");
+    fs.symlinkSync(pkg, path.join(standaloneDir, "first"), "junction");
+    fs.symlinkSync(pkg, path.join(standaloneDir, "second"), "junction");
+    fs.symlinkSync(path.join(root, "missing"), path.join(standaloneDir, "broken"), "junction");
+
+    copyStandaloneBuild(appDir, buildDistDir, bundle);
+
+    for (const name of ["first", "second"]) {
+      assert.equal(fs.readFileSync(path.join(bundle, name, "index.js"), "utf8"), "shared package");
+      assert.equal(fs.lstatSync(path.join(bundle, name)).isSymbolicLink(), false);
+    }
+    assert.equal(fs.existsSync(path.join(bundle, "broken")), false);
+  });
+
   for (const { name, standalonePath } of [
     {
       name: "legacy nested app",

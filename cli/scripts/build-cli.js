@@ -35,12 +35,18 @@ function shouldExclude(name) {
   });
 }
 
-function copyRecursive(src, dest) {
+function copyRecursive(src, dest, ancestors = new Set()) {
   if (!fs.existsSync(src)) {
     console.warn(`Warning: Source ${src} does not exist`);
     return;
   }
-  
+
+  const realSource = fs.realpathSync(src);
+  if (ancestors.has(realSource)) {
+    throw new Error(`Circular directory link while copying: ${src}`);
+  }
+  const parents = new Set(ancestors).add(realSource);
+
   if (!fs.existsSync(dest)) {
     fs.mkdirSync(dest, { recursive: true });
   }
@@ -62,21 +68,16 @@ function copyRecursive(src, dest) {
     }
 
     if (entry.isDirectory()) {
-      copyRecursive(srcPath, destPath);
+      copyRecursive(srcPath, destPath, parents);
     } else if (entry.isSymbolicLink()) {
-      // Resolve and copy target (avoid linking outside bundle)
-      try {
-        const real = fs.realpathSync(srcPath);
-        if (fs.statSync(real).isDirectory()) {
-          copyRecursive(real, destPath);
-        } else {
-          fs.copyFileSync(real, destPath);
-        }
-      } catch {}
+      const real = fs.realpathSync(srcPath);
+      if (fs.statSync(real).isDirectory()) {
+        copyRecursive(real, destPath, parents);
+      } else {
+        fs.copyFileSync(real, destPath);
+      }
     } else {
-      try {
-        fs.copyFileSync(srcPath, destPath);
-      } catch {}
+      fs.copyFileSync(srcPath, destPath);
     }
   }
 }
@@ -204,8 +205,7 @@ function buildCliPackage() {
   try {
     copyStandaloneBuild(appDir, buildDistDir, cliAppDir);
   } catch (error) {
-    console.error("❌ Next.js standalone build not found under .next/standalone");
-    console.error("Expected either .next/standalone/server.js or .next/standalone/app/");
+    console.error("❌ Failed to copy Next.js standalone build:", error.message);
     process.exit(1);
   }
   console.log("✅ Copied standalone build\n");
