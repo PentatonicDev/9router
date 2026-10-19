@@ -21,3 +21,15 @@ describe("resolveKiroModels token refresh", () => {
     expect(result?.models.some((m) => m.upstreamModelId === "claude-sonnet-5")).toBe(true);
   });
 });
+
+describe("resolveKiroModels TokenType header", () => {
+  it.each([["api_key", "API_KEY"], ["external_idp", "EXTERNAL_IDP"], ["social", undefined]])(
+    "authMethod %s sends TokenType %s", async (authMethod, expected) => {
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ models: [{ modelId: "auto" }] }), { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await resolveKiroModels({ accessToken: "k", providerSpecificData: { authMethod } });
+
+      expect(fetchMock.mock.calls[0][1].headers.TokenType).toBe(expected);
+    });
+});

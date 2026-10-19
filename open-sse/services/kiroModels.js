@@ -29,6 +29,7 @@ const KIRO_AGENT_OS_VERSION = "10.0.26200";
 const KIRO_NODE_VERSION = "22.21.1";
 const KIRO_VERSION = "0.10.32";
 
+const KIRO_TOKEN_TYPES = { api_key: "API_KEY", external_idp: "EXTERNAL_IDP" };
 const DEFAULT_REGION = "us-east-1";
 const FETCH_TIMEOUT_MS = 30_000;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes per credential
@@ -168,6 +169,9 @@ async function fetchKiroCatalogRaw(credentials, signal) {
     ...buildKiroFingerprintHeaders(credentials),
     "Authorization": `Bearer ${credentials?.accessToken || ""}`
   };
+  // Same TokenType contract as executors/kiro.js (API keys and Entra tokens are not plain bearer tokens).
+  const tokenType = KIRO_TOKEN_TYPES[credentials?.providerSpecificData?.authMethod];
+  if (tokenType) headers.TokenType = tokenType;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort("timeout"), FETCH_TIMEOUT_MS);
