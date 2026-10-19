@@ -34,7 +34,7 @@ const KIRO_EVENT_TYPES = new Set([
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const REPAIR_INSTRUCTIONS = Object.freeze({
-  tool: "Retry the previous response because its Kiro tool_call wrapper was malformed. If you use the wrapper tool named tool_call, its input must contain a non-empty name and an arguments field.",
+  tool: "Retry the previous response because its Kiro tool call was missing or malformed. Return a complete tool call with a non-empty tool name and input containing valid JSON object arguments. If you use the wrapper tool named tool_call, its input must contain a non-empty name and an arguments field.",
   ellipsis: "Retry the previous response because it ended with only an ellipsis. Return the complete final answer, not only ... or ….",
   short_final: "Retry the previous response because its final only announced a future action. Complete the check now and return the result or a concrete blocker."
 });
@@ -838,8 +838,6 @@ export class KiroExecutor extends BaseExecutor {
         if (!values[0]) throw new Error("Kiro toolUseEvent is empty");
         for (const value of values) {
           try {
-            const name = typeof value?.name === "string" ? value.name.trim() : "";
-            if (!name) throw new Error("Kiro toolUseEvent is missing a tool name");
             let id;
             if (value.toolUseId == null) {
               id = `call_${created}_${state.tools.size + 1}`;
@@ -849,6 +847,10 @@ export class KiroExecutor extends BaseExecutor {
               id = value.toolUseId;
             }
             let tool = state.tools.get(id);
+            const name = value.name === undefined && tool
+              ? tool.name
+              : typeof value.name === "string" ? value.name.trim() : "";
+            if (!name) throw new Error("Kiro toolUseEvent is missing a tool name");
             if (!tool) {
               tool = { id, name };
               state.tools.set(id, tool);

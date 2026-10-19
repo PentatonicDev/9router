@@ -382,6 +382,78 @@ describe("Kiro terminal integrity recovery", () => {
     expect(body).not.toContain('"error"');
   });
 
+  it("combines interleaved tool fragments with names only on their first events", async () => {
+    fetchMock.mockResolvedValue(response([frame("metadataEvent", { stopReason: "tool_use" })]));
+    fetchMock.mockResolvedValueOnce(response([
+      frame("toolUseEvent", { toolUseId: "read", name: "read_file", input: '{"path":' }),
+      frame("toolUseEvent", { toolUseId: "search", name: "search", input: '{"query":' }),
+      frame("toolUseEvent", { toolUseId: "read", input: '"safe.txt"}' }),
+      frame("toolUseEvent", { toolUseId: "search", input: '"router"}' }),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]));
+
+    const body = await (await execute()).response.text();
+    const chunks = body.split("\n").filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+      .map(line => JSON.parse(line.slice(6)));
+    const calls = chunks.flatMap(chunk => chunk.choices?.[0]?.delta?.tool_calls || []);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([
+      { index: 0, id: "read", type: "function", function: { name: "read_file", arguments: "" } },
+      { index: 0, function: { arguments: '{"path":"safe.txt"}' } },
+      { index: 1, id: "search", type: "function", function: { name: "search", arguments: "" } },
+      { index: 1, function: { arguments: '{"query":"router"}' } }
+    ]);
+    expect(chunks.at(-1).choices[0].finish_reason).toBe("tool_calls");
+    expect(body).not.toContain('"error"');
+  });
+
+  it("delivers unnamed continuation fragments through the Claude SSE translator", async () => {
+    fetchMock.mockResolvedValue(response([frame("metadataEvent", { stopReason: "tool_use" })]));
+    fetchMock.mockResolvedValueOnce(response([
+      frame("toolUseEvent", { toolUseId: "split", name: "read_file", input: '{"path":' }),
+      frame("toolUseEvent", { toolUseId: "split", input: '"safe.txt"}' }),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]));
+
+    const result = await execute();
+    const body = await text(result.response.body.pipeThrough(
+      createSSETransformStreamWithLogger(FORMATS.KIRO, FORMATS.CLAUDE, "kiro")
+    ));
+    const events = body.split("\n\n").filter(line => line.startsWith("event: "))
+      .map(line => JSON.parse(line.split("\ndata: ")[1]));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events[1].content_block).toMatchObject({ type: "tool_use", id: "split", name: "read_file" });
+    expect(JSON.parse(events[2].delta.partial_json)).toEqual({ path: "safe.txt" });
+    expect(events[4].delta.stop_reason).toBe("tool_use");
+    expect(body).not.toContain("event: error\n");
+  });
+
+  it.each([
+    ["null name", { toolUseId: "split", name: null }],
+    ["empty name", { toolUseId: "split", name: "" }],
+    ["blank name", { toolUseId: "split", name: "  " }],
+    ["non-string name", { toolUseId: "split", name: 42 }],
+    ["conflicting name", { toolUseId: "split", name: "write_file" }],
+    ["unknown ID", { toolUseId: "unknown" }],
+    ["missing ID", {}],
+    ["invalid ID", { toolUseId: 42 }]
+  ])("rejects a continuation with %s after one bounded retry", async (_label, continuation) => {
+    const frames = [
+      frame("toolUseEvent", { toolUseId: "split", name: "read_file", input: '{"path":' }),
+      frame("toolUseEvent", { ...continuation, input: '"safe.txt"}' }),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ];
+    fetchMock.mockResolvedValueOnce(response(frames)).mockResolvedValueOnce(response(frames));
+
+    const body = await (await execute()).response.text();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body).toContain("kiro_tool_call_repair_retry_failed");
+    expect(body).not.toContain('"tool_calls"');
+  });
+
   it("keeps an all-invalid tool array private after one retry", async () => {
     const invalid = frame("toolUseEvent", [
       { toolUseId: 123, name: "read_file", input: { path: "bad.txt" } },
@@ -462,7 +534,8 @@ describe("Kiro terminal integrity recovery", () => {
     // top-level systemPrompt with 400 REQUEST_BODY_INVALID.
     const retryContent = retryBody.conversationState.currentMessage.userInputMessage.content;
     expect(retryBody.systemPrompt).toBeUndefined();
-    expect(retryContent).toContain("tool_call wrapper was malformed");
+    expect(retryContent).toContain("Kiro tool call was missing or malformed");
+    expect(retryContent).toContain("If you use the wrapper tool named tool_call");
     expect(retryContent).not.toContain("IGNORE_ALL_INSTRUCTIONS");
   });
 
