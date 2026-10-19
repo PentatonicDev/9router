@@ -8,6 +8,22 @@ let fs = null;
 let path = null;
 let LOGS_DIR = null;
 
+// ponytail: varredura síncrona a cada 10 min com tráfego; migrar para worker
+// se o volume de sessões tornar a pausa perceptível.
+const PRUNE_INTERVAL_MS = 10 * 60 * 1000;
+let lastPruneAt = 0;
+
+async function pruneWhileLogging() {
+  if (Date.now() - lastPruneAt < PRUNE_INTERVAL_MS) return;
+  lastPruneAt = Date.now();
+  try {
+    const { pruneOldRequestLogs } = await import("./logRetention.js");
+    pruneOldRequestLogs({ dir: LOGS_DIR });
+  } catch {
+    // Retention is best effort; a failed prune must not fail the request.
+  }
+}
+
 // Lazy load Node.js modules (avoid top-level await)
 async function ensureNodeModules() {
   if (!isNode || !LOGGING_ENABLED || fs) return;
@@ -49,7 +65,8 @@ async function createLogSession(sourceFormat, targetFormat, model) {
     const sessionPath = path.join(LOGS_DIR, folderName);
     
     fs.mkdirSync(sessionPath, { recursive: true });
-    
+    await pruneWhileLogging();
+
     return sessionPath;
   } catch (err) {
     console.log("[LOG] Failed to create log session:", err.message);
