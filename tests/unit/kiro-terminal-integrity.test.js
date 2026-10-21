@@ -275,6 +275,47 @@ describe("Kiro terminal integrity recovery", () => {
     expect(body).not.toContain('"content":"..."');
   });
 
+  it("repairs a thinking-only final without leaking the empty turn", async () => {
+    fetchMock
+      .mockResolvedValueOnce(response([frame("reasoningContentEvent", { text: "I should stay silent." })]))
+      .mockResolvedValueOnce(response([frame("assistantResponseEvent", { content: "Visible answer." })]));
+
+    const body = await (await execute()).response.text();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).conversationState.currentMessage.userInputMessage.content)
+      .toContain("only reasoning");
+    expect(body).toContain("Visible answer.");
+    expect(body).not.toContain("I should stay silent.");
+  });
+
+  it("fails a repeated thinking-only final so combo fallback can take over", async () => {
+    fetchMock
+      .mockResolvedValueOnce(response([frame("reasoningContentEvent", { text: "first" })]))
+      .mockResolvedValueOnce(response([frame("reasoningContentEvent", { text: "second" })]));
+
+    const transform = createSSETransformStreamWithLogger(FORMATS.KIRO, FORMATS.CLAUDE, "kiro");
+    const body = await text((await execute()).response.body.pipeThrough(transform));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body).toContain("event: error\n");
+    expect(body).not.toContain("thinking_delta");
+    expect(transform.outcome()).toMatchObject({ content: false, error: expect.stringContaining("only reasoning") });
+  });
+
+  it("keeps thinking followed by a tool call as a complete turn", async () => {
+    fetchMock.mockResolvedValueOnce(response([
+      frame("reasoningContentEvent", { text: "need a tool" }),
+      frame("toolUseEvent", { toolUseId: "t1", name: "terminal", input: "{\"command\":\"ls\"}", stop: true })
+    ]));
+
+    const body = await (await execute()).response.text();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(body).toContain("tool_calls");
+    expect(body).not.toContain("kiro_thinking_only");
+  });
+
   it("repairs malformed wrapper tools without leaking the invalid call", async () => {
     fetchMock
       .mockResolvedValueOnce(response([frame("toolUseEvent", {

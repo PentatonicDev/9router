@@ -36,7 +36,8 @@ const decoder = new TextDecoder();
 const REPAIR_INSTRUCTIONS = Object.freeze({
   tool: "Retry the previous response because its Kiro tool call was missing or malformed. Return a complete tool call with a non-empty tool name and input containing valid JSON object arguments. If you use the wrapper tool named tool_call, its input must contain a non-empty name and an arguments field.",
   ellipsis: "Retry the previous response because it ended with only an ellipsis. Return the complete final answer, not only ... or ….",
-  short_final: "Retry the previous response because its final only announced a future action. Complete the check now and return the result or a concrete blocker."
+  short_final: "Retry the previous response because its final only announced a future action. Complete the check now and return the result or a concrete blocker.",
+  thinking_only: "Retry the previous response because it contained only reasoning, with no visible answer and no tool call. Return the final answer or the next tool call now."
 });
 const SHORT_FUTURE_ACTION = /^(?:(?:(?:現在|接著|接下來|下一步)[，,:：\s]*(?:我(?:只)?(?:會|要|將|再)?\s*)?|我只再)(?:補|查|確認|驗證|追(?:查|蹤)?|繼續|檢查|測試)|我(?:會|要|將)(?:再|重新)?(?:補(?:齊|查)?|抓取|查(?:詢)?|確認|驗證|追(?:查|蹤)?|繼續|檢查|測試)|(?:(?:next|now|then)\b[\s,:-]*)?(?:i(?:'ll| will| am going to| need to)|let me)\s+(?:verify|check|confirm|validate|investigate|trace|continue|follow up|test)\b)/iu;
 // Keep this tied to the observed whole-response signature. Broader Chinese
@@ -438,7 +439,7 @@ export class KiroExecutor extends BaseExecutor {
       return encodeSSEError("invalid_kiro_tool_call", first.message, first.diagnostics);
     }
 
-    const repairKind = ["ellipsis", "short_final", "invalid_tool"].includes(first.kind)
+    const repairKind = ["ellipsis", "short_final", "thinking_only", "invalid_tool"].includes(first.kind)
       ? first.kind
       : null;
     const repairBody = repairKind
@@ -483,6 +484,8 @@ export class KiroExecutor extends BaseExecutor {
       ? "kiro_ellipsis_retry_failed"
       : second.kind === "short_final"
         ? "kiro_short_final_retry_failed"
+        : second.kind === "thinking_only"
+          ? "kiro_thinking_only_retry_failed"
         : second.kind === "invalid_tool"
           ? "kiro_tool_call_repair_retry_failed"
           : "kiro_missing_terminal_retry_failed";
@@ -610,6 +613,10 @@ export class KiroExecutor extends BaseExecutor {
       }
       if (isShortFutureAction(output.content)) {
         return { kind: "short_final", diagnostics: safeDiagnostics };
+      }
+      // Reasoning with no answer and no tool call ends the client's turn empty.
+      if (!output.content.trim() && output.reasoning.trim()) {
+        return { kind: "thinking_only", message: "Kiro response contained only reasoning", diagnostics: safeDiagnostics };
       }
     }
     return { kind: "complete", bytes: concatChunks(chunks, totalBytes), diagnostics: safeDiagnostics };
