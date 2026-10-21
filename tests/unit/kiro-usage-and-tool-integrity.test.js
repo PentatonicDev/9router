@@ -242,6 +242,35 @@ describe("C: one unusable tool fragment does not take the whole turn with it", (
     expect(body).not.toContain("invalid_kiro_tool_call");
   });
 
+  it("forwards the batch calls[] shape of a client tool_call bridge tool", async () => {
+    const calls = [{ name: "skill_view", arguments: { name: "internal-group-verification" } }];
+    const body = await run([
+      frame("reasoningContentEvent", { text: "Load the skill through the bridge." }),
+      frame("toolUseEvent", { toolUseId: "batch", name: "tool_call", input: { calls } }),
+      frame("metadataEvent", { stopReason: "tool_use" }),
+      ...METERED
+    ]);
+
+    expect(body).toContain('"id":"batch"');
+    expect(body).toContain('\\"calls\\":[{\\"name\\":\\"skill_view\\"');
+    expect(body).toContain('"finish_reason":"tool_calls"');
+    expect(body).not.toContain("kiro_thinking_only");
+  });
+
+  it.each([
+    ["empty calls", { calls: [] }],
+    ["entry without name", { calls: [{ arguments: {} }] }],
+    ["entry without arguments", { calls: [{ name: "skill_view" }] }],
+    ["calls not an array", { calls: "skill_view" }]
+  ])("drops a tool_call bridge payload with %s", async (_label, input) => {
+    const body = await runNoRepair([
+      frame("toolUseEvent", { toolUseId: "bad", name: "tool_call", input }),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]);
+    expect(body).not.toContain('"id":"bad"');
+    expect(body).toContain("invalid_kiro_tool_call");
+  });
+
   it("still hard-fails when nothing usable was produced at all", async () => {
     const body = await runNoRepair([
       frame("toolUseEvent", { toolUseId: "bad", name: "tool_call", input: { arguments: {} } }),

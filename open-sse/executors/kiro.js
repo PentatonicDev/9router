@@ -176,6 +176,22 @@ function isEllipsisOnly(value) {
   return ["...", "…"].includes(String(value || "").trim());
 }
 
+// The client's own `tool_call` bridge tool (e.g. Hermes deferred tools) takes
+// either a batch `{calls: [{name, arguments}, ...]}` or a single
+// `{name, arguments}`. Anything without a nested tool name cannot be dispatched.
+function assertToolCallWrapper(input) {
+  const entries = Array.isArray(input.calls) ? input.calls : input.calls === undefined ? [input] : null;
+  if (!entries?.length) throw new Error("Invalid Kiro tool_call payload: calls must be a non-empty array");
+  for (const entry of entries) {
+    if (typeof entry?.name !== "string" || !entry.name.trim()) {
+      throw new Error("Invalid Kiro tool_call payload: missing nested MCP tool name");
+    }
+    if (!Object.hasOwn(entry, "arguments")) {
+      throw new Error("Invalid Kiro tool_call payload: missing nested MCP tool arguments");
+    }
+  }
+}
+
 function isShortFutureAction(value) {
   const text = String(value || "").trim().replaceAll("’", "'");
   if (OBSERVED_TRAILING_FUTURE_ACTION.test(text)) return true;
@@ -739,14 +755,7 @@ export class KiroExecutor extends BaseExecutor {
         let input;
         try {
           input = parsedToolInput(tool);
-          if (tool.name === "tool_call") {
-            if (typeof input.name !== "string" || !input.name.trim()) {
-              throw new Error("Invalid Kiro tool_call payload: missing nested MCP tool name");
-            }
-            if (!Object.prototype.hasOwnProperty.call(input, "arguments")) {
-              throw new Error("Invalid Kiro tool_call payload: missing nested MCP tool arguments");
-            }
-          }
+          if (tool.name === "tool_call") assertToolCallWrapper(input);
         } catch (error) {
           state.droppedTools = (state.droppedTools || 0) + 1;
           state.toolValidationError ||= error.message;
