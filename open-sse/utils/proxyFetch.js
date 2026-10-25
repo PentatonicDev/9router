@@ -258,13 +258,16 @@ async function getDispatcher(proxyUrl, insecure = false) {
 
 async function fetchWithTlsFallback(url, options, proxyUrl) {
   try {
+    // Protocol adapters may need Node's HTTP/1 transport on the direct path.
+    // Keep proxy/no-proxy resolution and strict-proxy enforcement here.
+    if (!proxyUrl && options.directFetch) return await options.directFetch(url, options);
     const dispatcher = proxyUrl ? await getDispatcher(proxyUrl) : undefined;
     return await originalFetch(url, dispatcher ? { ...options, dispatcher } : options);
   } catch (err) {
     // Opt-in only: retrying without verification would hand provider credentials to
     // whoever presented the bad cert. For a corporate/antivirus MITM root, prefer
     // NODE_EXTRA_CA_CERTS; this switch is the last resort.
-    if (allowsInsecureTlsFallback() && isTlsCertError(err)) {
+    if (options.strictTls !== true && allowsInsecureTlsFallback() && isTlsCertError(err)) {
       if (options.body && typeof options.body.getReader === "function" && options.body.locked) {
         throw err;
       }

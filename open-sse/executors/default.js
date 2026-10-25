@@ -41,13 +41,6 @@ function applyAuth(headers, desc, credentials) {
   if (desc.anthropicVersion && !headers["anthropic-version"]) headers["anthropic-version"] = ANTHROPIC_API_VERSION;
 }
 
-// OpenAI's newer Chat Completions models reject the legacy max_tokens field.
-// Keep this scoped to the first-party OpenAI provider: other OpenAI-compatible
-// providers may still require max_tokens for models with similar names.
-function usesOpenAIMaxCompletionTokens(model) {
-  return /^(?:gpt-5(?:[.-]|$)|o[134](?:[.-]|$))/i.test(model || "");
-}
-
 const OPENAI_TOOL_CALL_ID_MAX_LENGTH = 64;
 const OPENAI_TOOL_CALL_ID_PREFIX_LENGTH = 20;
 
@@ -171,12 +164,6 @@ export class DefaultExecutor extends BaseExecutor {
             include_usage: true,
           };
         }
-      }
-      if (this.provider === "openai" && usesOpenAIMaxCompletionTokens(model) && transformed.max_tokens !== undefined) {
-        if (transformed.max_completion_tokens === undefined) {
-          transformed.max_completion_tokens = transformed.max_tokens;
-        }
-        delete transformed.max_tokens;
       }
       if (this.provider === "openai") {
         normalizeOpenAIToolCallIds(transformed);

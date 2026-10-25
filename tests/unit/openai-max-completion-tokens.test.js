@@ -46,11 +46,14 @@ describe("OpenAI Chat Completions token-limit compatibility", () => {
     expect(out.max_completion_tokens).toBe(321);
   });
 
-  it("keeps max_tokens for legacy OpenAI models", () => {
-    const out = new DefaultExecutor("openai").transformRequest("gpt-4o", request());
-
-    expect(out.max_tokens).toBe(321);
-    expect(out.max_completion_tokens).toBeUndefined();
+  // paramSupport renames for the whole first-party provider (7c42d8f8), gpt-6.x included;
+  // OpenAI documents max_tokens as deprecated in favor of max_completion_tokens.
+  it("renames max_tokens for every first-party OpenAI model", () => {
+    for (const model of ["gpt-4o", "gpt-6-sol"]) {
+      const out = new DefaultExecutor("openai").transformRequest(model, request());
+      expect(out.max_tokens, model).toBeUndefined();
+      expect(out.max_completion_tokens, model).toBe(321);
+    }
   });
 
   it.each(["openrouter", "openai-compatible-custom"])(

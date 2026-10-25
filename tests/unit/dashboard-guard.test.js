@@ -243,6 +243,19 @@ describe("dashboard guard local-only access", () => {
     expect(response.body.error).toBe("Local only: CLI token required");
   });
 
+  it("rejects remote web-login (spawns a host browser) even with a dashboard session", async () => {
+    mocks.verifyDashboardAuthToken.mockResolvedValue(true);
+    mocks.getDashboardAuthSession.mockResolvedValue({});
+
+    const response = await proxy(request("/api/providers/web-login", {
+      host: "router.example.com",
+      cookie: "auth_token=valid",
+    }));
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe("Local only: CLI token required");
+  });
+
   it("rejects local-only route on loopback when requireLogin=true and no JWT", async () => {
     const response = await proxy(localRequest("/api/mcp/filesystem/sse", {
       host: "localhost:20128",

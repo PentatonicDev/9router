@@ -99,9 +99,13 @@ describe("compressWithHeadroom openai-responses format (#1998)", () => {
       diagnostics,
     });
 
+    // Since a440ef43 only the tool-output text is projected to the proxy; a reply that
+    // does not round-trip it leaves the Responses history untouched.
     expect(data).toBeNull();
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).messages).toEqual([
+      { role: "tool", tool_call_id: "headroom-tool-0", content: "ok" },
+    ]);
     expect(body.input).toEqual(input);
-    expect(diagnostics.reason).toBe("skipped: openai-responses tool/reasoning input is not safe to compress");
+    expect(diagnostics.reason).toBe("proxy response did not preserve tool-output IDs, order, roles or text");
   });
 });

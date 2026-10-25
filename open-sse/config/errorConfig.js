@@ -51,11 +51,16 @@ const COOLDOWN = {
 
 export const ERROR_RULES = [
   { provider: "codex", text: "model is not supported when using codex with a chatgpt account", cooldownMs: MAX_RATE_LIMIT_COOLDOWN_MS },
+  // Intl gateway blocks affect the account/IP, so let the connection back off.
+  { provider: "codebuddy-intl", text: "request illegal", backoff: true },
+  { provider: "codebuddy-intl", text: "conversation id missing", backoff: true },
   { text: "request not allowed", cooldownMs: COOLDOWN.short },
   { text: "improperly formed request", cooldownMs: COOLDOWN.long },
   { text: "rate limit", backoff: true },
   { text: "too many requests", backoff: true },
   { text: "quota exceeded", backoff: true },
+  { text: "insufficient credit", backoff: true },
+  { text: "credit balance is too low", backoff: true },
   { text: "monthly_request_count", cooldownMs: COOLDOWN.quotaWindow },
   { text: "capacity", backoff: true },
   { text: "overloaded", backoff: true },

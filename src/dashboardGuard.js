@@ -67,6 +67,8 @@ const LOCAL_ONLY_PATHS = [
   "/api/auth/reset-password",
   "/api/headroom/start",
   "/api/headroom/stop",
+  // Launches a host browser and may npm-install playwright-core on first use.
+  "/api/providers/web-login",
 ];
 
 // Shared infrastructure and host-level surfaces. While resource scoping is on,

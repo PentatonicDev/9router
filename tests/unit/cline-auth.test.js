@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { test } from "vitest";
+import assert from "node:assert/strict";
 import {
   getClineAccessToken,
   getClineAuthorizationHeader,

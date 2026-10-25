@@ -1,4 +1,5 @@
-import { describe, expect, it, beforeAll } from "vitest";
+import { describe, it, beforeAll as before } from "vitest";
+import assert from "node:assert/strict";
 
 // Load the registry entry once for the suite so a load failure is reported
 // next to the failing test instead of cascading as "undefined" in every
@@ -10,15 +11,12 @@ describe("kimchi registry entry", () => {
     kimchiEntry = (await import("../../open-sse/providers/registry/kimchi.js")).default;
   });
 
-  it("is an oauth-capable provider auto-listed as freeTier via byCategory", () => {
-    // Moved from category "oauth" to "freeTier" in 6d96e24b (refresh catalogs,
-    // free tiers) — Kimchi is a free-tier offering reached via OAuth, so
-    // `category` now drives UI grouping while `hasOAuth`/`authModes` still
-    // carry the actual auth capability.
-    expect(kimchiEntry.id).toBe("kimchi");
-    expect(kimchiEntry.category).toBe("freeTier");
-    expect(kimchiEntry.hasOAuth).toBe(true);
-    expect(kimchiEntry.authModes).toContain("oauth");
+  // 6d96e24b moved kimchi into the freeTier category; it still signs in with OAuth
+  // (and API keys since e02bde4a).
+  it("is a freeTier provider auto-listed via byCategory, with OAuth sign-in", () => {
+    assert.equal(kimchiEntry.id, "kimchi");
+    assert.equal(kimchiEntry.category, "freeTier");
+    assert.deepEqual(kimchiEntry.authModes, ["oauth", "apikey"]);
   });
 
   it("points at the OpenAI-compatible gateway with an authenticated UA", () => {
