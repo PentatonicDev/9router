@@ -1016,7 +1016,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
                 className="flex flex-col items-center rounded px-2 py-1 text-text-muted transition-colors hover:bg-black/5 hover:text-primary dark:hover:bg-white/5"
                 title="Clone"
               >
-                <span className="material-symbols-outlined text-[18px]">file_copy</span>
+                <span className="material-symbols-outlined text-[18px]">library_add</span>
                 <span className="text-[10px] leading-tight">Clone</span>
               </button>
             )}
