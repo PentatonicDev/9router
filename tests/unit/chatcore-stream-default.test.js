@@ -40,6 +40,19 @@ vi.mock("../../open-sse/handlers/chatCore/streamingHandler.js", () => ({
 }));
 
 const { handleChatCore } = await import("../../open-sse/handlers/chatCore.js");
+const { handleComboChat } = await import("../../open-sse/services/combo.js");
+const { saveRequestDetail } = await import("@/lib/usageDb.js");
+
+const abortRequest = (options = {}) => handleChatCore({
+  body: { model: "deepseek/deepseek-chat", messages: [{ role: "user", content: "hi" }] },
+  modelInfo: { provider: "deepseek", model: "deepseek-chat" },
+  credentials: { apiKey: "test-key", providerSpecificData: {} },
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), errorLine: vi.fn() },
+  connectionId: "test-connection",
+  rtkEnabled: false, headroomEnabled: false, cavemanEnabled: false,
+  ponytailEnabled: false, pxpipeEnabled: false,
+  ...options,
+});
 
 async function run(provider, model, bodyExtra, headers = {}) {
   const body = { model: `${provider}/${model}`, messages: [{ role: "user", content: "hi" }], ...bodyExtra };
@@ -67,6 +80,49 @@ describe("chatCore stream mode when the client omits `stream`", () => {
     forcedSSEToJsonMock.mockResolvedValue(ok);
     nonStreamingMock.mockResolvedValue(ok);
     streamingMock.mockResolvedValue(ok);
+  });
+
+  it.each(["AbortError", "Error"])("maps internal %s to retryable 502", async (name) => {
+    executeMock.mockRejectedValueOnce(Object.assign(new Error("upstream transport aborted"), { name }));
+    const controller = new AbortController();
+    const result = await abortRequest({ signal: controller.signal });
+    expect(controller.signal.aborted).toBe(false);
+    expect(result.status).toBe(502);
+    expect(result.descriptor.routing.retryable).toBe(true);
+    expect(saveRequestDetail.mock.calls.at(-1)[0].response.status).toBe(502);
+  });
+
+  it.each(["AbortError", "ResponseAborted"])("keeps real client cancellation as 499 for %s", async (name) => {
+    const controller = new AbortController();
+    executeMock.mockImplementationOnce(async () => {
+      controller.abort();
+      throw Object.assign(new Error("client left"), { name });
+    });
+    const result = await abortRequest({ signal: controller.signal });
+    expect(result.status).toBe(499);
+    expect(result.descriptor.routing.retryable).toBe(false);
+    expect(saveRequestDetail.mock.calls.at(-1)[0].response.status).toBe(499);
+  });
+
+  it("maps an upstream HTTP 499 to retryable 502", async () => {
+    executeMock.mockResolvedValueOnce({ response: new Response("Client Closed Request", { status: 499 }), headers: {} });
+    const result = await abortRequest();
+    expect(result.status).toBe(502);
+    expect(result.descriptor.routing.retryable).toBe(true);
+    expect(result.error).toContain("Upstream HTTP 499");
+    expect(saveRequestDetail.mock.calls.at(-1)[0].response.status).toBe(502);
+  });
+
+  it("tries the next combo member after an internal abort without exposing the failure", async () => {
+    executeMock.mockRejectedValueOnce(new DOMException("internal abort", "AbortError"));
+    const attempts = vi.fn(async () => (await abortRequest()).response);
+    const result = await handleComboChat({
+      body: {}, models: ["deepseek/one", "deepseek/two"], handleSingleModel: attempts,
+      log: { info: vi.fn(), warn: vi.fn() }, comboStrategy: "fallback",
+    });
+    expect(result.status).toBe(200);
+    expect(attempts).toHaveBeenCalledTimes(2);
+    expect(saveRequestDetail.mock.calls.at(-1)[0].response.status).toBe(502);
   });
 
   it("omitted → JSON (spec default), no Accept header needed", async () => {

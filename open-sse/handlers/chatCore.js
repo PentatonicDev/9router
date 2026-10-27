@@ -450,22 +450,24 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
     }
     reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
   } catch (error) {
+    const clientAborted = signal?.aborted === true;
+    const status = clientAborted ? 499 : HTTP_STATUS.BAD_GATEWAY;
     trackPendingRequest(model, provider, connectionId, false, true);
-    appendRequestLog({ model, provider, connectionId, status: `FAILED ${error.name === "AbortError" ? 499 : HTTP_STATUS.BAD_GATEWAY}` }).catch(() => { });
+    appendRequestLog({ model, provider, connectionId, status: `FAILED ${status}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId, apiKey, session,
       latency: { ttft: 0, total: Date.now() - requestStartTime },
       tokens: { prompt_tokens: 0, completion_tokens: 0 },
       request: extractRequestConfig(clientRawRequest?.body ?? body, stream),
       providerRequest: translatedBody || null,
-      response: { error: error.message || String(error), status: error.name === "AbortError" ? 499 : 502, thinking: null },
+      response: { error: error.message || String(error), status, thinking: null },
       pxpipe: pxpipeSummary,
       status: "error"
     })).catch(() => { });
 
-    if (error.name === "AbortError") {
+    if (clientAborted) {
       streamController.handleError(error);
-      return createErrorResult(499, "Request aborted", undefined, errorContext);
+      return createErrorResult(status, "Request aborted", undefined, errorContext);
     }
     const errMsg = formatProviderError(error, provider, model, HTTP_STATUS.BAD_GATEWAY);
     if (log?.errorLine) {
@@ -526,7 +528,14 @@ export async function handleChatCore({ body, modelInfo, credentials, log, errorC
   // Provider returned error
   if (!providerResponse.ok) {
     trackPendingRequest(model, provider, connectionId, false, true);
-    const { statusCode, message, resetsAtMs } = await parseUpstreamError(providerResponse, executor);
+    const upstreamError = await parseUpstreamError(providerResponse, executor);
+    const { resetsAtMs } = upstreamError;
+    const statusCode = upstreamError.statusCode === 499 && !signal?.aborted
+      ? HTTP_STATUS.BAD_GATEWAY
+      : upstreamError.statusCode;
+    const message = statusCode !== upstreamError.statusCode
+      ? `Upstream HTTP ${upstreamError.statusCode}: ${upstreamError.message}`
+      : upstreamError.message;
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${statusCode}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId, apiKey, session,

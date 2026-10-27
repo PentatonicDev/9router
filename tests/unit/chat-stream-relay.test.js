@@ -177,6 +177,63 @@ describe("createStreamingResponse", () => {
     expect(response.headers.get("Retry-After")).toBe("30");
   });
 
+  it("does not start routing for an already cancelled request", async () => {
+    const route = vi.fn();
+    const response = await createStreamingResponse(route, {
+      signal: AbortSignal.abort(), clientFormat: FORMATS.CLAUDE,
+    });
+    expect(response.status).toBe(499);
+    expect(route).not.toHaveBeenCalled();
+    expect(await response.json()).toMatchObject({ type: "error" });
+  });
+
+  it("treats an internal AbortError as 502 without a client cancellation", async () => {
+    const controller = new AbortController();
+    const response = await createStreamingResponse(
+      () => Promise.reject(new DOMException("internal transport abort", "AbortError")),
+      { signal: controller.signal, clientFormat: FORMATS.CLAUDE, requestId: "req_abort" },
+    );
+    expect(controller.signal.aborted).toBe(false);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ type: "error", request_id: "req_abort", error: { type: "api_error" } });
+  });
+
+  it.each([
+    [FORMATS.OPENAI, 'data: {"error"'],
+    [FORMATS.CLAUDE, "event: error"],
+    [FORMATS.OPENAI_RESPONSES, "event: response.failed"],
+  ])("terminates %s on an internal AbortError after the response opens", async (clientFormat, marker) => {
+    vi.useFakeTimers();
+    let fail;
+    const routing = new Promise((_resolve, reject) => { fail = reject; });
+    const response = await openAfterGrace(createStreamingResponse(() => routing, { clientFormat }));
+    const reader = response.body.getReader();
+    expect((await readChunk(reader)).text).toBe(": ping\n\n");
+    fail(new DOMException("internal transport abort", "AbortError"));
+    expect((await readChunk(reader)).text).toContain(marker);
+    expect((await readChunk(reader)).done).toBe(true);
+  });
+
+  it.each([
+    [FORMATS.OPENAI, 'data: {"error"'],
+    [FORMATS.CLAUDE, "event: error"],
+    [FORMATS.OPENAI_RESPONSES, "event: response.failed"],
+  ])("reports an internal read abort after %s content without replaying it", async (clientFormat, marker) => {
+    let upstream;
+    const content = 'data: {"content":"partial"}\n\n';
+    const response = await createStreamingResponse(() => new Response(new ReadableStream({
+      start(controller) { upstream = controller; controller.enqueue(encoder.encode(content)); },
+    })), { clientFormat });
+    const reader = response.body.getReader();
+    expect((await readChunk(reader)).text).toBe(": ping\n\n");
+    expect((await readChunk(reader)).text).toBe(content);
+    upstream.error(new DOMException("internal read abort", "AbortError"));
+    const terminal = (await readChunk(reader)).text;
+    expect(terminal).toContain(marker);
+    expect(terminal).not.toContain("partial");
+    expect((await readChunk(reader)).done).toBe(true);
+  });
+
   it("turns a routing rejection into a real 502 rather than a 200 body frame", async () => {
     const response = await createStreamingResponse(
       () => Promise.reject(new Error("socket hang up while selecting account")),

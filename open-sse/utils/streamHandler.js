@@ -52,6 +52,7 @@ function delay(ms) {
  * proxies still observe response traffic.
  */
 export async function createStreamingResponse(responsePromise, { clientFormat = FORMATS.OPENAI, signal, requestId } = {}) {
+  if (signal?.aborted) return errorResponse(499, "Request aborted", { requestId, errorFormat: clientFormat });
   const abortController = new AbortController();
   let closed = false;
   let reader = null;
@@ -106,7 +107,6 @@ export async function createStreamingResponse(responsePromise, { clientFormat = 
   // Routing threw outright — give it a real status too, not a 200 body frame.
   if (raced.settled && raced.error) {
     detach();
-    if (raced.error?.name === "AbortError") return new Response(null, { status: 499 });
     return errorResponse(
       HTTP_STATUS.BAD_GATEWAY,
       sanitizePublicMessage(raced.error?.message),
@@ -160,7 +160,7 @@ export async function createStreamingResponse(responsePromise, { clientFormat = 
         } catch (error) {
           cleanup();
           detach();
-          if (closed || error?.name === "AbortError") return;
+          if (closed) return;
           try {
             controller.enqueue(earlyErrorBytes(502, sanitizePublicMessage(error?.message), clientFormat));
             closed = true;

@@ -346,6 +346,35 @@ describe("chat.js: comboModelOptions resolution (F3 — nested combo never inher
     mocks.handleFusionChat.mockImplementation(tryAll);
   });
 
+  it("rotates accounts after a failed attempt but not after client cancellation", async () => {
+    const { handleChat } = await import("../../src/sse/handlers/chat.js");
+    const { markAccountUnavailable } = await import("../../src/sse/services/auth.js");
+    markAccountUnavailable.mockResolvedValueOnce({ shouldFallback: true });
+    mocks.getProviderCredentials
+      .mockResolvedValueOnce({ connectionId: "conn-1", connectionName: "one", providerSpecificData: {} })
+      .mockResolvedValueOnce({ connectionId: "conn-2", connectionName: "two", providerSpecificData: {} });
+    mocks.handleChatCore
+      .mockResolvedValueOnce({ success: false, status: 502, error: "upstream aborted", response: new Response("failed", { status: 502 }) })
+      .mockResolvedValueOnce({ success: true, response: new Response("ok") });
+    const request = (signal) => new Request("http://localhost/v1/chat/completions", {
+      method: "POST", signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "openai/gpt-5", messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect((await handleChat(request())).status).toBe(200);
+    expect(mocks.handleChatCore.mock.calls.map(([o]) => o.connectionId)).toEqual(["conn-1", "conn-2"]);
+    expect(markAccountUnavailable).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    const controller = new AbortController();
+    mocks.handleChatCore.mockImplementationOnce(async () => {
+      controller.abort();
+      return { success: false, status: 499, response: new Response(null, { status: 499 }) };
+    });
+    expect((await handleChat(request(controller.signal))).status).toBe(499);
+    expect(mocks.handleChatCore).toHaveBeenCalledTimes(1);
+    expect(markAccountUnavailable).not.toHaveBeenCalled();
+  });
+
   it("outer combo's second candidate keeps its own cap after a nested-combo candidate resolved first", async () => {
     const { handleChat } = await import("../../src/sse/handlers/chat.js");
     const req = new Request("http://localhost/v1/chat/completions", {

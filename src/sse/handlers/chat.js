@@ -214,6 +214,7 @@ async function routeChat({ body, modelStr: entryModel, settings, comboOwner, api
       comboStrategy,
       comboStickyLimit,
       errorContext,
+      signal,
       sessionId,
       smartPolicy: comboCfg.smartPolicy || "smart",
       sessionSticky: comboCfg.sessionSticky !== false,
@@ -244,6 +245,7 @@ async function routeChat({ body, modelStr: entryModel, settings, comboOwner, api
       comboName: modelStr,
       comboStrategy: getActiveAdapterStrategy(requiredCapabilities, settings),
       errorContext,
+      signal,
     });
   }
 
@@ -319,6 +321,7 @@ async function handleSingleModelChat(body, entryModel, clientRawRequest = null, 
         comboStrategy,
         comboStickyLimit,
         errorContext,
+        signal,
         sessionId: nestedSessionId,
         smartPolicy: comboCfg.smartPolicy || "smart",
         sessionSticky: comboCfg.sessionSticky !== false,
@@ -357,6 +360,7 @@ async function handleSingleModelChat(body, entryModel, clientRawRequest = null, 
   let lastHeaders = null;
 
   while (true) {
+    if (signal?.aborted) return errorResponse(499, "Request aborted", errorContext);
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, {
       apiKey,
       settings: chatSettings,

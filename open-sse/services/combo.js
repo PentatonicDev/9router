@@ -367,6 +367,7 @@ export async function handleComboChat({
   confidenceThreshold = 0.8,
   resolveSmartChoice = null,
   errorContext = {},
+  signal,
 }) {
   let rotatedModels = models;
   let activeStickyModel = null;
@@ -470,6 +471,7 @@ export async function handleComboChat({
   let noCredentialsCount = 0;
 
   for (let i = 0; i < rotatedModels.length; i++) {
+    if (signal?.aborted) return errorResponse(499, "Request aborted", errorContext);
     const modelStr = rotatedModels[i];
     log.info("COMBO", `Trying model ${i + 1}/${rotatedModels.length}: ${modelStr}`);
 
@@ -484,15 +486,9 @@ export async function handleComboChat({
         try {
           peeked = await peekComboResponse(result, log);
         } catch (peekErr) {
-          // peekStreamForContent is written not to throw; if reconstruction/Response
-          // construction ever does, result.body is already locked by getReader() and can no
-          // longer be streamed. Returning `result` would hand the client a locked, unreadable
-          // body. Degrade to a clean, valid (empty) SSE stream instead.
-          log.warn("COMBO", `empty-peek error on ${modelStr}, returning empty SSE: ${peekErr?.message || peekErr}`);
-          return new Response("data: [DONE]\n\n", {
-            status: 200,
-            headers: { "Content-Type": "text/event-stream" },
-          });
+          log.warn("COMBO", `Stream inspection failed on ${modelStr}: ${peekErr?.message || peekErr}`);
+          if (!firstFallbackError) firstFallbackError = errorResponse(502, "Upstream stream inspection failed", errorContext);
+          continue;
         }
 
         if (!peeked) {
@@ -610,6 +606,7 @@ export async function handleComboChat({
     }
   }
 
+  if (signal?.aborted) return errorResponse(499, "Request aborted", errorContext);
   if (bestRetry) return bestRetry.response;
   if (requestScopedResult) return requestScopedResult;
   if (firstFallbackError) return firstFallbackError;
