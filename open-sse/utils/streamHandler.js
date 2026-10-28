@@ -250,7 +250,8 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
         abortTimeout = null;
       }
 
-      if (error.name === "AbortError") {
+      // Next.js raises ResponseAborted when the client closes the socket mid-stream.
+      if (error.name === "AbortError" || error.name === "ResponseAborted") {
         logStream("⚡", "ABORTED");
         return;
       }
@@ -321,6 +322,7 @@ export function createDisconnectAwareStream(transformStream, streamController, o
         const code = error?.code || error?.cause?.code || "";
         const isNetworkClose =
           error.name === "AbortError" ||
+          error.name === "ResponseAborted" ||
           msg.includes("aborted") ||
           msg.includes("socket hang up") ||
           msg.includes("ECONNRESET") ||

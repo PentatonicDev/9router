@@ -398,6 +398,14 @@ export class KiroExecutor extends BaseExecutor {
         };
         heartbeat();
         heartbeatTimer = setInterval(heartbeat, KIRO_REPAIR_HEARTBEAT_MS);
+        const emit = (bytes) => {
+          if (!open) return;
+          try {
+            controller.enqueue(bytes);
+          } catch {
+            open = false;
+          }
+        };
 
         try {
           const bytes = await this.runIntegrityRecovery(result.response, args, {
@@ -405,10 +413,11 @@ export class KiroExecutor extends BaseExecutor {
             maxBytes,
             ttftTimeoutMs,
             stallTimeoutMs,
-            repairEnabled
+            repairEnabled,
+            emit
           });
           if (abortController.signal.aborted) throw makeAbortError(abortController.signal.reason);
-          controller.enqueue(bytes);
+          if (bytes.byteLength) controller.enqueue(bytes);
           controller.close();
         } catch (error) {
           if (open && error.name === "AbortError") {
@@ -560,6 +569,7 @@ export class KiroExecutor extends BaseExecutor {
     const chunks = [];
     let totalBytes = 0;
     let sawChunk = false;
+    let streaming = false;
     const output = { content: "", reasoning: "", hasToolCalls: false, error: null };
 
     try {
@@ -574,6 +584,10 @@ export class KiroExecutor extends BaseExecutor {
         );
         if (done) break;
         sawChunk = true;
+        if (streaming) {
+          options.emit(value);
+          continue;
+        }
         totalBytes += value.byteLength;
         if (totalBytes > options.maxBytes) {
           await reader.cancel("kiro_integrity_buffer_exceeded").catch(() => {});
@@ -585,10 +599,29 @@ export class KiroExecutor extends BaseExecutor {
         }
         chunks.push(value);
         inspectSSEChunk(value, output);
+        // Past KIRO_SHORT_FINAL_MAX_CHARS of visible text no repair rule (ellipsis,
+        // short future-action, thinking-only) can fire, so the rest streams live.
+        // ponytail: a failure after this point ends the stream with an error frame
+        // instead of a retry, as on every other streaming provider.
+        if (options.emit && !output.error && output.content.trim().length > KIRO_SHORT_FINAL_MAX_CHARS) {
+          streaming = true;
+          options.emit(concatChunks(chunks, totalBytes));
+          chunks.length = 0;
+        }
       }
     } catch (error) {
       await reader.cancel(error.message).catch(() => {});
+      if (streaming && error.name !== "AbortError") {
+        return {
+          kind: "complete",
+          bytes: encodeSSEError("kiro_missing_terminal", error.message || "Kiro transport read failed"),
+          diagnostics: { attempt, terminal_provenance: "transport_read_error_after_output" }
+        };
+      }
       throw error;
+    }
+    if (streaming) {
+      return { kind: "complete", bytes: new Uint8Array(0), diagnostics: { attempt, terminal_provenance: "streamed" } };
     }
 
     const safeDiagnostics = {

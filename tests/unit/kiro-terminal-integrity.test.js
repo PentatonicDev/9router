@@ -161,6 +161,45 @@ describe("Kiro terminal integrity recovery", () => {
     await reader.cancel();
   });
 
+  it("streams live once visible text is past every repair rule", async () => {
+    const long = "Answer. ".repeat(120);
+    const upstream = controlledResponse([frame("assistantResponseEvent", { content: long })]);
+    fetchMock.mockResolvedValueOnce(upstream.value);
+
+    const reader = (await execute()).response.body.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(": kiro-validation\n\n");
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("Answer. Answer.");
+
+    upstream.enqueue(frame("assistantResponseEvent", { content: "tail" }));
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain('"content":"tail"');
+    upstream.close();
+    let rest = "";
+    for (let r = await reader.read(); !r.done; r = await reader.read()) rest += new TextDecoder().decode(r.value);
+    expect(rest).toContain('"finish_reason":"stop"');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends a live stream with an error frame instead of retrying", async () => {
+    let upstream;
+    fetchMock.mockResolvedValueOnce(new Response(new ReadableStream({
+      start(controller) {
+        upstream = controller;
+        controller.enqueue(frame("assistantResponseEvent", { content: "Answer. ".repeat(120) }));
+      }
+    })));
+
+    const reader = (await execute()).response.body.getReader();
+    await reader.read();
+    await reader.read();
+    upstream.error(new Error("socket reset"));
+    let rest = "";
+    for (let r = await reader.read(); !r.done; r = await reader.read()) rest += new TextDecoder().decode(r.value);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(rest).toContain("kiro_missing_terminal");
+    expect(rest).not.toContain("Answer.");
+  });
+
   it("accepts CLI-compatible text and usage frames at clean EOF without messageStop", async () => {
     fetchMock.mockResolvedValueOnce(response([
       frame("assistantResponseEvent", { content: "Complete answer." }),
